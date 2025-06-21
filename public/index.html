@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <title>Выбор участка на OSM</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
+  <style>
+    html, body {
+      height: 100%;
+      margin: 0;
+    }
+    #map {
+      height: 100%;
+      width: 100%;
+      position: relative;
+    }
+    #selectionBox {
+      position: fixed;
+      border: 2px dashed red;
+      pointer-events: none;
+      display: none;
+      z-index: 999;
+    }
+    #controls {
+      position: absolute;
+      top: 10px;
+      left: 10px;
+      background: rgba(255, 255, 255, 0.8);
+      padding: 10px;
+      border-radius: 8px;
+      z-index: 1000;
+    }
+  </style>
+</head>
+<body>
+<div id="map"></div>
+<div id="selectionBox"></div>
+<div id="controls">
+  <button id="toggleBtn">Выбрать зону</button><br><br>
+  <input type="number" id="sizeInput" value="500" min="100" max="2000"> м<br><br>
+  <button id="confirmBtn" disabled>Подтвердить</button>
+</div>
+
+<script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+<script>
+  const map = L.map('map').setView([55.76, 37.64], 13);
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19 }).addTo(map);
+
+  const box = document.getElementById('selectionBox');
+  const toggleBtn = document.getElementById('toggleBtn');
+  const sizeInput = document.getElementById('sizeInput');
+  const confirmBtn = document.getElementById('confirmBtn');
+
+  let selecting = false;
+  let selectionSize = parseInt(sizeInput.value);
+  let centerLatLng = null;
+
+  function updateBox() {
+    if (!centerLatLng || !selecting) return;
+
+    const centerPx = map.latLngToContainerPoint(centerLatLng);
+    const metersPerPx = 40075016.686 * Math.cos(centerLatLng.lat * Math.PI / 180) / (256 * Math.pow(2, map.getZoom()));
+    const pxSize = selectionSize / metersPerPx;
+
+    box.style.width = pxSize + 'px';
+    box.style.height = pxSize + 'px';
+    box.style.left = `calc(50% - ${pxSize / 2}px)`;
+    box.style.top = `calc(50% - ${pxSize / 2}px)`;
+  }
+
+  map.on('zoom move', () => {
+    if (selecting && centerLatLng) updateBox();
+  });
+
+  toggleBtn.onclick = () => {
+    selecting = !selecting;
+    toggleBtn.textContent = selecting ? 'Отменить выбор' : 'Выбрать зону';
+    confirmBtn.disabled = !selecting;
+    box.style.display = selecting ? 'block' : 'none';
+
+    if (selecting) {
+      centerLatLng = map.getCenter();
+      updateBox();
+    } else {
+      centerLatLng = null;
+    }
+  };
+
+  sizeInput.addEventListener('input', () => {
+    const val = parseInt(sizeInput.value);
+    if (!isNaN(val)) {
+      selectionSize = val;
+      if (selecting && centerLatLng) updateBox();
+    }
+  });
+
+  sizeInput.addEventListener('blur', () => {
+    let val = parseInt(sizeInput.value);
+    if (isNaN(val)) val = 100;
+    if (val < 100) val = 100;
+    if (val > 2000) val = 2000;
+    sizeInput.value = val;
+    selectionSize = val;
+    if (selecting && centerLatLng) updateBox();
+  });
+
+  confirmBtn.onclick = () => {
+    if (!centerLatLng) return;
+    const bounds = {
+      center: { lat: centerLatLng.lat, lng: centerLatLng.lng },
+      sizeMeters: selectionSize
+    };
+    fetch('http://localhost:4567/save-coords', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(bounds)
+    }).then(() => alert('Сохранено!')).catch(() => alert('Ошибка'));
+  };
+</script>
+</body>
+</html>
