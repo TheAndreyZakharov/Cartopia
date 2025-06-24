@@ -14,7 +14,7 @@
       width: 100%;
       position: relative;
     }
-    #selectionBox {
+    #selectionBox {   
       position: fixed;
       border: 2px dashed red;
       pointer-events: none;
@@ -43,7 +43,7 @@
 
 <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
 <script>
-  const map = L.map('map').setView([55.76, 37.64], 13);
+  const map = L.map('map').setView([60.03655975737041, 30.338916778564457], 15);
   L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19 }).addTo(map);
 
   const box = document.getElementById('selectionBox');
@@ -79,7 +79,9 @@
     box.style.display = selecting ? 'block' : 'none';
 
     if (selecting) {
-      centerLatLng = map.getCenter();
+      const mapSize = map.getSize();
+      const boxCenterPx = L.point(mapSize.x / 2, mapSize.y / 2);
+      centerLatLng = map.containerPointToLatLng(boxCenterPx);
       updateBox();
     } else {
       centerLatLng = null;
@@ -104,18 +106,81 @@
     if (selecting && centerLatLng) updateBox();
   });
 
-  confirmBtn.onclick = () => {
-    if (!centerLatLng) return;
-    const bounds = {
-      center: { lat: centerLatLng.lat, lng: centerLatLng.lng },
-      sizeMeters: selectionSize
-    };
-    fetch('http://localhost:4567/save-coords', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(bounds)
-    }).then(() => alert('Сохранено!')).catch(() => alert('Ошибка'));
+  async function fetchOverpassFeatures(bbox) {
+    const [s, w, n, e] = bbox;
+    const query = `
+    [out:json];
+    (
+      way["highway"](${s},${w},${n},${e});
+      (
+        way["building"](${s},${w},${n},${e});
+        relation["building"](${s},${w},${n},${e});
+      );
+    );
+    out body geom;
+    >;
+    out skel qt;
+    `;
+
+    const response = await fetch("https://overpass-api.de/api/interpreter", {
+      method: "POST",
+      body: query,
+    });
+
+    if (!response.ok) {
+      throw new Error("Ошибка Overpass API");
+    }
+
+    return await response.json();
+  }
+
+  confirmBtn.onclick = async () => {
+    const size = selectionSize;
+
+    // 🆕 Берем центр выделенной зоны в момент нажатия!
+    const mapSize = map.getSize();
+    const boxCenterPx = L.point(mapSize.x / 2, mapSize.y / 2);
+    const centerLatLngNow = map.containerPointToLatLng(boxCenterPx);
+
+    const lat = centerLatLngNow.lat;
+    const lng = centerLatLngNow.lng;
+
+    const latMeters = 111320;
+    const lngMeters = 111320 * Math.cos(lat * Math.PI / 180);
+
+    const deltaLat = (size / 2) / latMeters;
+    const deltaLng = (size / 2) / lngMeters;
+
+    const bbox = [lat - deltaLat, lng - deltaLng, lat + deltaLat, lng + deltaLng];
+
+    try {
+      const features = await fetchOverpassFeatures(bbox);
+
+      const payload = {
+        center: { lat, lng },
+        sizeMeters: size,
+        bbox: {
+          south: lat - deltaLat,
+          north: lat + deltaLat,
+          west: lng - deltaLng,
+          east: lng + deltaLng
+        },
+        features: features
+      };
+
+      await fetch('http://localhost:4567/save-coords', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+
+      alert('Сохранено!');
+    } catch (e) {
+      console.error(e);
+      alert('Ошибка при загрузке данных с Overpass API.');
+    }
   };
+
 </script>
 </body>
 </html>

@@ -13,7 +13,6 @@ public class CartopiaMod {
     public static final String MODID = "cartopia";
 
     public CartopiaMod(FMLJavaModLoadingContext context) {
-        // Используем внедрение зависимости вместо устаревшего get()
         context.getModEventBus().addListener(this::onClientSetup);
         MinecraftForge.EVENT_BUS.register(this);
     }
