@@ -9,19 +9,19 @@ const PORT = 4567;
 
 let playerCoords = null;
 
-// ⬇️ Разрешаем большие JSON-запросы (до 10 МБ)
+// Разрешаем большие JSON-запросы (до 10 МБ)
 app.use(express.json({ limit: '10mb' }));
 app.use(cors());
 app.use(express.static(path.join(__dirname, 'public')));
 
-// ⬅️ Сохраняем координаты игрока, полученные из клиента
+// Сохраняем координаты игрока, полученные из клиента
 app.post('/player', (req, res) => {
   playerCoords = req.body;
   console.log("👤 Координаты игрока:", playerCoords);
   res.send("OK");
 });
 
-// ⬅️ Сохраняем координаты области + features из карты
+// Сохраняем координаты области + features из карты
 app.post('/save-coords', (req, res) => {
   const data = req.body;
   if (playerCoords) data.player = playerCoords;
@@ -36,7 +36,7 @@ app.post('/save-coords', (req, res) => {
 
     console.log('✅ Координаты сохранены:', data);
 
-    // ⬇️ Запускаем генерацию Python-скриптом
+    // Запускаем генерацию Python-скриптом
     exec('python3 generate_world.py', { maxBuffer: 1024 * 1024 * 10 }, (error, stdout, stderr) => {
       if (error) {
         console.error('❌ Ошибка при генерации:', error.message);

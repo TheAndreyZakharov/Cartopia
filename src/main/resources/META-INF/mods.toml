@@ -1,6 +1,6 @@
 modLoader="javafml"
 loaderVersion="[47,)"
-license="MIT"
+license="Apache-2.0 license"
 
 [[mods]]
 modId="cartopia"

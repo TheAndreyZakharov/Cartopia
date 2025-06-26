@@ -5,22 +5,9 @@
   <title>Выбор участка на OSM</title>
   <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
   <style>
-    html, body {
-      height: 100%;
-      margin: 0;
-    }
-    #map {
-      height: 100%;
-      width: 100%;
-      position: relative;
-    }
-    #selectionBox {   
-      position: fixed;
-      border: 2px dashed red;
-      pointer-events: none;
-      display: none;
-      z-index: 999;
-    }
+    html, body { height: 100%; margin: 0; }
+    #map { height: 100%; width: 100%; position: relative; }
+    #selectionBox { position: fixed; border: 2px dashed red; pointer-events: none; display: none; z-index: 999; }
     #controls {
       position: absolute;
       top: 10px;
@@ -54,37 +41,73 @@
   let selecting = false;
   let selectionSize = parseInt(sizeInput.value);
   let centerLatLng = null;
+  let centerSquare = null;
 
+  // Получить текущий центр экрана в координатах карты
+  function getMapScreenCenterLatLng() {
+    const mapSize = map.getSize();
+    const centerPx = L.point(mapSize.x / 2, mapSize.y / 2);
+    return map.containerPointToLatLng(centerPx);
+  }
+
+  function updateBoxAndCenter() {
+    if (!selecting) return;
+    centerLatLng = getMapScreenCenterLatLng();
+    updateBox();
+    updateCenterSquare();
+  }
+
+  // Рисуем красную рамку вокруг области
   function updateBox() {
     if (!centerLatLng || !selecting) return;
-
-    const centerPx = map.latLngToContainerPoint(centerLatLng);
     const metersPerPx = 40075016.686 * Math.cos(centerLatLng.lat * Math.PI / 180) / (256 * Math.pow(2, map.getZoom()));
     const pxSize = selectionSize / metersPerPx;
-
     box.style.width = pxSize + 'px';
     box.style.height = pxSize + 'px';
     box.style.left = `calc(50% - ${pxSize / 2}px)`;
     box.style.top = `calc(50% - ${pxSize / 2}px)`;
   }
 
-  map.on('zoom move', () => {
-    if (selecting && centerLatLng) updateBox();
-  });
+  // Рисуем синий квадратик 10x10 м в центре зоны
+  function updateCenterSquare() {
+    if (!centerLatLng || !selecting) {
+      if (centerSquare) {
+        map.removeLayer(centerSquare);
+        centerSquare = null;
+      }
+      return;
+    }
+    // 10 метров в градусах широты и долготы
+    const lat10m = 10 / 111320;
+    const lng10m = 10 / (111320 * Math.cos(centerLatLng.lat * Math.PI / 180));
+    // Квадратик 10x10 м
+    const bounds = [
+      [centerLatLng.lat - lat10m / 2, centerLatLng.lng - lng10m / 2],
+      [centerLatLng.lat + lat10m / 2, centerLatLng.lng + lng10m / 2]
+    ];
+    if (centerSquare) {
+      centerSquare.setBounds(bounds);
+    } else {
+      centerSquare = L.rectangle(bounds, {
+        color: "red",
+        weight: 2,
+        fillOpacity: 0.5
+      }).addTo(map);
+    }
+  }
+
+  map.on('zoom move', updateBoxAndCenter);
 
   toggleBtn.onclick = () => {
     selecting = !selecting;
     toggleBtn.textContent = selecting ? 'Отменить выбор' : 'Выбрать зону';
     confirmBtn.disabled = !selecting;
     box.style.display = selecting ? 'block' : 'none';
-
     if (selecting) {
-      const mapSize = map.getSize();
-      const boxCenterPx = L.point(mapSize.x / 2, mapSize.y / 2);
-      centerLatLng = map.containerPointToLatLng(boxCenterPx);
-      updateBox();
+      updateBoxAndCenter();
     } else {
       centerLatLng = null;
+      updateCenterSquare();
     }
   };
 
@@ -92,7 +115,9 @@
     const val = parseInt(sizeInput.value);
     if (!isNaN(val)) {
       selectionSize = val;
-      if (selecting && centerLatLng) updateBox();
+      if (selecting) {
+        updateBoxAndCenter();
+      }
     }
   });
 
@@ -103,19 +128,33 @@
     if (val > 2000) val = 2000;
     sizeInput.value = val;
     selectionSize = val;
-    if (selecting && centerLatLng) updateBox();
+    if (selecting) {
+      updateBoxAndCenter();
+    }
   });
 
+  // Overpass API запрос для карты
   async function fetchOverpassFeatures(bbox) {
     const [s, w, n, e] = bbox;
+    // Подставляем координаты в шаблон запроса {{bbox}}!
+    const bboxStr = `${s},${w},${n},${e}`;
     const query = `
-    [out:json];
+    [out:json][timeout:45];
     (
-      way["highway"](${s},${w},${n},${e});
-      (
-        way["building"](${s},${w},${n},${e});
-        relation["building"](${s},${w},${n},${e});
-      );
+      way["highway"](${bboxStr});
+      way["railway"](${bboxStr});
+      way["building"](${bboxStr});
+      relation["building"](${bboxStr});
+      way["landuse"](${bboxStr});
+      way["leisure"](${bboxStr});
+      way["natural"](${bboxStr});
+      way["waterway"](${bboxStr});
+      way["amenity"](${bboxStr});
+      way["barrier"](${bboxStr});
+      relation["landuse"](${bboxStr});
+      relation["leisure"](${bboxStr});
+      relation["natural"](${bboxStr});
+      node(${bboxStr});
     );
     out body geom;
     >;
@@ -135,15 +174,12 @@
   }
 
   confirmBtn.onclick = async () => {
+    if (!selecting) return;
     const size = selectionSize;
+    const boxCenterLatLng = getMapScreenCenterLatLng();
 
-    // 🆕 Берем центр выделенной зоны в момент нажатия!
-    const mapSize = map.getSize();
-    const boxCenterPx = L.point(mapSize.x / 2, mapSize.y / 2);
-    const centerLatLngNow = map.containerPointToLatLng(boxCenterPx);
-
-    const lat = centerLatLngNow.lat;
-    const lng = centerLatLngNow.lng;
+    const lat = boxCenterLatLng.lat;
+    const lng = boxCenterLatLng.lng;
 
     const latMeters = 111320;
     const lngMeters = 111320 * Math.cos(lat * Math.PI / 180);
@@ -180,7 +216,6 @@
       alert('Ошибка при загрузке данных с Overpass API.');
     }
   };
-
 </script>
 </body>
 </html>
