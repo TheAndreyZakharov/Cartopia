@@ -169,8 +169,6 @@ def set_block(x, y, z, block):
         if error_count < 10:
             print(f"⚠️ Ошибка при установке блока ({x},{y},{z}):", str(e))
 
-# ... все импорты и глобальные переменные
-
 print("📄 Загрузка координат...")
 with open("coords.json") as f:
     data = json.load(f)
@@ -243,14 +241,12 @@ for el in features:
 
 error_count = 0
 
-# --- ДОБАВЛЯЕМ ВЫЧИСЛЕНИЕ bbox_min_x... ДО того как использовать get_y_for_block ---
-
 bbox_min_x, bbox_min_z = latlng_to_block_coords(bbox_south, bbox_west)
 bbox_max_x, bbox_max_z = latlng_to_block_coords(bbox_north, bbox_east)
 min_x, max_x = sorted([bbox_min_x, bbox_max_x])
 min_z, max_z = sorted([bbox_min_z, bbox_max_z])
 
-# ---- ВОТ ТУТ ВЫЧИСЛЯЕМ height_map и min_elevation ----
+# ТУТ ВЫЧИСЛЯЕМ height_map и min_elevation
 print("🗺️ Загружаем рельеф из DEM (dem.tif)...")
 if not os.path.exists("dem.tif"):
     print("❌ DEM файл не найден!")
@@ -266,7 +262,7 @@ height_map = get_height_map_from_dem_tif(
 min_elevation = min(height_map.values())
 print(f"Минимальная высота на участке: {min_elevation} м")
 
-# ---- ТОЛЬКО ПОСЛЕ ЭТОГО объявляем функцию! ----
+# ТОЛЬКО ПОСЛЕ ЭТОГО объявляем функцию
 def get_y_for_block(x, z):
     if (x, z) in height_map:
         elev = height_map[(x, z)]
@@ -288,7 +284,7 @@ def get_y_for_block(x, z):
     y = Y_BASE + int(round(elev - min_elevation))
     return y
 
-# --- 1. Подложка: всё травой, но по зоне! ---
+# --- 1. Подложка: всё травой, но по зоне ---
 
 surface_material_map = {}
 for x in range(min_x, max_x+1):
