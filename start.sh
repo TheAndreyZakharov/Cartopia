@@ -3,5 +3,8 @@
 # Открыть терминал для node-сервера
 osascript -e 'tell application "Terminal" to do script "cd \"'"$(pwd)"'\" && node server.js"'
 
-# Запустить клиента (можно в этом же окне)
+# Запустить relight (освещение)
+python3 /Users/andrey/Documents/projects/Cartopia/relight_world.py
+
+# Запустить клиента
 ./gradlew runClient
