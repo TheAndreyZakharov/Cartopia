@@ -15,13 +15,13 @@
 
 <p align="center">
   <a href="https://www.openstreetmap.org" target="_blank">
-    <img src="images/logos/OpenStreetMap_logo.png" alt="OpenStreetMap" height="40">
+    <img src="images/logos/OpenStreetMap_logo.png" alt="OpenStreetMap" height="50">
   </a>
   <a href="https://opentopography.org" target="_blank">
-    <img src="images/logos/OpenTopography_logo.png" alt="OpenTopography" height="40">
+    <img src="images/logos/OpenTopography_logo.png" alt="OpenTopography" height="50">
   </a>
   <a href="https://www.gmrt.org" target="_blank">
-    <img src="images/logos/GMRT_logo.png" alt="GMRT" height="40">
+    <img src="images/logos/GMRT_logo.png" alt="GMRT" height="50">
   </a>
 </p>
 
