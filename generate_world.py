@@ -8,7 +8,10 @@ from amulet import load_level
 from amulet.api.block import Block
 import requests
 import rasterio
-import math
+from rasterio.windows import from_bounds
+from collections import Counter
+import copy
+import geopandas as gpd
 
 # === Настройки ===
 Y_BASE = -60
@@ -123,6 +126,66 @@ FENCED_ZONE_PREFIXES = [
     "amenity=marketplace",
 ]
 
+# --- LANDCOVER LEGEND.   ---
+LANDCOVER_CLASS_TO_BLOCK = {
+    210: "water",        # Water body
+    220: "snow_block",   # Permanent ice and snow
+    200: "sandstone",    # Bare areas (можно sandstone или sand)
+    201: "grass_block",  # Consolidated bare areas
+    202: "sandstone",    # Unconsolidated bare areas (опять песок/пыль)
+    130: "grass_block",  # Grassland
+    120: "grass_block",  # Shrubland
+    121: "grass_block",  # Evergreen shrubland
+    122: "grass_block",  # Deciduous shrubland
+    10: "grass_block",   # Rainfed cropland
+    11: "grass_block",
+    12: "grass_block",
+    20: "grass_block",   # Irrigated cropland
+    51: "grass_block",   # Open evergreen broadleaved forest
+    52: "grass_block",   # Closed evergreen broadleaved forest
+    61: "grass_block",   # Open deciduous broadleaved forest
+    62: "grass_block",
+    71: "grass_block",   # Open evergreen needle-leaved forest
+    72: "grass_block",
+    81: "grass_block",   # Open deciduous needle-leaved forest
+    82: "grass_block",
+    91: "grass_block",   # Open mixed leaf forest
+    92: "grass_block",
+    150: "grass_block",  # Sparse vegetation
+    152: "grass_block",
+    153: "grass_block",
+    181: "muddy_mangrove_roots",  # Swamp
+    182: "muddy_mangrove_roots",  # Marsh
+    183: "muddy_mangrove_roots",  # Flooded flat
+    184: "sandstone",    # Saline
+    185: "mangrove_log", # Mangrove
+    186: "muddy_mangrove_roots",  # Salt marsh
+    187: "sandstone",    # Tidal flat
+    190: "grass_block",  # Impervious surfaces (города)
+    140: "snow_block",   # Lichens and mosses
+    0: "grass_block",    # Filled value, ставим траву
+    250: "grass_block",  # Filled value, ставим траву
+    # ... 
+}
+
+
+def get_landcover_map_from_tif(
+    tif_path, bbox_south, bbox_west, bbox_north, bbox_east,
+    min_x, max_x, min_z, max_z, latlng_to_block_coords, block_coords_to_latlng
+):
+    landcover_map = {}
+    with rasterio.open(tif_path) as src:
+        for x in range(min_x, max_x + 1):
+            for z in range(min_z, max_z + 1):
+                lat, lon = block_coords_to_latlng(x, z)
+                try:
+                    row, col = src.index(lon, lat)
+                    value = int(src.read(1, window=((row, row+1), (col, col+1)))[0, 0])
+                except Exception:
+                    value = None
+                landcover_map[(x, z)] = value
+    return landcover_map
+
 
 def get_height_map_from_dem_tif(
     tif_path, bbox_south, bbox_west, bbox_north, bbox_east,
@@ -160,6 +223,18 @@ def get_height_map_from_dem_tif(
     return height_map
 
 
+
+def ensure_chunk(level, x, z, dimension):
+    cx, cz = x // 16, z // 16
+    try:
+        chunk = level.get_chunk(cx, cz, dimension)
+    except Exception:
+        # Чанк не существует — создаём новый пустой
+        level.create_chunk(cx, cz, dimension)
+        chunk = level.get_chunk(cx, cz, dimension)
+    return chunk
+
+
 def set_block(x, y, z, block):
     global error_count
     try:
@@ -185,7 +260,10 @@ if player:
 
 possible_paths = [
     os.path.abspath("run/saves/Cartopia"),
-    os.path.expanduser("~/Library/Application Support/minecraft/saves/Cartopia")
+    os.path.expanduser("~/Library/Application Support/minecraft/saves/Cartopia"),
+    os.path.expanduser("~/.minecraft/saves/Cartopia"),
+    os.path.expanduser("~/AppData/Roaming/.minecraft/saves/Cartopia"),
+    os.path.expanduser("~\\AppData\\Roaming\\.minecraft\\saves\\Cartopia"),
 ]
 world_path = next((p for p in possible_paths if os.path.exists(p)), None)
 if not world_path:
@@ -259,6 +337,20 @@ height_map = get_height_map_from_dem_tif(
 )
 
 
+
+
+# Используем landcover напрямую через S3 без скачивания!
+landcover_url = "/vsicurl/https://s3.openlandmap.org/arco/lc_glc.fcs30d_c_30m_s_20220101_20221231_go_epsg.4326_v20231026.tif"
+print("🗺️ Загружаем landcover напрямую из OpenLandMap через интернет...")
+landcover_map = get_landcover_map_from_tif(
+    landcover_url,
+    bbox_south, bbox_west, bbox_north, bbox_east,
+    min_x, max_x, min_z, max_z,
+    latlng_to_block_coords, block_coords_to_latlng
+)
+
+
+
 min_elevation = min(height_map.values())
 print(f"Минимальная высота на участке: {min_elevation} м")
 
@@ -284,13 +376,43 @@ def get_y_for_block(x, z):
     y = Y_BASE + int(round(elev - min_elevation))
     return y
 
-# --- 1. Подложка: всё травой, но по зоне ---
+def get_dominant_block_around(x, z, surface_map, radius=20):
+    # Игнорируем воду, песок, дороги, пляжи
+    from collections import Counter
+    values = []
+    for dx in range(-radius, radius+1):
+        for dz in range(-radius, radius+1):
+            if dx == 0 and dz == 0: continue
+            b = surface_map.get((x+dx, z+dz))
+            if b in ("grass_block", "snow_block", "sandstone"):
+                values.append(b)
+    if not values:
+        return "grass_block"
+    return Counter(values).most_common(1)[0][0]
+
+
+olm_water_blocks = set()
+for (x, z), lcover_val in landcover_map.items():
+    if LANDCOVER_CLASS_TO_BLOCK.get(lcover_val) == "water":
+        olm_water_blocks.add((x, z))
+
+all_water_blocks =  olm_water_blocks
+
+
 
 surface_material_map = {}
 for x in range(min_x, max_x+1):
     for z in range(min_z, max_z+1):
-        surface_material_map[(x, z)] = "grass_block"
+        if (x, z) in all_water_blocks:
+            blockname = "water"
+        else:
+            lcover_val = landcover_map.get((x, z))
+            blockname = "grass_block"
+            if lcover_val is not None:
+                blockname = LANDCOVER_CLASS_TO_BLOCK.get(lcover_val, "grass_block")
+        surface_material_map[(x, z)] = blockname
 
+# --- OSM полигоны всегда выше landcover ---
 for feature in features:
     tags = feature.get("tags", {})
     key = None
@@ -315,7 +437,46 @@ for feature in features:
     for x in range(min_xx, max_xx+1):
         for z in range(min_zz, max_zz+1):
             if polygon.contains(Point(x, z)):
-                surface_material_map[(x, z)] = block_name
+                # Город — определяем "по окружению", если просто built-up!
+                if key == "landuse=residential":
+                    dom = get_dominant_block_around(x, z, surface_material_map)
+                    if dom == "grass_block" or dom == "snow_block":
+                        surface_material_map[(x, z)] = dom
+                    elif dom == "sandstone":
+                        surface_material_map[(x, z)] = "sandstone"
+                    else:
+                        surface_material_map[(x, z)] = "grass_block"
+                # Любой песок, пляж, пустыня = sandstone
+                elif key in ["natural=sand", "natural=beach", "natural=desert"]:
+                    surface_material_map[(x, z)] = "sandstone"
+                # Всё остальное по маппингу
+                else:
+                    surface_material_map[(x, z)] = block_name
+
+
+def blur_surface(surface_map, iterations=15):
+    for _ in range(iterations):
+        new_map = copy.deepcopy(surface_map)
+        for (x, z), mat in surface_map.items():
+            # Все 8 соседей (крест + диагонали)
+            neighbors = [
+                surface_map.get((x+1, z)), surface_map.get((x-1, z)),
+                surface_map.get((x, z+1)), surface_map.get((x, z-1)),
+                surface_map.get((x+1, z+1)), surface_map.get((x-1, z-1)),
+                surface_map.get((x+1, z-1)), surface_map.get((x-1, z+1)),
+            ]
+            count = Counter([n for n in neighbors if n is not None])
+            if count:
+                # Если больше соседей другого типа — сменить материал
+                most_common, freq = count.most_common(1)[0]
+                if most_common != mat and freq >= 4:  # Подбирать
+                    new_map[(x, z)] = most_common
+        surface_map = new_map
+    return surface_map
+
+surface_material_map = blur_surface(surface_material_map, iterations=15)
+
+
 
 print("⛰️ Формируем карту высот...")
 terrain_y = {}
@@ -385,6 +546,27 @@ while changed:
                         changed = True
 
 
+def blur_height_map(height_map, iterations=20):
+    for _ in range(iterations):
+        new_map = copy.deepcopy(height_map)
+        for (x, z), y in height_map.items():
+            neighbors = [
+                height_map.get((x+1, z)), height_map.get((x-1, z)),
+                height_map.get((x, z+1)), height_map.get((x, z-1)),
+                height_map.get((x+1, z+1)), height_map.get((x-1, z-1)),
+                height_map.get((x+1, z-1)), height_map.get((x-1, z+1)),
+            ]
+            valid_neighbors = [v for v in neighbors if v is not None]
+            if valid_neighbors:
+                # Медианное сглаживание:
+                new_y = int(round(sorted(valid_neighbors + [y])[len(valid_neighbors)//2]))
+                new_map[(x, z)] = new_y
+        height_map = new_map
+    return height_map
+
+terrain_y = blur_height_map(terrain_y, iterations=20)
+
+
 print("🌎 Ставим блоки с нужным материалом строго по выровненной поверхности...")
 for x in range(min_x, max_x + 1):
     for z in range(min_z, max_z + 1):
@@ -398,6 +580,140 @@ for x in range(min_x, max_x + 1):
         # 3. Всё что ниже — тоже чистим (опционально)
         for y_below in range(Y_BASE, y):
             set_block(x, y_below, z, Block(namespace="minecraft", base_name="air"))
+
+
+def correct_water_blocks(
+    features, node_coords, terrain_y, surface_material_map,
+    latlng_to_block_coords, block_coords_to_latlng,
+    min_x, max_x, min_z, max_z,
+    hydrolakes_shp, hydrorivers_shp
+):
+    print("🌊 Корректируем воду: OSM + HydroLAKES + HydroRIVERS ...")
+    from shapely.geometry import Polygon, LineString, Point
+    import geopandas as gpd
+
+    # 1. OSM: реки (way) и озёра (полигон natural=water или waterway=riverbank/lake)
+    osm_water_polygons = []
+    osm_river_lines = []
+    for feat in features:
+        tags = feat.get("tags", {})
+        if feat["type"] == "way":
+            nodes = [node_coords.get(nid) for nid in feat.get("nodes", []) if nid in node_coords]
+            if not nodes or len(nodes) < 2:
+                continue
+            # Полигоны воды (natural=water, water=lake, waterway=riverbank и тд)
+            is_water_poly = False
+            if nodes[0] == nodes[-1] and len(nodes) > 3:
+                if (
+                    tags.get("natural") == "water" or
+                    tags.get("waterway") == "riverbank" or
+                    tags.get("water") in ["lake", "pond", "basin", "reservoir"]
+                ):
+                    is_water_poly = True
+            if is_water_poly:
+                poly = Polygon(nodes)
+                if poly.is_valid and not poly.is_empty:
+                    osm_water_polygons.append(poly)
+            # Линии рек
+            elif tags.get("waterway") in ("river", "stream", "canal", "drain", "ditch"):
+                line = LineString(nodes)
+                width = None
+                if "width" in tags:
+                    try:
+                        width = float(tags["width"])
+                    except Exception:
+                        pass
+                if not width:
+                    width = 20  # по умолчанию
+                osm_river_lines.append((line, width))
+    # 2. OSM multipolygon воды (relations)
+    for feat in features:
+        if feat["type"] != "relation":
+            continue
+        tags = feat.get("tags", {})
+        if (
+            tags.get("type") == "multipolygon" and (
+                tags.get("natural") == "water" or tags.get("waterway") == "riverbank"
+            )
+        ):
+            lines = []
+            for member in feat.get("members", []):
+                if member.get("role") == "outer" and member["type"] == "way":
+                    way_id = member["ref"]
+                    way = next((w for w in features if w.get("id") == way_id and w["type"] == "way"), None)
+                    if not way:
+                        continue
+                    nodes = [node_coords.get(nid) for nid in way.get("nodes", []) if nid in node_coords]
+                    if len(nodes) < 2:
+                        continue
+                    lines.append(LineString(nodes))
+            # Сборка полигона из всех линий мультиполигона
+            for poly in polygonize(lines):
+                if poly.is_valid and not poly.is_empty:
+                    osm_water_polygons.append(poly)
+
+    # 3. HydroLAKES: полигоны озёр
+    print("  Загрузка HydroLAKES...")
+    lakes_gdf = gpd.read_file(hydrolakes_shp, bbox=(bbox_west, bbox_south, bbox_east, bbox_north))
+    lake_polygons = []
+    for geom in lakes_gdf.geometry:
+        if geom.is_valid and not geom.is_empty:
+            lake_polygons.append(geom)
+
+    # 4. HydroRIVERS: линии рек с шириной
+    print("  Загрузка HydroRIVERS...")
+    rivers_gdf = gpd.read_file(hydrorivers_shp, bbox=(bbox_west, bbox_south, bbox_east, bbox_north))
+    river_lines = []
+    for idx, row in rivers_gdf.iterrows():
+        geom = row.geometry
+        if not geom or not geom.is_valid:
+            continue
+        width = row.get("WIDTH_M", 20)
+        if not width or width < 1:
+            width = 20
+        river_lines.append((geom, width))
+
+    # 5. Генерируем water mask
+    print("  Формируем маску воды...")
+    water_blocks = set()
+    for poly in osm_water_polygons + lake_polygons:
+        min_xx, min_zz, max_xx, max_zz = map(int, map(round, poly.bounds))
+        for x in range(max(min_x, min_xx), min(max_x, max_xx)+1):
+            for z in range(max(min_z, min_zz), min(max_z, max_zz)+1):
+                p = Point(x, z)
+                if poly.contains(p):
+                    water_blocks.add((x, z))
+    for line, width in osm_river_lines + river_lines:
+        # Для каждой точки линии рисуем буфер
+        buf = line.buffer(width / 2, cap_style=2)  # cap_style=2 — квадратные концы
+        min_xx, min_zz, max_xx, max_zz = map(int, map(round, buf.bounds))
+        for x in range(max(min_x, min_xx), min(max_x, max_xx)+1):
+            for z in range(max(min_z, min_zz), min(max_z, max_zz)+1):
+                p = Point(x, z)
+                if buf.contains(p):
+                    water_blocks.add((x, z))
+
+    # 6. Корректируем блоки
+    print("  Корректируем блоки мира: ставим воду...")
+    for (x, z) in water_blocks:
+        y = terrain_y.get((x, z), Y_BASE)
+        # Не трогать если тут уже вода
+        if surface_material_map.get((x, z)) == "water":
+            continue
+        set_block(x, y, z, Block(namespace="minecraft", base_name="water"))
+        surface_material_map[(x, z)] = "water"
+
+
+correct_water_blocks(
+    features, node_coords, terrain_y, surface_material_map,
+    latlng_to_block_coords, block_coords_to_latlng,
+    min_x, max_x, min_z, max_z,
+    "HydroLAKES_polys_v10_shp/HydroLAKES_polys_v10.shp",
+    "HydroRIVERS_v10_shp/HydroRIVERS_v10.shp"
+)
+
+
+
 
 
 def set_plant(x, y, z, plant):
@@ -599,7 +915,6 @@ for feature in features:
                         road_blocks.add((xx, zz))
 
 
-
 # --- 4. Растения и деревья (Y_BASE+1)
 print("🌳 Генерация растительности и декора...")
 for polygon, key in zone_polygons:
@@ -728,15 +1043,13 @@ for polygon, key in zone_polygons:
             if (x, z) not in road_blocks and (x, z) not in rail_blocks:
                 fence_points.add((x, z))
 
-# 2. Ставим fence с нужными свойствами
+# 2. Ставим fence
 for x, z in fence_points:
     y = terrain_y.get((x, z), Y_BASE)
     set_block(
         x, y+1, z,
         Block(namespace="minecraft", base_name="oak_fence")
     )
-
-
 
 # --- 7. Мультиполигоны (relation building)
 for rel in relations:
@@ -858,6 +1171,7 @@ for x in range(global_min_x, global_max_x+1):
 print("🌱 Сажаем траву, папоротники, цветы в лесах и парках...")
 for (x, z) in park_forest_blocks:
     y = terrain_y.get((x, z), Y_BASE)
+    ensure_chunk(level, x, z, DIMENSION)
     block_below = level.get_block(x, y, z, DIMENSION)
     block_here = level.get_block(x, y+1, z, DIMENSION)
     if block_below.base_name != "grass_block" or block_here.base_name != "air":
@@ -894,13 +1208,14 @@ for (x, z) in park_forest_blocks:
 print("🌳 Сажаем деревья в парках и лесах")
 for (x, z) in park_forest_blocks:
     y = terrain_y.get((x, z), Y_BASE)
+    ensure_chunk(level, x, z, DIMENSION)
     block_below = level.get_block(x, y, z, DIMENSION)
     block_here = level.get_block(x, y+1, z, DIMENSION)
     if block_below.base_name != "grass_block" or block_here.base_name != "air":
         continue
     if (x, z) in building_blocks or (x, z) in road_blocks or (x, z) in rail_blocks or (x, z) in beach_blocks:
         continue
-    if random.random() < 0.10:
+    if random.random() < 0.0010: # было 0.10, изменено для разработки 
         y = terrain_y.get((x, z), Y_BASE)
         set_tree(x, y+1, z, random.choice(["oak", "birch", "spruce", "acacia"]))
 
@@ -909,26 +1224,28 @@ for (x, z) in residential_blocks:
     if (x, z) in park_forest_blocks:
         continue
     y = terrain_y.get((x, z), Y_BASE)
+    ensure_chunk(level, x, z, DIMENSION)
     block_below = level.get_block(x, y, z, DIMENSION)
     block_here = level.get_block(x, y+1, z, DIMENSION)
     if block_below.base_name != "grass_block" or block_here.base_name != "air":
         continue
     if (x, z) in building_blocks or (x, z) in road_blocks or (x, z) in rail_blocks or (x, z) in beach_blocks:
         continue
-    if random.random() < 0.05:
+    if random.random() < 0.0005: # было 0.05, изменено для разработки
         y = terrain_y.get((x, z), Y_BASE)
         set_tree(x, y+1, z, random.choice(["oak", "birch", "acacia"]))
 
 print("🌿 Сажаем деревья вне всех зон")
 for (x, z) in empty_blocks:
     y = terrain_y.get((x, z), Y_BASE)
+    ensure_chunk(level, x, z, DIMENSION)
     block_below = level.get_block(x, y, z, DIMENSION)
     block_here = level.get_block(x, y+1, z, DIMENSION)
     if block_below.base_name != "grass_block" or block_here.base_name != "air":
         continue
     if (x, z) in building_blocks or (x, z) in road_blocks or (x, z) in rail_blocks or (x, z) in beach_blocks:
         continue
-    if random.random() < 0.05:
+    if random.random() < 0.0005: # было 0.05, изменено для разработки
         y = terrain_y.get((x, z), Y_BASE)
         set_tree(x, y+1, z, random.choice(["oak", "birch"]))
 

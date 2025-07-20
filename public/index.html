@@ -1,49 +1,89 @@
 <!DOCTYPE html>
-<html lang="ru">
+<html lang="en">
 <head>
   <meta charset="UTF-8">
-  <title>Выбор участка на OSM</title>
+  <title>Select area on OSM</title>
   <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
   <style>
     html, body { height: 100%; margin: 0; }
     #map { height: 100%; width: 100%; position: relative; }
     #selectionBox { position: fixed; border: 2px dashed red; pointer-events: none; display: none; z-index: 999; }
+
+    /* Контейнер управления в правом верхнем углу */
     #controls {
       position: absolute;
-      top: 10px;
-      left: 10px;
-      background: rgba(255, 255, 255, 0.8);
-      padding: 10px;
-      border-radius: 8px;
+      top: 16px;
+      right: 16px;
+      background: rgba(255, 255, 255, 0.93);
+      padding: 16px;
+      border-radius: 10px;
       z-index: 1000;
+      box-shadow: 0 2px 12px rgba(0,0,0,0.10);
+      min-width: 280px;
+      text-align: right;
     }
+    #controls input, #controls button { margin-bottom: 8px; }
+    #searchInput {
+      width: 90%;
+      margin-bottom: 8px;
+      padding: 6px;
+      border-radius: 6px;
+      border: 1px solid #ccc;
+    }
+    #controls label {
+      font-size: 13px;
+      color: #333;
+      margin-bottom: 3px;
+      display: block;
+      text-align: left;
+    }
+    /* Скрываем все атрибуции/кнопки/флажки в правом нижнем углу */
+    .leaflet-bottom.leaflet-right, 
+    .leaflet-control-attribution, 
+    .leaflet-control-container { display: none !important; }
   </style>
 </head>
 <body>
 <div id="map"></div>
 <div id="selectionBox"></div>
+
 <div id="controls">
-  <button id="toggleBtn">Выбрать зону</button><br><br>
-  <input type="number" id="sizeInput" value="500" min="100" max="2000"> м<br><br>
-  <button id="confirmBtn" disabled>Подтвердить</button>
+  <label for="searchInput">Search for a city, address, or coordinates:</label>
+  <input type="text" id="searchInput" placeholder="For example, Москва, Moscow or 55.7558,37.6176">
+  <button id="searchBtn">Find</button><br>
+  <button id="toggleBtn">Select area</button><br>
+  <div style="display: flex; align-items: center; margin-bottom: 4px;">
+    <label for="sizeInput" style="margin-right: 8px; margin-bottom: 0;">Side length (meters):</label>
+    <input type="number" id="sizeInput" value="500" min="200" step="100" style="width: 160px; margin-bottom: 0;">
+  </div>
+  <div style="font-size: 12px; color: #666; margin-bottom: 8px; text-align: left;">
+    Approx. area: side × side (m²)
+  </div>
+  <button id="confirmBtn" disabled>Confirm</button>
 </div>
 
 <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
 <script>
-  const map = L.map('map').setView([60.03655975737041, 30.338916778564457], 15);
+  const map = L.map('map', { attributionControl: false }).setView([60.03655975737041, 30.338916778564457], 15);
   L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19 }).addTo(map);
+
+  // Удаляем контролы, если вдруг остались
+  setTimeout(() => {
+    document.querySelectorAll('.leaflet-bottom.leaflet-right, .leaflet-control-attribution, .leaflet-control-container').forEach(el => el.remove());
+  }, 500);
 
   const box = document.getElementById('selectionBox');
   const toggleBtn = document.getElementById('toggleBtn');
   const sizeInput = document.getElementById('sizeInput');
   const confirmBtn = document.getElementById('confirmBtn');
+  const searchInput = document.getElementById('searchInput');
+  const searchBtn = document.getElementById('searchBtn');
 
   let selecting = false;
   let selectionSize = parseInt(sizeInput.value);
   let centerLatLng = null;
   let centerSquare = null;
 
-  // Получить текущий центр экрана в координатах карты
   function getMapScreenCenterLatLng() {
     const mapSize = map.getSize();
     const centerPx = L.point(mapSize.x / 2, mapSize.y / 2);
@@ -57,7 +97,6 @@
     updateCenterSquare();
   }
 
-  // Рисуем красную рамку вокруг области
   function updateBox() {
     if (!centerLatLng || !selecting) return;
     const metersPerPx = 40075016.686 * Math.cos(centerLatLng.lat * Math.PI / 180) / (256 * Math.pow(2, map.getZoom()));
@@ -68,7 +107,6 @@
     box.style.top = `calc(50% - ${pxSize / 2}px)`;
   }
 
-  // Рисуем синий квадратик 10x10 м в центре зоны
   function updateCenterSquare() {
     if (!centerLatLng || !selecting) {
       if (centerSquare) {
@@ -77,10 +115,8 @@
       }
       return;
     }
-    // 10 метров в градусах широты и долготы
     const lat10m = 10 / 111320;
     const lng10m = 10 / (111320 * Math.cos(centerLatLng.lat * Math.PI / 180));
-    // Квадратик 10x10 м
     const bounds = [
       [centerLatLng.lat - lat10m / 2, centerLatLng.lng - lng10m / 2],
       [centerLatLng.lat + lat10m / 2, centerLatLng.lng + lng10m / 2]
@@ -100,7 +136,7 @@
 
   toggleBtn.onclick = () => {
     selecting = !selecting;
-    toggleBtn.textContent = selecting ? 'Отменить выбор' : 'Выбрать зону';
+    toggleBtn.textContent = selecting ? 'Cancel selection' : 'Select area';
     confirmBtn.disabled = !selecting;
     box.style.display = selecting ? 'block' : 'none';
     if (selecting) {
@@ -112,31 +148,50 @@
   };
 
   sizeInput.addEventListener('input', () => {
-    const val = parseInt(sizeInput.value);
+    let val = parseInt(sizeInput.value);
     if (!isNaN(val)) {
       selectionSize = val;
-      if (selecting) {
-        updateBoxAndCenter();
-      }
+      if (selecting) updateBoxAndCenter();
     }
   });
 
   sizeInput.addEventListener('blur', () => {
     let val = parseInt(sizeInput.value);
-    if (isNaN(val)) val = 100;
-    if (val < 100) val = 100;
-    if (val > 2000) val = 2000;
+    if (isNaN(val)) val = 200;
+    if (val < 200) val = 200;
+    // максимум — это радиус всей Земли, 20000000 (20 000 км)
+    if (val > 20000000) val = 20000000;
     sizeInput.value = val;
     selectionSize = val;
-    if (selecting) {
-      updateBoxAndCenter();
-    }
+    if (selecting) updateBoxAndCenter();
   });
 
-  // Overpass API запрос для карты
+  // Поиск по адресу/координатам через Nominatim
+  searchBtn.onclick = async () => {
+    const query = searchInput.value.trim();
+    if (!query) return;
+    try {
+      const url = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(query)}`;
+      const res = await fetch(url);
+      const data = await res.json();
+      if (data.length > 0) {
+        const lat = parseFloat(data[0].lat);
+        const lon = parseFloat(data[0].lon);
+        map.setView([lat, lon], 15);
+      } else {
+        alert('Not found!');
+      }
+    } catch {
+      alert('Search error!');
+    }
+  };
+
+  searchInput.addEventListener('keydown', e => {
+    if (e.key === 'Enter') searchBtn.onclick();
+  });
+
   async function fetchOverpassFeatures(bbox) {
     const [s, w, n, e] = bbox;
-    // Подставляем координаты в шаблон запроса {{bbox}}!
     const bboxStr = `${s},${w},${n},${e}`;
     const query = `
     [out:json][timeout:45];
@@ -160,16 +215,13 @@
     >;
     out skel qt;
     `;
-
     const response = await fetch("https://overpass-api.de/api/interpreter", {
       method: "POST",
       body: query,
     });
-
     if (!response.ok) {
-      throw new Error("Ошибка Overpass API");
+      throw new Error("Overpass API error");
     }
-
     return await response.json();
   }
 
@@ -177,17 +229,20 @@
     if (!selecting) return;
     const size = selectionSize;
     const boxCenterLatLng = getMapScreenCenterLatLng();
-
     const lat = boxCenterLatLng.lat;
     const lng = boxCenterLatLng.lng;
-
     const latMeters = 111320;
     const lngMeters = 111320 * Math.cos(lat * Math.PI / 180);
-
     const deltaLat = (size / 2) / latMeters;
     const deltaLng = (size / 2) / lngMeters;
-
     const bbox = [lat - deltaLat, lng - deltaLng, lat + deltaLat, lng + deltaLng];
+
+    // Предупреждение для больших зон
+    if (size > 10000) {
+      const km = (size / 1000).toFixed(1);
+      const sure = confirm(`You have selected a very large area: ${km} km. Generating such a large area may take a long time and could cause errors due to API limits or Minecraft chunk issues. Are you sure you want to continue?`);
+      if (!sure) return;
+    }
 
     try {
       const features = await fetchOverpassFeatures(bbox);
@@ -210,10 +265,10 @@
         body: JSON.stringify(payload)
       });
 
-      alert('Сохранено!');
+      alert('Saved!');
     } catch (e) {
       console.error(e);
-      alert('Ошибка при загрузке данных с Overpass API.');
+      alert('Error loading data from Overpass API.');
     }
   };
 </script>

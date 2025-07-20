@@ -18,3 +18,9 @@ npm-debug.log*
 # OS files
 .DS_Store
 
+HydroLAKES_polys_v10_shp/
+HydroRIVERS_v10_shp
+text.java
+text1.java
+text2.java
+textold.java
