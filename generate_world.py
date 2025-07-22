@@ -800,6 +800,8 @@ for feature in features:
                 y = terrain_y.get((x, z), Y_BASE)
                 set_block(x, y, z, block)
 
+level.save()
+
 # --- 3. Дороги и рельсы (тоже на Y_BASE)
 print("🛣️ Генерация дорог и рельсов...")
 def bresenham_line(x0, z0, x1, z1):
@@ -865,8 +867,262 @@ def get_rail_shape(x1, z1, x2, z2, x3, z3):
     else:
         return 'north_south'
 
+# --- Получаем актуальную карту высот и материалов (поверхность уже построенного мира) ---
+def get_actual_surface_y_and_material_map(level, min_x, max_x, min_z, max_z, terrain_y, DIMENSION):
+    actual_y_map = {}
+    actual_mat_map = {}
+    for x in range(min_x, max_x + 1):
+        for z in range(min_z, max_z + 1):
+            y = terrain_y.get((x, z), Y_BASE)
+            # Пробуем найти первый НЕ air блок сверху вниз (например, в пределах 32 блоков)
+            found = False
+            for yy in range(y+16, y-16, -1):
+                try:
+                    blk = level.get_block(x, yy, z, DIMENSION)
+                    if blk.base_name != "air":
+                        actual_y_map[(x, z)] = yy
+                        actual_mat_map[(x, z)] = blk.base_name
+                        found = True
+                        break
+                except Exception:
+                    continue
+            if not found:
+                actual_y_map[(x, z)] = y
+                actual_mat_map[(x, z)] = "air"
+    return actual_y_map, actual_mat_map
+
+actual_surface_y_map, actual_surface_material_map = get_actual_surface_y_and_material_map(
+    level, min_x, max_x, min_z, max_z, terrain_y, DIMENSION
+)
+
+
+
+
+def generate_bridge_profiles_and_pillars(
+    features, node_coords, terrain_y, road_materials, set_block, surface_material_map,
+    get_y_for_block, Y_BASE, road_blocks, min_x, max_x, min_z, max_z
+):
+    print("🌉 Генерация мостов")
+    bridge_profiles = {}
+
+    N_STEPS = 7       # Число ступеней на каждом въезде
+    STEP_WIDTH = 1    # Ширина (по длине) каждой ступени — 1 блок!
+    MIN_CLEARANCE = 7
+
+    for feature in features:
+        tags = feature.get("tags", {})
+        if tags.get("railway") == "subway":
+            continue  # Мосты для метро не строим!
+        layer = int(tags.get("layer", "0"))
+        is_bridge = tags.get("bridge") or (layer != 0)
+        if not is_bridge:
+            continue
+
+        kind = tags.get("highway") or tags.get("railway")
+        material, width = road_materials.get(kind, ("stone", 3))
+        width = max(1, width)
+
+        nodes = [node_coords.get(nid) for nid in feature.get("nodes", []) if nid in node_coords]
+        if not nodes or len(nodes) < 2:
+            continue
+
+        # Въездные точки
+        entry1 = nodes[0]
+        entry2 = nodes[-1]
+        y_entry1 = terrain_y.get(entry1, get_y_for_block(*entry1))
+        y_entry2 = terrain_y.get(entry2, get_y_for_block(*entry2))
+        base_y = max(y_entry1, y_entry2) + N_STEPS * layer
+
+        # Построим линию моста
+        bridge_line = []
+        for i in range(1, len(nodes)):
+            bridge_line += bresenham_line(nodes[i-1][0], nodes[i-1][1], nodes[i][0], nodes[i][1])
+        bridge_line = [pt for i, pt in enumerate(bridge_line) if i == 0 or pt != bridge_line[i-1]]
+        L = len(bridge_line)
+        # --- Кладём блоки моста с этим профилем ---
+        if L < 20:
+            for (x, z) in bridge_line:
+                y = terrain_y.get((x, z), get_y_for_block(x, z)) + 1
+                for w in range(-width // 2, width // 2 + 1):
+                    xx, zz = x, z
+                    if width > 1:
+                        xx, zz = x + w, z
+                    bridge_profiles[(xx, zz)] = y
+                    terrain_level = terrain_y.get((xx, zz), get_y_for_block(xx, zz))
+                    if y <= terrain_level:
+                        continue  # Не ставим на рельеф!
+                    set_block(xx, y, zz, Block(namespace="minecraft", base_name=material))
+            # --- ОГРАЖДЕНИЯ по краям для коротких мостов ---
+            for (x, z) in bridge_line:
+                y = terrain_y.get((x, z), get_y_for_block(x, z)) + 1
+                if width == 1:
+                    # Для ширины 1 просто ставим по бокам
+                    set_block(x, y + 1, z - 1, Block(namespace="minecraft", base_name="stone_brick_wall"))
+                    set_block(x, y + 1, z + 1, Block(namespace="minecraft", base_name="stone_brick_wall"))
+                else:
+                    # Для ширины >1 ставим по краям ширины
+                    left = z - (width // 2)
+                    right = z + (width // 2)
+                    set_block(x, y + 1, left, Block(namespace="minecraft", base_name="stone_brick_wall"))
+                    set_block(x, y + 1, right, Block(namespace="minecraft", base_name="stone_brick_wall"))
+            continue  # сразу к следующему feature!        
+        if L >= 20:
+            STEP = N_STEPS  # = 7
+
+            # Центральный "ровный" участок
+            flat_start = STEP
+            flat_end = L - STEP
+
+            for idx in range(flat_start, flat_end):
+                x, z = bridge_line[idx]
+                y = terrain_y.get((x, z), get_y_for_block(x, z)) + MIN_CLEARANCE
+                for idx in range(flat_start, flat_end):
+                    x, z = bridge_line[idx]
+                    y = terrain_y.get((x, z), get_y_for_block(x, z)) + MIN_CLEARANCE
+                    for w in range(-width // 2, width // 2 + 1):
+                        xx, zz = x, z
+                        if width > 1:
+                            xx, zz = x + w, z
+                        bridge_profiles[(xx, zz)] = y
+                        terrain_level = terrain_y.get((xx, zz), get_y_for_block(xx, zz))
+                        if y <= terrain_level:
+                            continue  # Не ставим на рельеф!
+                        set_block(xx, y, zz, Block(namespace="minecraft", base_name=material))
+
+        
+        # Для каждого entry point (въезд или выезд)
+        for entry_idx, entry in enumerate([bridge_line[0], bridge_line[-1]]):
+            # Выбираем 3-4 точки в начале/конце линии моста для усреднения направления
+            N_DIRECTION_POINTS = 4
+            if entry_idx == 0:
+                direction_points = bridge_line[:N_DIRECTION_POINTS]
+            else:
+                direction_points = bridge_line[-N_DIRECTION_POINTS:][::-1]  # переворачиваем для правильного направления
+
+            # Вычисляем средний вектор направления
+            dx = 0
+            dz = 0
+            for i in range(1, len(direction_points)):
+                dx += direction_points[i][0] - direction_points[i - 1][0]
+                dz += direction_points[i][1] - direction_points[i - 1][1]
+            count = max(1, len(direction_points) - 1)
+            dir_dx = dx / count
+            dir_dz = dz / count
+            norm = math.hypot(dir_dx, dir_dz)
+            if norm == 0:
+                continue
+            step_dx = dir_dx / norm
+            step_dz = dir_dz / norm
+
+            # Начальная точка (вход)
+            x, z = entry
+            y = terrain_y.get((x, z), get_y_for_block(x, z))
+            curr_y = y
+            # Ортогональный вектор для ширины
+            ortho_x = -step_dz
+            ortho_z = step_dx
+
+            for step in range(N_STEPS):
+                curr_y += 1
+                ix = int(round(x))
+                iz = int(round(z))
+                for w in range(-width // 2, width // 2 + 1):
+                    wx = ix + int(round(ortho_x * w))
+                    wz = iz + int(round(ortho_z * w))
+                    set_block(wx, curr_y, wz, Block(namespace="minecraft", base_name=material))
+                # Двигаемся по направлению моста
+                x += step_dx
+                z += step_dz
+
+        if L < 2 * N_STEPS + 3:
+            # Короткий мост — сжимаем ступени
+            left_steps = right_steps = min(N_STEPS, L // 2)
+            flat_len = max(1, L - left_steps - right_steps)
+        else:
+            left_steps = right_steps = N_STEPS
+            flat_len = L - left_steps - right_steps
+
+        # Соберём профиль высот по всей длине
+        profile = []
+        curr_y = y_entry1
+        # Подъём (ступени)
+        for i in range(left_steps):
+            curr_y += 1
+            profile.append(curr_y)
+        # Центральная часть (ровно, на base_y, но с clearance)
+        for i in range(flat_len):
+            # По рельефу!
+            x, z = bridge_line[left_steps + i]
+            ground_y = terrain_y.get((x, z), get_y_for_block(x, z))
+            y = ground_y + MIN_CLEARANCE
+            profile.append(y)
+        # Спуск (ступени)
+        curr_y = profile[-1]
+        for i in range(right_steps):
+            curr_y -= 1
+            profile.append(curr_y)
+        # Подрезать (если вдруг вышло длиннее линии)
+        profile = profile[:L]
+
+        # Кладём блоки моста с этим профилем!
+        for idx, (x, z) in enumerate(bridge_line):
+            y = profile[idx]
+            # Ортогональный вектор к направлению линии
+            if idx < len(bridge_line) - 1:
+                next_x, next_z = bridge_line[idx + 1]
+                dir_x = next_x - x
+                dir_z = next_z - z
+            else:
+                prev_x, prev_z = bridge_line[idx - 1]
+                dir_x = x - prev_x
+                dir_z = z - prev_z
+            norm = math.hypot(dir_x, dir_z)
+            if norm == 0: norm = 1
+            dir_x /= norm
+            dir_z /= norm
+            ortho_x = -dir_z
+            ortho_z = dir_x
+            # Строим ширину по ортогонали
+            for w in range(-width // 2, width // 2 + 1):
+                xx = int(round(x + ortho_x * w))
+                zz = int(round(z + ortho_z * w))
+                bridge_profiles[(xx, zz)] = y
+                terrain_level = terrain_y.get((xx, zz), get_y_for_block(xx, zz))
+                if y <= terrain_level:
+                    continue  # НЕ ставим блок на уровне рельефа
+                set_block(xx, y, zz, Block(namespace="minecraft", base_name=material))
+
+        # --- ОГРАЖДЕНИЯ по краям моста --- 
+        for idx, (x, z) in enumerate(bridge_line):
+            y = profile[idx]
+            if idx < len(bridge_line) - 1:
+                dx = bridge_line[idx+1][0] - x
+                dz = bridge_line[idx+1][1] - z
+            else:
+                dx = x - bridge_line[idx-1][0]
+                dz = z - bridge_line[idx-1][1]
+            if abs(dx) > abs(dz):
+                left = z - (width // 2)
+                right = z + (width // 2)
+                set_block(x, y + 1, left, Block(namespace="minecraft", base_name="stone_brick_wall"))
+                set_block(x, y + 1, right, Block(namespace="minecraft", base_name="stone_brick_wall"))
+            else:
+                left = x - (width // 2)
+                right = x + (width // 2)
+                set_block(left, y + 1, z, Block(namespace="minecraft", base_name="stone_brick_wall"))
+                set_block(right, y + 1, z, Block(namespace="minecraft", base_name="stone_brick_wall"))
+
+    return bridge_profiles
+
+
 road_blocks = set()
 rail_blocks = set()
+
+bridge_profiles = generate_bridge_profiles_and_pillars(
+    features, node_coords, terrain_y, ROAD_MATERIALS, set_block, surface_material_map,
+    get_y_for_block, Y_BASE, road_blocks, min_x, max_x, min_z, max_z
+)
+
 for feature in features:
     tags = feature.get("tags", {})
     nodes = [node_coords.get(nid) for nid in feature.get("nodes", []) if nid in node_coords]
@@ -875,13 +1131,21 @@ for feature in features:
     if "highway" in tags or "railway" in tags:
         material, width = ROAD_MATERIALS.get(tags.get("highway") or tags.get("railway"), ("stone", 3))
         block = Block(namespace="minecraft", base_name=material)
+        is_bridge = tags.get("bridge") or int(tags.get("layer", "0")) != 0
+
         if tags.get("railway") in ("rail", "tram", "light_rail"):
-            # Класть подложку (гравий/каменку) — как у тебя было
+            # Класть подложку (гравий/каменку)
             for i in range(1, len(nodes)):
                 (x1, z1), (x2, z2) = nodes[i-1], nodes[i]
                 line = bresenham_line(x1, z1, x2, z2)
                 for (x, z) in line:
-                    y = terrain_y.get((x, z), Y_BASE)
+                    if is_bridge:
+                        if (x, z) in bridge_profiles:
+                            y = bridge_profiles[(x, z)]
+                        else:
+                            continue  # нет профиля для этого моста
+                    else:
+                        y = terrain_y.get((x, z), Y_BASE)
                     set_block(x, y, z, Block(namespace="minecraft", base_name="cobblestone"))
                     rail_blocks.add((x, z))
             # Вторым проходом — класть рельсы ПОВЕРХ всей линии
@@ -889,13 +1153,30 @@ for feature in features:
                 (x1, z1), (x2, z2) = nodes[i-1], nodes[i]
                 line = bresenham_line(x1, z1, x2, z2)
                 for (x, z) in line:
-                    y = terrain_y.get((x, z), Y_BASE)
+                    if is_bridge:
+                        if (x, z) in bridge_profiles:
+                            y = bridge_profiles[(x, z)]
+                        else:
+                            continue  # нет профиля для этого моста
+                    else:
+                        y = terrain_y.get((x, z), Y_BASE)
                     set_block(x, y+1, z, Block(namespace="minecraft", base_name="rail"))
         elif tags.get("railway") == "subway":
-            # Subway — не строим!
+            # Метро — строим всегда под дефолт уровнем - чтобы не мешало
+            for (x1, z1), (x2, z2) in zip(nodes, nodes[1:]):
+                dx = x2 - x1
+                dz = z2 - z1
+                dist = max(abs(dx), abs(dz))
+                if dist == 0:
+                    continue
+                for i in range(dist + 1):
+                    x = round(x1 + dx * i / dist)
+                    z = round(z1 + dz * i / dist)
+                    set_block(x, -62, z, Block(namespace="minecraft", base_name="cobblestone"))
+                    set_block(x, -61, z, Block(namespace="minecraft", base_name="rail"))
             continue
         else:
-            # Все обычные дороги
+            # Обычная дорога:
             for (x1, z1), (x2, z2) in zip(nodes, nodes[1:]):
                 dx = x2 - x1
                 dz = z2 - z1
@@ -910,9 +1191,87 @@ for feature in features:
                             xx, zz = x, z + w
                         else:
                             xx, zz = x + w, z
-                        y = terrain_y.get((xx, zz), Y_BASE)
+                        if is_bridge:
+                            if (xx, zz) in bridge_profiles:
+                                y = bridge_profiles[(xx, zz)]
+                            else:
+                                continue  # нет профиля для этого моста
+                        else:
+                            y = terrain_y.get((xx, zz), Y_BASE)
                         set_block(xx, y, zz, block)
                         road_blocks.add((xx, zz))
+
+
+PILLAR_STEP = 50  # раз в сколько блоков ставить опоры
+
+allowed_foundation = (
+    "grass_block", "dirt", "muddy_mangrove_roots", "sandstone", "water"
+)
+
+print("🧱 Ставим колонны по краям моста...")
+
+for feature in features:
+    tags = feature.get("tags", {})
+    layer = int(tags.get("layer", "0"))
+    is_bridge = tags.get("bridge") or (layer != 0)
+    if not is_bridge:
+        continue
+
+    kind = tags.get("highway") or tags.get("railway")
+    material, width = ROAD_MATERIALS.get(kind, ("stone", 3))
+    width = max(1, width)
+
+    nodes = [node_coords.get(nid) for nid in feature.get("nodes", []) if nid in node_coords]
+    if not nodes or len(nodes) < 2:
+        continue
+
+    # Собираем линию моста
+    bridge_line = []
+    for i in range(1, len(nodes)):
+        bridge_line += bresenham_line(nodes[i-1][0], nodes[i-1][1], nodes[i][0], nodes[i][1])
+    bridge_line = [pt for i, pt in enumerate(bridge_line) if i == 0 or pt != bridge_line[i-1]]
+    L = len(bridge_line)
+
+    # Где ставим опоры: крайние + через каждый PILLAR_STEP
+    pillar_indices = [0, L-1] + [i for i in range(PILLAR_STEP, L-1, PILLAR_STEP)]
+
+    for idx in pillar_indices:
+        x, z = bridge_line[idx]
+
+        if idx < len(bridge_line) - 1:
+            nx, nz = bridge_line[idx + 1]
+            dx = nx - x
+            dz = nz - z
+        else:
+            px, pz = bridge_line[idx - 1]
+            dx = x - px
+            dz = z - pz
+
+        norm = math.hypot(dx, dz)
+        if norm == 0:
+            continue
+        ortho_x = -dz / norm
+        ortho_z = dx / norm
+
+        for side in [-1, 1]:
+            # Только одна колонна по краю — никакого dwidth цикла!
+            edge_x = int(round(x + ortho_x * (width // 2 + 0.5) * side))
+            edge_z = int(round(z + ortho_z * (width // 2 + 0.5) * side))
+
+            # --- ВАЖНО: создаём чанк перед get_block ---
+            ensure_chunk(level, edge_x, edge_z, DIMENSION)
+
+            ground_y = terrain_y.get((edge_x, edge_z), Y_BASE)
+            mat = level.get_block(edge_x, ground_y, edge_z, DIMENSION).base_name
+            if mat not in allowed_foundation:
+                continue
+
+            bridge_y = bridge_profiles.get((edge_x, edge_z))
+            if not bridge_y:
+                continue
+
+            for py in range(ground_y + 1, bridge_y):
+                set_block(edge_x, py, edge_z, Block(namespace="minecraft", base_name="stone_bricks"))
 
 
 # --- 4. Растения и деревья (Y_BASE+1)
