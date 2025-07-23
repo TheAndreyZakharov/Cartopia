@@ -12,12 +12,16 @@ from rasterio.windows import from_bounds
 from collections import Counter
 import copy
 import geopandas as gpd
+import time
 
 # === Настройки ===
 Y_BASE = -60
 BUILDING_HEIGHT = 5
 BLOCK_VERSION = ("java", (1, 20, 1))
 DIMENSION = "minecraft:overworld"
+
+start_time = time.time()
+placed_blocks_count = 0
 
 ROAD_MATERIALS = {
     "motorway": ("gray_concrete", 15),
@@ -168,7 +172,6 @@ LANDCOVER_CLASS_TO_BLOCK = {
     # ... 
 }
 
-
 def get_landcover_map_from_tif(
     tif_path, bbox_south, bbox_west, bbox_north, bbox_east,
     min_x, max_x, min_z, max_z, latlng_to_block_coords, block_coords_to_latlng
@@ -185,7 +188,6 @@ def get_landcover_map_from_tif(
                     value = None
                 landcover_map[(x, z)] = value
     return landcover_map
-
 
 def get_height_map_from_dem_tif(
     tif_path, bbox_south, bbox_west, bbox_north, bbox_east,
@@ -222,8 +224,6 @@ def get_height_map_from_dem_tif(
                 height_map[(x, z)] = value
     return height_map
 
-
-
 def ensure_chunk(level, x, z, dimension):
     cx, cz = x // 16, z // 16
     try:
@@ -234,11 +234,11 @@ def ensure_chunk(level, x, z, dimension):
         chunk = level.get_chunk(cx, cz, dimension)
     return chunk
 
-
 def set_block(x, y, z, block):
-    global error_count
+    global error_count, placed_blocks_count
     try:
         level.set_version_block(x, y, z, DIMENSION, BLOCK_VERSION, block)
+        placed_blocks_count += 1  # Считаем каждый поставленный блок!
     except Exception as e:
         error_count += 1
         if error_count < 10:
@@ -1624,4 +1624,37 @@ if error_count:
 print("💾 Сохраняем...")
 level.save()
 level.close()
+
+end_time = time.time()
+duration = end_time - start_time
+
+minutes = int(duration // 60)
+seconds = int(duration % 60)
+
+# Размер участка в метрах (бралось с фронта)
+planned_size_m = size  # Это size из coords.json, который пришёл с фронта
+planned_area_m2 = planned_size_m * planned_size_m
+planned_area_km2 = planned_area_m2 / 1_000_000
+
+# Размер участка в блоках
+actual_blocks_x = max_x - min_x + 1
+actual_blocks_z = max_z - min_z + 1
+actual_blocks_total = actual_blocks_x * actual_blocks_z
+
+# Попробуем восстановить реальный "метр на 1 блок" (с учетом округлений и map-проекций)
+if actual_blocks_x > 0:
+    actual_m_per_block = planned_size_m / actual_blocks_x
+    actual_area_m2 = actual_blocks_x * actual_blocks_z * (actual_m_per_block ** 2)
+    actual_area_km2 = actual_area_m2 / 1_000_000
+else:
+    actual_m_per_block = 1
+    actual_area_m2 = actual_blocks_total
+    actual_area_km2 = actual_area_m2 / 1_000_000
+
+print()
+print("=== Генерация завершена ===")
+print(f"🗺️ Заданный участок:         {planned_size_m:.0f} × {planned_size_m:.0f} м  =  {planned_area_km2:.3f} км²")
+print(f"🟩 Всего поставлено блоков:  {placed_blocks_count:,}")
+print(f"⏱️ Время генерации:         {minutes} мин {seconds} сек  ({duration:.1f} сек)")
+print("============================")
 print("🎉 Генерация завершена.")
