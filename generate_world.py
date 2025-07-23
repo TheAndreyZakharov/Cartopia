@@ -896,9 +896,6 @@ actual_surface_y_map, actual_surface_material_map = get_actual_surface_y_and_mat
     level, min_x, max_x, min_z, max_z, terrain_y, DIMENSION
 )
 
-
-
-
 def generate_bridge_profiles_and_pillars(
     features, node_coords, terrain_y, road_materials, set_block, surface_material_map,
     get_y_for_block, Y_BASE, road_blocks, min_x, max_x, min_z, max_z
@@ -1321,6 +1318,51 @@ for polygon, key in zone_polygons:
                         if random.random() < 0.45:
                             set_tree(tx, y+1, tz, ttype)
 
+road_lines = []
+road_widths = []
+for feature_road in features:
+    tags_road = feature_road.get("tags", {})
+    if "highway" in tags_road and feature_road.get("nodes"):
+        road_nodes = [node_coords.get(nid) for nid in feature_road["nodes"] if nid in node_coords]
+        if len(road_nodes) >= 2:
+            road_lines.append(LineString(road_nodes))
+            width = ROAD_MATERIALS.get(tags_road["highway"], ("stone", 3))[1]
+            road_widths.append(width)
+
+# Собираем ВСЕ сквозные клетки заранее (до цикла по зданиям!)
+all_skvoznie_road_cells = set()
+for feature in features:
+    tags = feature.get("tags", {})
+    if "building" in tags and feature.get("nodes"):
+        nodes = [node_coords.get(nid) for nid in feature.get("nodes", []) if nid in node_coords]
+        if not nodes or len(nodes) < 2:
+            continue
+        if nodes[0] != nodes[-1]:
+            nodes.append(nodes[0])
+        polygon = Polygon(nodes)
+        if not polygon.is_valid or polygon.is_empty:
+            continue
+        for line, width in zip(road_lines, road_widths):
+            if not polygon.intersects(line):
+                continue
+            line_points = []
+            coords = list(line.coords)
+            for i in range(1, len(coords)):
+                x1, z1 = coords[i-1]
+                x2, z2 = coords[i]
+                line_points += bresenham_line(int(round(x1)), int(round(z1)), int(round(x2)), int(round(z2)))
+            line_points = [pt for i, pt in enumerate(line_points) if i == 0 or pt != line_points[i-1]]  # убрать дубли
+
+            coords_inside = [pt for pt in line_points if polygon.contains(Point(pt))]
+            boundary_pts = [pt for pt in line_points if polygon.boundary.distance(Point(pt)) < 1.2]
+            if len(boundary_pts) >= 2 and len(coords_inside) >= 1:
+                for pt in coords_inside:
+                    cx, cz = int(round(pt[0])), int(round(pt[1]))
+                    for dx in range(-width // 2, width // 2 + 1):
+                        for dz in range(-width // 2, width // 2 + 1):
+                            if polygon.contains(Point(cx + dx, cz + dz)):
+                                all_skvoznie_road_cells.add((cx + dx, cz + dz))
+
 # --- 5. Здания (Y_BASE+1 и выше, двери на Y_BASE+1)
 print("🏠 Генерация зданий и дверей...")
 relations = []
@@ -1373,11 +1415,20 @@ for feature in features:
                         # Достраиваем "фундамент" до земли (чтобы не висело)
                         for fy in range(ground_y + 1, max_ground_y + 1):
                             set_block(x, fy, z, Block(namespace="minecraft", base_name="bricks"))
-                        # Теперь строим само здание (от max_ground_y вверх)
-                        for dy in range(1, 1 + height):
-                            set_block(x, max_ground_y + dy, z, Block(namespace="minecraft", base_name="bricks"))
-                        # Крыша
-                        set_block(x, max_ground_y + 1 + height, z, Block(namespace="minecraft", base_name="stone_slab"))
+                        # Если тут дорога-сквозняк — делаем арку!
+                        if (x, z) in all_skvoznie_road_cells:
+                            # На высоте 1,2,3 блока оставляем воздух (арку)
+                            for dy in range(1, 4):
+                                set_block(x, max_ground_y + dy, z, Block(namespace="minecraft", base_name="air"))
+                            # Дальше строим стены и крышу как обычно
+                            for dy in range(4, 1 + height):
+                                set_block(x, max_ground_y + dy, z, Block(namespace="minecraft", base_name="bricks"))
+                            set_block(x, max_ground_y + 1 + height, z, Block(namespace="minecraft", base_name="stone_slab"))
+                        else:
+                            # Обычная часть здания
+                            for dy in range(1, 1 + height):
+                                set_block(x, max_ground_y + dy, z, Block(namespace="minecraft", base_name="bricks"))
+                            set_block(x, max_ground_y + 1 + height, z, Block(namespace="minecraft", base_name="stone_slab"))
             entrances = []
             for node_id in feature.get("nodes", []):
                 node = next((n for n in features if n.get("id") == node_id and n["type"] == "node"), None)
@@ -1459,7 +1510,6 @@ for rel in relations:
             # Выбираем высоту по тегу (relation может быть не только residential, так что тоже проверяем)
             height = get_building_height(tags)
 
-
             building_ground_heights = []
             for x in range(min_x, max_x + 1):
                 for z in range(min_z, max_z + 1):
@@ -1479,16 +1529,24 @@ for rel in relations:
                         # Достраиваем "фундамент" до земли (чтобы не висело)
                         for fy in range(ground_y + 1, max_ground_y + 1):
                             set_block(x, fy, z, Block(namespace="minecraft", base_name="bricks"))
-                        # Теперь строим само здание (от max_ground_y вверх)
-                        for dy in range(1, 1 + height):
-                            set_block(x, max_ground_y + dy, z, Block(namespace="minecraft", base_name="bricks"))
-                        # Крыша
-                        set_block(x, max_ground_y + 1 + height, z, Block(namespace="minecraft", base_name="stone_slab"))
+                        # Если тут дорога-сквозняк — делаем арку!
+                        if (x, z) in all_skvoznie_road_cells:
+                            # На высоте 1,2,3 блока оставляем воздух (арку)
+                            for dy in range(1, 4):
+                                set_block(x, max_ground_y + dy, z, Block(namespace="minecraft", base_name="air"))
+                            # Дальше строим стены и крышу как обычно
+                            for dy in range(4, 1 + height):
+                                set_block(x, max_ground_y + dy, z, Block(namespace="minecraft", base_name="bricks"))
+                            set_block(x, max_ground_y + 1 + height, z, Block(namespace="minecraft", base_name="stone_slab"))
+                        else:
+                            # Обычная часть здания
+                            for dy in range(1, 1 + height):
+                                set_block(x, max_ground_y + dy, z, Block(namespace="minecraft", base_name="bricks"))
+                            set_block(x, max_ground_y + 1 + height, z, Block(namespace="minecraft", base_name="stone_slab"))
         except Exception as e:
             error_count += 1
             if error_count < 5:
                 print(f"⚠️ Ошибка при генерации здания с дырой (relation): {e}")
-
 
 building_blocks = set()
 beach_blocks = set()
