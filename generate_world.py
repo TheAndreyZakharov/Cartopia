@@ -700,7 +700,8 @@ def correct_water_blocks(
         # Не трогать если тут уже вода
         if surface_material_map.get((x, z)) == "water":
             continue
-        set_block(x, y, z, Block(namespace="minecraft", base_name="water"))
+        set_block(x, y, z, Block(namespace="minecraft", base_name="air"))
+        set_block(x, y-1, z, Block(namespace="minecraft", base_name="water"))
         surface_material_map[(x, z)] = "water"
 
 
@@ -1262,10 +1263,18 @@ for feature in features:
             ensure_chunk(level, edge_x, edge_z, DIMENSION)
 
             ground_y = terrain_y.get((edge_x, edge_z), Y_BASE)
+            # Сначала пробуем обычный surface (ground_y)
             mat = level.get_block(edge_x, ground_y, edge_z, DIMENSION).base_name
-            if mat not in allowed_foundation:
-                continue
 
+            # Если это не из разрешённых, попробуй посмотреть, что ниже — там может быть вода!
+            if mat not in allowed_foundation:
+                # Проверяем на уровень ниже — там теперь вода?
+                mat_below = level.get_block(edge_x, ground_y - 1, edge_z, DIMENSION).base_name
+                if mat_below == "water":
+                    mat = "water"
+                    ground_y = ground_y - 1
+                else:
+                    continue
             bridge_y = bridge_profiles.get((edge_x, edge_z))
             if not bridge_y:
                 continue
