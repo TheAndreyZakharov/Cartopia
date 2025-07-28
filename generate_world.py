@@ -17,6 +17,7 @@ import time
 # === Настройки ===
 Y_BASE = -60
 BUILDING_HEIGHT = 5
+FLOOR_HEIGHT = 4
 BLOCK_VERSION = ("java", (1, 20, 1))
 DIMENSION = "minecraft:overworld"
 
@@ -337,8 +338,6 @@ height_map = get_height_map_from_dem_tif(
 )
 
 
-
-
 # Используем landcover напрямую через S3 без скачивания!
 landcover_url = "/vsicurl/https://s3.openlandmap.org/arco/lc_glc.fcs30d_c_30m_s_20220101_20221231_go_epsg.4326_v20231026.tif"
 print("🗺️ Загружаем landcover напрямую из OpenLandMap через интернет...")
@@ -348,7 +347,6 @@ landcover_map = get_landcover_map_from_tif(
     min_x, max_x, min_z, max_z,
     latlng_to_block_coords, block_coords_to_latlng
 )
-
 
 
 min_elevation = min(height_map.values())
@@ -758,15 +756,25 @@ def set_tree(x, y, z, tree_type):
 
 def get_building_height(tags):
     """
-    Если есть 'building:levels', возвращает этажность*3 (1 этаж = 3 блока), иначе — 6 блоков.
+    Сначала смотрит 'height' (в метрах), потом 'building:levels'.
+    Если ничего нет — возвращает 2 этажа стандартной высоты.
     """
+    # 1. Сначала пробуем height в метрах
+    if "height" in tags:
+        try:
+            h = float(tags["height"])
+            return max(FLOOR_HEIGHT, int(round(h)))
+        except Exception:
+            pass
+    # 2. Если нет — пробуем этажи
     if "building:levels" in tags:
         try:
             levels = float(tags["building:levels"])
-            return max(3, int(round(levels * 3)))
+            return max(FLOOR_HEIGHT, int(round(levels * FLOOR_HEIGHT)))
         except Exception:
             pass
-    return 6  # по умолчанию 2 этажа, если не указано
+    # 3. Если ничего нет — 2 этажа
+    return 2 * FLOOR_HEIGHT
 
 
 # --- 2. Все зоны поверх подложки (Y_BASE)
@@ -912,7 +920,7 @@ def generate_bridge_profiles_and_pillars(
         if tags.get("railway") == "subway":
             continue  # Мосты для метро не строим!
         layer = int(tags.get("layer", "0"))
-        is_bridge = tags.get("bridge") or (layer != 0)
+        is_bridge = tags.get("bridge") and not tags.get("tunnel")
         if not is_bridge:
             continue
 
@@ -1113,6 +1121,236 @@ def generate_bridge_profiles_and_pillars(
     return bridge_profiles
 
 
+def generate_tunnel_hole_mask(features, node_coords, terrain_y, get_y_for_block, HOLE_SIZE=4, HOLE_HEIGHT=4):
+    tunnel_holes = set()
+    for feature in features:
+        tags = feature.get("tags", {})
+        if not tags.get("tunnel"): continue
+        if tags.get("railway") == "subway": continue
+        nodes = [node_coords.get(nid) for nid in feature.get("nodes", []) if nid in node_coords]
+        if not nodes or len(nodes) < 2: continue
+        tunnel_line = []
+        for i in range(1, len(nodes)):
+            tunnel_line += bresenham_line(nodes[i-1][0], nodes[i-1][1], nodes[i][0], nodes[i][1])
+        tunnel_line = [pt for i, pt in enumerate(tunnel_line) if i == 0 or pt != tunnel_line[i-1]]
+        L = len(tunnel_line)
+        if L < 25: continue
+        for end_idx in [0, -1]:
+            x0, z0 = tunnel_line[end_idx]
+            for dx in range(-(HOLE_SIZE // 2), HOLE_SIZE // 2):
+                for dz in range(-(HOLE_SIZE // 2), HOLE_SIZE // 2):
+                    xx = x0 + dx
+                    zz = z0 + dz
+                    ground_y = terrain_y.get((xx, zz), get_y_for_block(xx, zz))
+                    for dy in range(HOLE_HEIGHT):
+                        tunnel_holes.add((xx, ground_y + dy, zz))
+    return tunnel_holes
+
+short_tunnel_cells = set()
+for feature in features:
+    tags = feature.get("tags", {})
+    if tags.get("tunnel") and tags.get("railway") != "subway":
+        nodes = [node_coords.get(nid) for nid in feature.get("nodes", []) if nid in node_coords]
+        if nodes and len(nodes) >= 2:
+            tunnel_line = []
+            for i in range(1, len(nodes)):
+                tunnel_line += bresenham_line(nodes[i-1][0], nodes[i-1][1], nodes[i][0], nodes[i][1])
+            tunnel_line = [pt for i, pt in enumerate(tunnel_line) if i == 0 or pt != tunnel_line[i-1]]
+            if len(tunnel_line) < 25:
+                kind = tags.get("highway") or tags.get("railway")
+                width = max(3, ROAD_MATERIALS.get(kind, ("stone", 3))[1])
+                for (x, z) in tunnel_line:
+                    for w in range(-width//2, width//2+1):
+                        if abs(nodes[-1][0] - nodes[0][0]) > abs(nodes[-1][1] - nodes[0][1]):
+                            xx, zz = x, z + w
+                        else:
+                            xx, zz = x + w, z
+                        ground_y = terrain_y.get((xx, zz), get_y_for_block(xx, zz))
+                        short_tunnel_cells.add((xx, ground_y, zz))
+
+def get_2d_perimeter(points):
+    """points - set of (x, z), возвращает set периметральных (x, z)"""
+    dirs = [(-1,0),(1,0),(0,-1),(0,1)]
+    perim = set()
+    for (x, z) in points:
+        for dx, dz in dirs:
+            if (x+dx, z+dz) not in points:
+                perim.add((x, z))
+                break
+    return perim
+
+def generate_tunnel_profiles(
+    features, node_coords, terrain_y, road_materials, set_block, surface_material_map,
+    get_y_for_block, Y_BASE, road_blocks, min_x, max_x, min_z, max_z
+):
+    print("🚇 Генерация тоннелей")
+    tunnel_profiles = {}
+
+    MIN_CLEARANCE = 7
+    HOLE_SIZE = 4      # Квадрат 4x4
+    HOLE_HEIGHT = 4    # 1 слой рельефа + 3 вверх
+
+    for feature in features:
+        tags = feature.get("tags", {})
+        if not tags.get("tunnel"): continue
+        if tags.get("railway") == "subway": continue
+
+        kind = tags.get("highway") or tags.get("railway")
+        material, width0 = road_materials.get(kind, ("stone", 3))
+        width = max(width0, 5)
+
+        nodes = [node_coords.get(nid) for nid in feature.get("nodes", []) if nid in node_coords]
+        if not nodes or len(nodes) < 2: continue
+
+        tunnel_line = []
+        for i in range(1, len(nodes)):
+            tunnel_line += bresenham_line(nodes[i-1][0], nodes[i-1][1], nodes[i][0], nodes[i][1])
+        tunnel_line = [pt for i, pt in enumerate(tunnel_line) if i == 0 or pt != tunnel_line[i-1]]
+        L = len(tunnel_line)
+
+        if L < 25:
+            # КОРОТКИЙ ТОННЕЛЬ: дорога на рельефе, чистим только потолок (3 вверх)
+            for (x, z) in tunnel_line:
+                ground_y = terrain_y.get((x, z), get_y_for_block(x, z))
+                for w in range(-width // 2, width // 2 + 1):
+                    if abs(nodes[-1][0] - nodes[0][0]) > abs(nodes[-1][1] - nodes[0][1]):
+                        xx, zz = x, z + w
+                    else:
+                        xx, zz = x + w, z
+                    set_block(xx, ground_y, zz, Block(namespace="minecraft", base_name=material))
+                    tunnel_profiles[(xx, zz)] = ground_y
+                    for dy in range(1, 4):
+                        set_block(xx, ground_y + dy, zz, Block(namespace="minecraft", base_name="air"))
+            continue
+
+        # ДЛИННЫЙ ТОННЕЛЬ: две квадратные дырки (вход+выход), УЧИТЫВАЕМ рельеф в каждой точке!
+        for end_idx in [0, -1]:
+            x0, z0 = tunnel_line[end_idx]
+            for dx in range(-(HOLE_SIZE // 2), HOLE_SIZE // 2):
+                for dz in range(-(HOLE_SIZE // 2), HOLE_SIZE // 2):
+                    xx = x0 + dx
+                    zz = z0 + dz
+                    ground_y = terrain_y.get((xx, zz), get_y_for_block(xx, zz))
+                    for dy in range(HOLE_HEIGHT):
+                        set_block(xx, ground_y + dy, zz, Block(namespace="minecraft", base_name="air"))
+                        
+        # --- Дорога ниже рельефа + сбор клеток пола ---
+        tunnel_floor_cells = set()
+        for (x, z) in tunnel_line:
+            ground_y = terrain_y.get((x, z), get_y_for_block(x, z))
+            y = ground_y - MIN_CLEARANCE
+            for w in range(-width // 2, width // 2 + 1):
+                if abs(nodes[-1][0] - nodes[0][0]) > abs(nodes[-1][1] - nodes[0][1]):
+                    xx, zz = x, z + w
+                else:
+                    xx, zz = x + w, z
+                set_block(xx, y, zz, Block(namespace="minecraft", base_name=material))
+                tunnel_profiles[(xx, zz)] = y
+                tunnel_floor_cells.add((xx, y, zz))
+
+        # --- Убираем всё лишнее в проходе и ставим крышу ---
+        for (x, y, z) in tunnel_floor_cells:
+            for dy in range(1, 4):
+                set_block(x, y + dy, z, Block(namespace="minecraft", base_name="air"))
+            set_block(x, y + 3, z, Block(namespace="minecraft", base_name="stone_bricks"))
+
+        # --- Строим стенки по периметру пола ---
+        tunnel_floor_2d = set((x, z) for (x, y, z) in tunnel_floor_cells)
+        perimeter = get_2d_perimeter(tunnel_floor_2d)
+        for (x, z) in perimeter:
+            ys = [y for (xx, y, zz) in tunnel_floor_cells if xx == x and zz == z]
+            if not ys:
+                continue
+            min_y = min(ys)
+            for dy in range(0, 3):
+                set_block(x, min_y + dy, z, Block(namespace="minecraft", base_name="stone_bricks"))
+                
+        # --- ПОСЛЕ генерации рукава: строим лестницы и чистим рукав под ними ---
+        for end_idx in [0, -1]:
+            x0, z0 = tunnel_line[end_idx]
+            for dx in range(-(HOLE_SIZE // 2), HOLE_SIZE // 2):
+                for dz in range(-(HOLE_SIZE // 2), HOLE_SIZE // 2):
+                    xx = x0 + dx
+                    zz = z0 + dz
+                    ground_y = terrain_y.get((xx, zz), get_y_for_block(xx, zz))
+                    tunnel_y = ground_y - MIN_CLEARANCE
+
+                    N_STEPS = abs(ground_y - tunnel_y)
+                    if N_STEPS < 1:
+                        continue
+
+                    # Вектор направления лестницы (в сторону туннеля)
+                    if end_idx == 0 and len(tunnel_line) >= 2:
+                        next_x, next_z = tunnel_line[1]
+                    elif end_idx == -1 and len(tunnel_line) >= 2:
+                        next_x, next_z = tunnel_line[-2]
+                    else:
+                        continue
+                    dir_x = next_x - x0
+                    dir_z = next_z - z0
+                    norm = math.hypot(dir_x, dir_z)
+                    if norm == 0: continue
+                    step_dx = dir_x / norm
+                    step_dz = dir_z / norm
+
+                    for step in range(N_STEPS + 1):
+                        cur_x = int(round(xx + step_dx * step))
+                        cur_z = int(round(zz + step_dz * step))
+                        cur_y = ground_y - step
+                        for w in range(-width // 2, width // 2 + 1):
+                            wx, wz = cur_x, cur_z
+                            if width > 1:
+                                ortho_x = -step_dz
+                                ortho_z = step_dx
+                                wx = cur_x + int(round(ortho_x * w))
+                                wz = cur_z + int(round(ortho_z * w))
+                            set_block(wx, cur_y, wz, Block(namespace="minecraft", base_name=material))
+                            # Полностью очищаем всё сверху (чтобы убрать рукав)
+                            for dy in range(1, 5):
+                                set_block(wx, cur_y + dy, wz, Block(namespace="minecraft", base_name="air"))
+
+
+            # --- СТРОИМ РУКАВ ВОКРУГ ЛЕСТНИЦЫ (по периметру ступеней + крышу) ---
+            # Собрать все ступени
+            stairs_cells = set()
+            for step in range(N_STEPS + 1):
+                cur_x = int(round(xx + step_dx * step))
+                cur_z = int(round(zz + step_dz * step))
+                cur_y = ground_y - step
+                for w in range(-width // 2, width // 2 + 1):
+                    wx, wz = cur_x, cur_z
+                    if width > 1:
+                        ortho_x = -step_dz
+                        ortho_z = step_dx
+                        wx = cur_x + int(round(ortho_x * w))
+                        wz = cur_z + int(round(ortho_z * w))
+                    stairs_cells.add((wx, cur_y, wz))
+
+            # Теперь получить 2D-маску (XZ) всех ступеней
+            stairs_mask = set((x, z) for (x, y, z) in stairs_cells)
+
+            # Найти 2D-периметр
+            perimeter = get_2d_perimeter(stairs_mask)
+
+            # Для каждой точки периметра строим ВЕРТИКАЛЬНУЮ стенку вверх до rel_y-1
+            for (x, z) in perimeter:
+                # Найти минимальный y среди ступеней с этим (x, z)
+                ys = [y for (xx, y, zz) in stairs_cells if xx == x and zz == z]
+                if not ys:
+                    continue
+                min_y = min(ys)
+                rel_y = terrain_y.get((x, z), get_y_for_block(x, z))
+                target_y = rel_y - 1
+                for y in range(min_y, target_y):
+                    set_block(x, y, z, Block(namespace="minecraft", base_name="stone_bricks"))
+
+            # Крыша — по всему периметру, на высоте rel_y+4
+            for (x, z) in perimeter:
+                rel_y = terrain_y.get((x, z), get_y_for_block(x, z))
+                set_block(x, rel_y - 1 , z, Block(namespace="minecraft", base_name="stone_bricks"))
+
+    return tunnel_profiles
+
 road_blocks = set()
 rail_blocks = set()
 
@@ -1121,83 +1359,128 @@ bridge_profiles = generate_bridge_profiles_and_pillars(
     get_y_for_block, Y_BASE, road_blocks, min_x, max_x, min_z, max_z
 )
 
+tunnel_profiles = generate_tunnel_profiles(
+    features, node_coords, terrain_y, ROAD_MATERIALS, set_block, surface_material_map,
+    get_y_for_block, Y_BASE, road_blocks, min_x, max_x, min_z, max_z
+)
+
+tunnel_holes = generate_tunnel_hole_mask(features, node_coords, terrain_y, get_y_for_block)
+
 for feature in features:
+    # --- ФИЛЬТР ДЛЯ ДОРОГ И РЕЛЬСОВ ---
+    tags = feature.get("tags", {})
+    # Только реальные дороги или рельсы!
+    if not (
+        (tags.get("highway") in {
+            "motorway", "trunk", "primary", "secondary", "tertiary", "unclassified",
+            "residential", "service", "living_street", "road", "track", "path", "footway",
+            "cycleway", "bridleway", "steps"
+        }) or
+        (tags.get("railway") in {
+            "rail", "tram", "light_rail", "subway", "narrow_gauge", "monorail"
+        })
+    ):
+        continue
+    # Не обрабатывать реки, заборы, водные объекты
+    if "waterway" in tags or "barrier" in tags:
+        continue
+
     tags = feature.get("tags", {})
     nodes = [node_coords.get(nid) for nid in feature.get("nodes", []) if nid in node_coords]
     if not nodes or len(nodes) < 2:
         continue
-    if "highway" in tags or "railway" in tags:
-        material, width = ROAD_MATERIALS.get(tags.get("highway") or tags.get("railway"), ("stone", 3))
-        block = Block(namespace="minecraft", base_name=material)
-        is_bridge = tags.get("bridge") or int(tags.get("layer", "0")) != 0
+    material, width = ROAD_MATERIALS.get(tags.get("highway") or tags.get("railway"), ("stone", 3))
+    block = Block(namespace="minecraft", base_name=material)
+    is_bridge = tags.get("bridge") or int(tags.get("layer", "0")) != 0
+    is_tunnel = tags.get("tunnel")
+    is_subway = tags.get("railway") == "subway"
 
-        if tags.get("railway") in ("rail", "tram", "light_rail"):
-            # Класть подложку (гравий/каменку)
-            for i in range(1, len(nodes)):
-                (x1, z1), (x2, z2) = nodes[i-1], nodes[i]
-                line = bresenham_line(x1, z1, x2, z2)
-                for (x, z) in line:
-                    if is_bridge:
-                        if (x, z) in bridge_profiles:
-                            y = bridge_profiles[(x, z)]
-                        else:
-                            continue  # нет профиля для этого моста
+    # 1. рельсы
+    if tags.get("railway") in ("rail", "tram", "light_rail"):
+        # --- 1. Подложка ---
+        for i in range(1, len(nodes)):
+            (x1, z1), (x2, z2) = nodes[i-1], nodes[i]
+            line = bresenham_line(x1, z1, x2, z2)
+            for (x, z) in line:
+                if is_bridge:
+                    if (x, z) in bridge_profiles:
+                        y = bridge_profiles[(x, z)]
                     else:
-                        y = terrain_y.get((x, z), Y_BASE)
-                    set_block(x, y, z, Block(namespace="minecraft", base_name="cobblestone"))
-                    rail_blocks.add((x, z))
-            # Вторым проходом — класть рельсы ПОВЕРХ всей линии
-            for i in range(1, len(nodes)):
-                (x1, z1), (x2, z2) = nodes[i-1], nodes[i]
-                line = bresenham_line(x1, z1, x2, z2)
-                for (x, z) in line:
-                    if is_bridge:
-                        if (x, z) in bridge_profiles:
-                            y = bridge_profiles[(x, z)]
-                        else:
-                            continue  # нет профиля для этого моста
+                        continue
+                elif is_tunnel:
+                    if (x, z) in tunnel_profiles:
+                        y = tunnel_profiles[(x, z)]
                     else:
-                        y = terrain_y.get((x, z), Y_BASE)
-                    set_block(x, y+1, z, Block(namespace="minecraft", base_name="rail"))
-        elif tags.get("railway") == "subway":
-            # Метро — строим всегда под дефолт уровнем - чтобы не мешало
-            for (x1, z1), (x2, z2) in zip(nodes, nodes[1:]):
-                dx = x2 - x1
-                dz = z2 - z1
-                dist = max(abs(dx), abs(dz))
-                if dist == 0:
-                    continue
-                for i in range(dist + 1):
-                    x = round(x1 + dx * i / dist)
-                    z = round(z1 + dz * i / dist)
-                    set_block(x, -62, z, Block(namespace="minecraft", base_name="cobblestone"))
-                    set_block(x, -61, z, Block(namespace="minecraft", base_name="rail"))
+                        y = terrain_y.get((x, z), Y_BASE) - 7
+                else:
+                    y = terrain_y.get((x, z), Y_BASE)
+                set_block(x, y, z, Block(namespace="minecraft", base_name="cobblestone"))
+        # --- 2. Рельсы поверх ---
+        for i in range(1, len(nodes)):
+            (x1, z1), (x2, z2) = nodes[i-1], nodes[i]
+            line = bresenham_line(x1, z1, x2, z2)
+            for (x, z) in line:
+                if is_bridge:
+                    if (x, z) in bridge_profiles:
+                        y = bridge_profiles[(x, z)]
+                    else:
+                        continue
+                elif is_tunnel:
+                    if (x, z) in tunnel_profiles:
+                        y = tunnel_profiles[(x, z)]
+                    else:
+                        y = terrain_y.get((x, z), Y_BASE) - 7
+                else:
+                    y = terrain_y.get((x, z), Y_BASE)
+                set_block(x, y + 1, z, Block(namespace="minecraft", base_name="rail"))
+        continue
+
+    # 2. Метро (тоже без дырок, как и раньше)
+    elif tags.get("railway") == "subway":
+        for (x1, z1), (x2, z2) in zip(nodes, nodes[1:]):
+            dx = x2 - x1
+            dz = z2 - z1
+            dist = max(abs(dx), abs(dz))
+            if dist == 0:
+                continue
+            for i in range(dist + 1):
+                x = round(x1 + dx * i / dist)
+                z = round(z1 + dz * i / dist)
+                set_block(x, -62, z, Block(namespace="minecraft", base_name="cobblestone"))
+                set_block(x, -61, z, Block(namespace="minecraft", base_name="rail"))
+        continue
+
+    # 3. Обычные дороги и всё остальное
+    for (x1, z1), (x2, z2) in zip(nodes, nodes[1:]):
+        dx = x2 - x1
+        dz = z2 - z1
+        dist = max(abs(dx), abs(dz))
+        if dist == 0:
             continue
-        else:
-            # Обычная дорога:
-            for (x1, z1), (x2, z2) in zip(nodes, nodes[1:]):
-                dx = x2 - x1
-                dz = z2 - z1
-                dist = max(abs(dx), abs(dz))
-                if dist == 0:
+        for i in range(dist + 1):
+            x = round(x1 + dx * i / dist)
+            z = round(z1 + dz * i / dist)
+            for w in range(-width // 2, width // 2 + 1):
+                if abs(dx) > abs(dz):
+                    xx, zz = x, z + w
+                else:
+                    xx, zz = x + w, z
+                if is_bridge:
+                    if (xx, zz) in bridge_profiles:
+                        y = bridge_profiles[(xx, zz)]
+                    else:
+                        continue
+                elif is_tunnel:
+                    if (xx, zz) in tunnel_profiles:
+                        y = tunnel_profiles[(xx, zz)]
+                    else:
+                        y = terrain_y.get((xx, zz), Y_BASE) - 7
+                else:
+                    y = terrain_y.get((xx, zz), Y_BASE)
+                # Проверяем: нет ли тут дырки для туннеля
+                if (xx, y, zz) in tunnel_holes:
                     continue
-                for i in range(dist + 1):
-                    x = round(x1 + dx * i / dist)
-                    z = round(z1 + dz * i / dist)
-                    for w in range(-width // 2, width // 2 + 1):
-                        if abs(dx) > abs(dz):
-                            xx, zz = x, z + w
-                        else:
-                            xx, zz = x + w, z
-                        if is_bridge:
-                            if (xx, zz) in bridge_profiles:
-                                y = bridge_profiles[(xx, zz)]
-                            else:
-                                continue  # нет профиля для этого моста
-                        else:
-                            y = terrain_y.get((xx, zz), Y_BASE)
-                        set_block(xx, y, zz, block)
-                        road_blocks.add((xx, zz))
+                set_block(xx, y, zz, block)
 
 
 PILLAR_STEP = 50  # раз в сколько блоков ставить опоры
@@ -1279,44 +1562,6 @@ for feature in features:
             for py in range(ground_y + 1, bridge_y):
                 set_block(edge_x, py, edge_z, Block(namespace="minecraft", base_name="stone_bricks"))
 
-
-# --- 4. Растения и деревья (Y_BASE+1)
-print("🌳 Генерация растительности и декора...")
-for polygon, key in zone_polygons:
-    block_name = ZONE_MATERIALS[key]
-    min_x, min_z, max_x, max_z = map(int, map(round, polygon.bounds))
-    for x in range(min_x, max_x+1):
-        for z in range(min_z, max_z+1):
-            if polygon.contains(Point(x, z)):
-                if key in ["leisure=park", "landuse=meadow", "natural=grassland"]:
-                    if random.random() < 0.13:
-                        y = terrain_y.get((x, z), Y_BASE)
-                        set_plant(x, y+1, z, random.choice(GRASS_PLANTS + FLOWERS))
-                if key in ["leisure=park", "landuse=meadow", "natural=wood", "natural=jungle"]:
-                    if random.random() < 0.03:
-                        set_plant(x, y+1, z, "sweet_berry_bush")
-                if key == "natural=jungle" and random.random() < 0.08:
-                    set_plant(x, y+1, z, "bamboo")
-                if block_name == "water":
-                    for dx, dz in [(-1,0),(1,0),(0,-1),(0,1)]:
-                        nx, nz = x+dx, z+dz
-                        if random.random() < 0.005:
-                            y = terrain_y.get((x, z), Y_BASE)
-                            set_plant(nx, y+1, nz, "sugar_cane")
-    tree_types = ZONE_TREES.get(key)
-    if tree_types:
-        for tx in range(min_x, max_x+1, 3):  # плотнее сетка
-            for tz in range(min_z, max_z+1, 3):
-                if polygon.contains(Point(tx, tz)):
-                    ttype = random.choice(tree_types)
-                    y = get_y_for_block(tx, tz)
-                    # вишня — крайне редкая
-                    if ttype == "cherry":
-                        if random.random() < 0.07:
-                            set_tree(tx, y+1, tz, ttype)
-                    else:
-                        if random.random() < 0.45:
-                            set_tree(tx, y+1, tz, ttype)
 
 road_lines = []
 road_widths = []
@@ -1408,27 +1653,34 @@ for feature in features:
 
             max_ground_y = max(building_ground_heights)
 
+            height = get_building_height(tags)
+            num_floors = tags.get('building:levels')
+            if num_floors is not None:
+                try:
+                    num_floors = int(num_floors)
+                except Exception:
+                    num_floors = height // 4
+            else:
+                num_floors = height // 4
+            if height > 10 or num_floors > 3:
+                tunnel_cut_height = 8
+            else:
+                tunnel_cut_height = 3
+
             for x in range(min_x, max_x + 1):
                 for z in range(min_z, max_z + 1):
                     if polygon.contains(Point(x, z)):
                         ground_y = terrain_y.get((x, z), Y_BASE)
-                        # Достраиваем "фундамент" до земли (чтобы не висело)
-                        for fy in range(ground_y + 1, max_ground_y + 1):
-                            set_block(x, fy, z, Block(namespace="minecraft", base_name="bricks"))
-                        # Если тут дорога-сквозняк — делаем арку!
-                        if (x, z) in all_skvoznie_road_cells:
-                            # На высоте 1,2,3 блока оставляем воздух (арку)
-                            for dy in range(1, 4):
-                                set_block(x, max_ground_y + dy, z, Block(namespace="minecraft", base_name="air"))
-                            # Дальше строим стены и крышу как обычно
-                            for dy in range(4, 1 + height):
-                                set_block(x, max_ground_y + dy, z, Block(namespace="minecraft", base_name="bricks"))
-                            set_block(x, max_ground_y + 1 + height, z, Block(namespace="minecraft", base_name="stone_slab"))
+                        if (x, z) in all_skvoznie_road_cells or (x, ground_y, z) in short_tunnel_cells:
+                            for dy in range(1, 1 + tunnel_cut_height):
+                                set_block(x, ground_y + dy, z, Block(namespace="minecraft", base_name="air"))
+                            for dy in range(1 + tunnel_cut_height, 1 + height):
+                                set_block(x, ground_y + dy, z, Block(namespace="minecraft", base_name="bricks"))
+                            set_block(x, ground_y + 1 + height, z, Block(namespace="minecraft", base_name="stone_slab"))
                         else:
-                            # Обычная часть здания
                             for dy in range(1, 1 + height):
-                                set_block(x, max_ground_y + dy, z, Block(namespace="minecraft", base_name="bricks"))
-                            set_block(x, max_ground_y + 1 + height, z, Block(namespace="minecraft", base_name="stone_slab"))
+                                set_block(x, ground_y + dy, z, Block(namespace="minecraft", base_name="bricks"))
+                            set_block(x, ground_y + 1 + height, z, Block(namespace="minecraft", base_name="stone_slab"))
             entrances = []
             for node_id in feature.get("nodes", []):
                 node = next((n for n in features if n.get("id") == node_id and n["type"] == "node"), None)
@@ -1442,35 +1694,7 @@ for feature in features:
             if error_count < 5:
                 print(f"⚠️ Ошибка при генерации здания: {e}")
 
-
-# --- 6. Ограждение зон по периметру (Y_BASE+1)
-def is_fenced_zone(key):
-    return any(key.startswith(prefix) for prefix in FENCED_ZONE_PREFIXES)
-
-print("🚧 Генерация заборов...")
-
-# 1. Собираем все fence-точки:
-fence_points = set()
-for polygon, key in zone_polygons:
-    if not is_fenced_zone(key):
-        continue
-    coords = [(int(round(x)), int(round(z))) for (x, z) in polygon.exterior.coords]
-    for i in range(len(coords)-1):
-        x0, z0 = coords[i]
-        x1, z1 = coords[i+1]
-        for x, z in bresenham_line(x0, z0, x1, z1):
-            if (x, z) not in road_blocks and (x, z) not in rail_blocks:
-                fence_points.add((x, z))
-
-# 2. Ставим fence
-for x, z in fence_points:
-    y = terrain_y.get((x, z), Y_BASE)
-    set_block(
-        x, y+1, z,
-        Block(namespace="minecraft", base_name="oak_fence")
-    )
-
-# --- 7. Мультиполигоны (relation building)
+# --- Мультиполигоны (relation building)
 for rel in relations:
     tags = rel.get("tags", {})
     if "building" not in tags:
@@ -1522,27 +1746,34 @@ for rel in relations:
 
             max_ground_y = max(building_ground_heights)
 
+            height = get_building_height(tags)
+            num_floors = tags.get('building:levels')
+            if num_floors is not None:
+                try:
+                    num_floors = int(num_floors)
+                except Exception:
+                    num_floors = height // 4
+            else:
+                num_floors = height // 4
+            if height > 10 or num_floors > 3:
+                tunnel_cut_height = 8
+            else:
+                tunnel_cut_height = 3
+
             for x in range(min_x, max_x + 1):
                 for z in range(min_z, max_z + 1):
                     if polygon.contains(Point(x, z)):
                         ground_y = terrain_y.get((x, z), Y_BASE)
-                        # Достраиваем "фундамент" до земли (чтобы не висело)
-                        for fy in range(ground_y + 1, max_ground_y + 1):
-                            set_block(x, fy, z, Block(namespace="minecraft", base_name="bricks"))
-                        # Если тут дорога-сквозняк — делаем арку!
-                        if (x, z) in all_skvoznie_road_cells:
-                            # На высоте 1,2,3 блока оставляем воздух (арку)
-                            for dy in range(1, 4):
-                                set_block(x, max_ground_y + dy, z, Block(namespace="minecraft", base_name="air"))
-                            # Дальше строим стены и крышу как обычно
-                            for dy in range(4, 1 + height):
-                                set_block(x, max_ground_y + dy, z, Block(namespace="minecraft", base_name="bricks"))
-                            set_block(x, max_ground_y + 1 + height, z, Block(namespace="minecraft", base_name="stone_slab"))
+                        if (x, z) in all_skvoznie_road_cells or (x, ground_y, z) in short_tunnel_cells:
+                            for dy in range(1, 1 + tunnel_cut_height):
+                                set_block(x, ground_y + dy, z, Block(namespace="minecraft", base_name="air"))
+                            for dy in range(1 + tunnel_cut_height, 1 + height):
+                                set_block(x, ground_y + dy, z, Block(namespace="minecraft", base_name="bricks"))
+                            set_block(x, ground_y + 1 + height, z, Block(namespace="minecraft", base_name="stone_slab"))
                         else:
-                            # Обычная часть здания
                             for dy in range(1, 1 + height):
-                                set_block(x, max_ground_y + dy, z, Block(namespace="minecraft", base_name="bricks"))
-                            set_block(x, max_ground_y + 1 + height, z, Block(namespace="minecraft", base_name="stone_slab"))
+                                set_block(x, ground_y + dy, z, Block(namespace="minecraft", base_name="bricks"))
+                            set_block(x, ground_y + 1 + height, z, Block(namespace="minecraft", base_name="stone_slab"))
         except Exception as e:
             error_count += 1
             if error_count < 5:
@@ -1593,6 +1824,71 @@ for x in range(global_min_x, global_max_x+1):
     for z in range(global_min_z, global_max_z+1):
         if (x, z) not in park_forest_blocks and (x, z) not in residential_blocks:
             empty_blocks.add((x, z))
+
+# --- Ограждение зон по периметру (Y_BASE+1)
+def is_fenced_zone(key):
+    return any(key.startswith(prefix) for prefix in FENCED_ZONE_PREFIXES)
+
+print("🚧 Генерация заборов...")
+
+# 1. Собираем все fence-точки:
+fence_points = set()
+for polygon, key in zone_polygons:
+    if not is_fenced_zone(key):
+        continue
+    coords = [(int(round(x)), int(round(z))) for (x, z) in polygon.exterior.coords]
+    for i in range(len(coords)-1):
+        x0, z0 = coords[i]
+        x1, z1 = coords[i+1]
+        for x, z in bresenham_line(x0, z0, x1, z1):
+            if (x, z) not in road_blocks and (x, z) not in rail_blocks:
+                fence_points.add((x, z))
+
+# 2. Ставим fence
+for x, z in fence_points:
+    y = terrain_y.get((x, z), Y_BASE)
+    set_block(
+        x, y+1, z,
+        Block(namespace="minecraft", base_name="oak_fence")
+    )
+
+# --- 4. Растения и деревья (Y_BASE+1)
+print("🌳 Генерация растительности и декора...")
+for polygon, key in zone_polygons:
+    block_name = ZONE_MATERIALS[key]
+    min_x, min_z, max_x, max_z = map(int, map(round, polygon.bounds))
+    for x in range(min_x, max_x+1):
+        for z in range(min_z, max_z+1):
+            if polygon.contains(Point(x, z)):
+                if key in ["leisure=park", "landuse=meadow", "natural=grassland"]:
+                    if random.random() < 0.13:
+                        y = terrain_y.get((x, z), Y_BASE)
+                        set_plant(x, y+1, z, random.choice(GRASS_PLANTS + FLOWERS))
+                if key in ["leisure=park", "landuse=meadow", "natural=wood", "natural=jungle"]:
+                    if random.random() < 0.03:
+                        set_plant(x, y+1, z, "sweet_berry_bush")
+                if key == "natural=jungle" and random.random() < 0.08:
+                    set_plant(x, y+1, z, "bamboo")
+                if block_name == "water":
+                    for dx, dz in [(-1,0),(1,0),(0,-1),(0,1)]:
+                        nx, nz = x+dx, z+dz
+                        if random.random() < 0.005:
+                            y = terrain_y.get((x, z), Y_BASE)
+                            set_plant(nx, y+1, nz, "sugar_cane")
+    tree_types = ZONE_TREES.get(key)
+    if tree_types:
+        for tx in range(min_x, max_x+1, 3):  # плотнее сетка
+            for tz in range(min_z, max_z+1, 3):
+                if polygon.contains(Point(tx, tz)):
+                    ttype = random.choice(tree_types)
+                    y = get_y_for_block(tx, tz)
+                    # вишня — крайне редкая
+                    if ttype == "cherry":
+                        if random.random() < 0.07:
+                            set_tree(tx, y+1, tz, ttype)
+                    else:
+                        if random.random() < 0.45:
+                            set_tree(tx, y+1, tz, ttype)
 
 print("🌱 Сажаем траву, папоротники, цветы в лесах и парках...")
 for (x, z) in park_forest_blocks:
@@ -1678,15 +1974,17 @@ for (x, z) in empty_blocks:
 
 if error_count:
     print(f"⚠️ Всего ошибок: {error_count}")
-
 print("💾 Сохраняем...")
+
 level.save()
 level.close()
 
 end_time = time.time()
 duration = end_time - start_time
 
-minutes = int(duration // 60)
+# Время в формате часы, минуты, секунды
+hours = int(duration // 3600)
+minutes = int((duration % 3600) // 60)
 seconds = int(duration % 60)
 
 # Размер участка в метрах (бралось с фронта)
@@ -1713,6 +2011,6 @@ print()
 print("=== Генерация завершена ===")
 print(f"🗺️ Заданный участок:         {planned_size_m:.0f} × {planned_size_m:.0f} м  =  {planned_area_km2:.3f} км²")
 print(f"🟩 Всего поставлено блоков:  {placed_blocks_count:,}")
-print(f"⏱️ Время генерации:         {minutes} мин {seconds} сек  ({duration:.1f} сек)")
+print(f"⏱️ Время генерации:         {hours} ч {minutes} мин {seconds} сек  ({duration:.1f} сек)")
 print("============================")
 print("🎉 Генерация завершена.")
