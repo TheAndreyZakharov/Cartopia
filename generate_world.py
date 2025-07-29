@@ -1852,6 +1852,89 @@ for x, z in fence_points:
         Block(namespace="minecraft", base_name="oak_fence")
     )
 
+# --- Инфраструктура ---
+
+
+print("🚸 Генерация наземных пешеходных переходов (зебр)...")
+
+HIGHWAY_PRIORITY = {
+    "motorway": 10, "trunk": 9, "primary": 8, "secondary": 7, "tertiary": 6,
+    "unclassified": 5, "residential": 4, "service": 3, "living_street": 2, "road": 2,
+    "track": 1, "footway": 0, "path": 0, "cycleway": 0, "bridleway": 0
+}
+
+for feature in features:
+    tags = feature.get("tags", {})
+    if feature["type"] == "node" and tags.get("highway") == "crossing":
+        crossing_id = feature["id"]
+        if crossing_id not in node_coords:
+            continue
+        x0, z0 = node_coords[crossing_id]
+        y0 = terrain_y.get((x0, z0), Y_BASE)
+
+        # Найдём все дороги, к которым этот crossing привязан
+        candidate_ways = []
+        for way in features:
+            if way.get("type") == "way" and crossing_id in way.get("nodes", []):
+                road_tags = way.get("tags", {})
+                hwy = road_tags.get("highway", "road")
+                width = ROAD_MATERIALS.get(hwy, ("stone", 3))[1]
+                priority = HIGHWAY_PRIORITY.get(hwy, 0)
+                candidate_ways.append((priority, width, way))
+
+        if not candidate_ways:
+            continue
+
+        # Выбираем самую приоритетную (priority > width)
+        candidate_ways.sort(key=lambda t: (t[0], t[1]), reverse=True)
+        _, width, main_way = candidate_ways[0]
+
+        way_nodes = main_way["nodes"]
+        idx = way_nodes.index(crossing_id)
+        nodes = [node_coords[nid] for nid in way_nodes if nid in node_coords]
+        if not nodes or len(nodes) < 2:
+            continue
+
+        # Если ширина меньше 3 — пропускаем
+        if width < 3:
+            continue
+
+        # Направление вдоль дороги
+        if 0 < idx < len(nodes) - 1:
+            prev_node = nodes[idx - 1]
+            next_node = nodes[idx + 1]
+        elif idx == 0 and len(nodes) > 1:
+            prev_node = nodes[1]
+            next_node = nodes[0]
+        elif idx == len(nodes) - 1 and len(nodes) > 1:
+            prev_node = nodes[-2]
+            next_node = nodes[-1]
+        else:
+            continue
+
+        # Вектор вдоль дороги (будет "длина" линии зебры)
+        dx = next_node[0] - prev_node[0]
+        dz = next_node[1] - prev_node[1]
+        norm = math.hypot(dx, dz)
+        if norm == 0:
+            continue
+        dir_x = dx / norm
+        dir_z = dz / norm
+        # Ортогональный вектор (для размещения "полос" поперек, вдоль всей ширины)
+        ortho_x = -dir_z
+        ortho_z = dir_x
+
+        zebra_length = 7  # Длина каждой белой линии
+
+        # Проходим по всей ширине, через одну полосу (зебра полосками)
+        for w in range(-width // 2, width // 2 + 1):
+            if abs(w) % 2 == 0:
+                for step in range(-zebra_length // 2, zebra_length // 2 + 1):
+                    zx = int(round(x0 + ortho_x * w + dir_x * step))
+                    zz = int(round(z0 + ortho_z * w + dir_z * step))
+                    y = terrain_y.get((zx, zz), Y_BASE)
+                    set_block(zx, y, zz, Block(namespace="minecraft", base_name="white_concrete"))
+
 # --- 4. Растения и деревья (Y_BASE+1)
 print("🌳 Генерация растительности и декора...")
 for polygon, key in zone_polygons:
