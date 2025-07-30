@@ -1852,6 +1852,7 @@ for x, z in fence_points:
         Block(namespace="minecraft", base_name="oak_fence")
     )
 
+
 # --- Инфраструктура ---
 
 
@@ -1934,6 +1935,120 @@ for feature in features:
                     zz = int(round(z0 + ortho_z * w + dir_z * step))
                     y = terrain_y.get((zx, zz), Y_BASE)
                     set_block(zx, y, zz, Block(namespace="minecraft", base_name="white_concrete"))
+
+
+print("🚌 Генерация остановок...")
+
+STOP_TAGS = [
+    ("highway", "bus_stop"),
+    ("highway", "tram_stop"),
+    ("highway", "platform"),
+    ("public_transport", "platform"),
+    ("public_transport", "stop_position"),
+]
+
+for feature in features:
+    tags = feature.get("tags", {})
+    if feature["type"] == "node" and any(tags.get(k) == v for k, v in STOP_TAGS):
+        stop_id = feature["id"]
+        if stop_id not in node_coords:
+            continue
+        x0, z0 = node_coords[stop_id]
+
+        # Находим дорогу возле остановки (приоритет)
+        candidate_ways = []
+        for way in features:
+            if way.get("type") == "way" and stop_id in way.get("nodes", []):
+                road_tags = way.get("tags", {})
+                hwy = road_tags.get("highway", "road")
+                width = ROAD_MATERIALS.get(hwy, ("stone", 3))[1]
+                priority = HIGHWAY_PRIORITY.get(hwy, 0)
+                candidate_ways.append((priority, width, way))
+        if not candidate_ways:
+            continue
+
+        candidate_ways.sort(key=lambda t: (t[0], t[1]), reverse=True)
+        _, road_width, main_way = candidate_ways[0]
+
+        way_nodes = main_way["nodes"]
+        idx = way_nodes.index(stop_id)
+        nodes = [node_coords[nid] for nid in way_nodes if nid in node_coords]
+        if not nodes or len(nodes) < 2:
+            continue
+
+        # Вектор вдоль дороги (direction), и вбок (ortho)
+        if 0 < idx < len(nodes) - 1:
+            prev_node = nodes[idx - 1]
+            next_node = nodes[idx + 1]
+        elif idx == 0 and len(nodes) > 1:
+            prev_node = nodes[1]
+            next_node = nodes[0]
+        elif idx == len(nodes) - 1 and len(nodes) > 1:
+            prev_node = nodes[-2]
+            next_node = nodes[-1]
+        else:
+            continue
+
+        dx = next_node[0] - prev_node[0]
+        dz = next_node[1] - prev_node[1]
+        norm = math.hypot(dx, dz)
+        if norm == 0:
+            continue
+        dir_x = dx / norm
+        dir_z = dz / norm
+        ortho_x = -dir_z
+        ortho_z = dir_x
+
+        # ПЕРЕД остановкой на 1 блок вбок от центра (для ёлочки)
+        marking_offset = road_width // 2 + 1
+        x_mark = x0 + ortho_x * marking_offset
+        z_mark = z0 + ortho_z * marking_offset
+
+        # Рисуем "ёлочку" вдоль дороги
+        marking_length = 15
+        marking_start = -((marking_length - 1) // 2)
+        for i in range(marking_start, marking_start + marking_length):
+            for w in range(2):
+                # Первый ряд (w=0): 1 . 1 . 1 ... (чётные i)
+                # Второй ряд (w=1): 1 1 . 1 . ... (чётные i и по краям)
+                if (w == 0 and i % 2 == 0) or (w == 1 and (i % 2 == 0 or abs(i) == (marking_length // 2))):
+                    mx = int(round(x_mark - ortho_x * w + dir_x * i))
+                    mz = int(round(z_mark - ortho_z * w + dir_z * i))
+                    my = terrain_y.get((mx, mz), Y_BASE)
+                    set_block(mx, my, mz, Block(namespace="minecraft", base_name="yellow_concrete"))
+
+        # --- Павильон ---
+        offset_from_road = marking_offset + 2  # на 2 блока дальше от разметки
+        stop_cx = int(round(x0 + ortho_x * offset_from_road))
+        stop_cz = int(round(z0 + ortho_z * offset_from_road))
+
+        shelter_length = 6  # длина павильона вдоль дороги
+        shelter_height = 2  # ширина
+
+        # --- Задняя стеклянная стена ---
+        for l in range(-shelter_length // 2, shelter_length // 2 + 1):
+            x = int(round(stop_cx + dir_x * l + ortho_x * 1))
+            z = int(round(stop_cz + dir_z * l + ortho_z * 1))
+            for h in range(shelter_height):
+                gy = terrain_y.get((x, z), Y_BASE) + 1 + h
+                set_block(x, gy, z, Block(namespace="minecraft", base_name="glass"))
+
+        # --- Скамейка (2 блока по центру) ---
+        for l in range(-1, 1):
+            x = int(round(stop_cx + dir_x * l))
+            z = int(round(stop_cz + dir_z * l))
+            y = terrain_y.get((x, z), Y_BASE) + 1
+            set_block(x, y, z, Block(namespace="minecraft", base_name="oak_stairs"))
+
+        # --- Крыша над лавкой и стеклом ---
+        for l in range(-shelter_length // 2, shelter_length // 2 + 1):
+            for w in range(0, 2):
+                x = int(round(stop_cx + dir_x * l + ortho_x * (1 - w)))
+                z = int(round(stop_cz + dir_z * l + ortho_z * (1 - w)))
+                y = terrain_y.get((x, z), Y_BASE) + 1 + shelter_height
+                set_block(x, y, z, Block(namespace="minecraft", base_name="smooth_stone_slab"))
+
+
 
 # --- 4. Растения и деревья (Y_BASE+1)
 print("🌳 Генерация растительности и декора...")
