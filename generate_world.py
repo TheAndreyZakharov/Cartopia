@@ -5,7 +5,10 @@ import random
 from shapely.geometry import Polygon, Point, LineString
 from shapely.ops import polygonize
 from amulet import load_level
+from amulet.api.level import World
 from amulet.api.block import Block
+from amulet.api.block_entity import BlockEntity
+from amulet_nbt import CompoundTag, ListTag, IntTag, StringTag, NamedTag
 import requests
 import rasterio
 from rasterio.windows import from_bounds
@@ -2047,6 +2050,181 @@ for feature in features:
                 z = int(round(stop_cz + dir_z * l + ortho_z * (1 - w)))
                 y = terrain_y.get((x, z), Y_BASE) + 1 + shelter_height
                 set_block(x, y, z, Block(namespace="minecraft", base_name="smooth_stone_slab"))
+
+
+print("🚦 Генерация светофоров")
+
+ALLOWED_FOUNDATION = {"grass_block", "dirt", "sandstone", "snow_block"}
+ROAD_SURFACES = set([m for (m, _w) in ROAD_MATERIALS.values()]) | {"rail"}
+MAX_SEARCH_RADIUS = 24
+PLACED_LIGHTS = set()
+
+# Приоритет дорог (можешь использовать уже объявленный HIGHWAY_PRIORITY; на всякий случай дублирую)
+HIGHWAY_PRIORITY = {
+    "motorway": 10, "trunk": 9, "primary": 8, "secondary": 7, "tertiary": 6,
+    "unclassified": 5, "residential": 4, "service": 3, "living_street": 2, "road": 2,
+    "track": 1, "footway": 0, "path": 0, "cycleway": 0, "bridleway": 0
+}
+
+TRAFFIC_LIGHT_TAGS = [
+    ("highway", "traffic_signals"),
+    ("railway", "traffic_light"),
+    ("highway", "crossing_traffic_signals"),
+]
+
+def ring_perimeter(cx: int, cz: int, r: int):
+    if r == 0:
+        yield (cx, cz)
+        return
+    for dx in range(-r, r + 1):
+        yield (cx + dx, cz - r)
+        yield (cx + dx, cz + r)
+    for dz in range(-r + 1, r):
+        yield (cx - r, cz + dz)
+        yield (cx + r, cz + dz)
+
+def can_place_light_here(x: int, z: int) -> tuple[bool, int]:
+    if (x, z) in PLACED_LIGHTS:
+        return (False, 0)
+    y = terrain_y.get((x, z))
+    if y is None:
+        return (False, 0)
+    ensure_chunk(level, x, z, DIMENSION)
+    try:
+        foundation = level.get_block(x, y, z, DIMENSION).base_name
+        above = level.get_block(x, y + 1, z, DIMENSION).base_name
+    except Exception:
+        return (False, 0)
+    if foundation not in ALLOWED_FOUNDATION: return (False, 0)
+    if above != "air": return (False, 0)
+    if surface_material_map.get((x, z)) == "water": return (False, 0)
+    if actual_surface_material_map.get((x, z)) in ROAD_SURFACES: return (False, 0)
+    return (True, y)
+
+def place_traffic_light(bx: int, by: int, bz: int):
+    PLACED_LIGHTS.add((bx, bz))
+    ensure_chunk(level, bx, bz, DIMENSION)
+    for dy in range(1, 8):
+        set_block(bx, by + dy, bz, Block("minecraft", "air"))
+    base_y = by + 1
+    for dy in range(3):
+        set_block(bx, base_y + dy, bz, Block("minecraft", "andesite_wall"))
+    set_block(bx, base_y + 3, bz, Block("minecraft", "emerald_block"))
+    set_block(bx, base_y + 4, bz, Block("minecraft", "gold_block"))
+    set_block(bx, base_y + 5, bz, Block("minecraft", "redstone_block"))
+    set_block(bx, base_y + 6, bz, Block("minecraft", "andesite_slab"))
+
+def pick_main_way_for_node(node_id: int):
+    """Берём самый приоритетный way, содержащий узел (дорога/рельсы)."""
+    candidates = []
+    for way in features:
+        if way.get("type") != "way": 
+            continue
+        if node_id not in way.get("nodes", []):
+            continue
+        tags = way.get("tags", {})
+        hwy = tags.get("highway")
+        rail = tags.get("railway")
+        if not hwy and not rail:
+            continue
+        priority = HIGHWAY_PRIORITY.get(hwy, 4 if rail else 0)  # рельсы ставим средним приоритетом
+        width = ROAD_MATERIALS.get(hwy or rail, ("stone", 3))[1]
+        candidates.append((priority, width, way))
+    if not candidates:
+        return None
+    candidates.sort(key=lambda t: (t[0], t[1]), reverse=True)
+    return candidates[0][2]
+
+def direction_at_node(way, node_id: int):
+    """Вектор направления дороги в узле (dx, dz). Если не удаётся — None."""
+    nodes = [node_coords.get(nid) for nid in way.get("nodes", []) if nid in node_coords]
+    if not nodes or len(nodes) < 2: 
+        return None
+    try:
+        idx = way["nodes"].index(node_id)
+    except ValueError:
+        return None
+
+    if 0 < idx < len(nodes) - 1:
+        (x1, z1) = nodes[idx - 1]
+        (x2, z2) = nodes[idx + 1]
+    elif idx == 0 and len(nodes) > 1:
+        (x1, z1) = nodes[0]
+        (x2, z2) = nodes[1]
+    elif idx == len(nodes) - 1 and len(nodes) > 1:
+        (x1, z1) = nodes[-2]
+        (x2, z2) = nodes[-1]
+    else:
+        return None
+
+    dx, dz = x2 - x1, z2 - z1
+    norm = math.hypot(dx, dz)
+    if norm == 0:
+        return None
+    return (dx / norm, dz / norm)
+
+for feature in features:
+    if feature["type"] != "node":
+        continue
+    tags = feature.get("tags", {})
+    if not any(tags.get(k) == v for k, v in TRAFFIC_LIGHT_TAGS):
+        continue
+
+    nid = feature["id"]
+    if nid not in node_coords:
+        continue
+    x0, z0 = node_coords[nid]
+
+    # 1) выбираем главный way и считаем направление в узле
+    main_way = pick_main_way_for_node(nid)
+    if not main_way:
+        print(f"⚠️ Нет подходящего way для светофора в узле {nid}")
+        continue
+    dir_vec = direction_at_node(main_way, nid)
+    if not dir_vec:
+        print(f"⚠️ Не удалось вычислить направление для узла {nid}")
+        continue
+
+    dx, dz = dir_vec
+    # правый орт-вектор
+    rx, rz = -dz, dx
+
+    best_xyz = None
+    best_d2 = None
+
+    # 2) поиск только в полуплоскости справа от направления: dot((p - p0), right_vec) > 0
+    for r in range(0, MAX_SEARCH_RADIUS + 1):
+        found_on_ring = False
+        for (cx, cz) in ring_perimeter(x0, z0, r):
+            vx, vz = (cx - x0), (cz - z0)
+            # фильтр "только справа"
+            if vx * rx + vz * rz <= 0:
+                continue
+            ok, y = can_place_light_here(cx, cz)
+            if not ok:
+                continue
+            d2 = vx * vx + vz * vz
+            if best_d2 is None or d2 < best_d2:
+                best_d2 = d2
+                best_xyz = (cx, y, cz)
+                found_on_ring = True
+        if found_on_ring:
+            break
+
+    if best_xyz is None:
+        print(f"⚠️ Правый борт: не найдено места для светофора около ({x0},{z0})")
+        continue
+
+    bx, by, bz = best_xyz
+    place_traffic_light(bx, by, bz)
+
+
+
+
+
+
+
+
 
 
 
