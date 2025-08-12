@@ -36,11 +36,11 @@ ROAD_MATERIALS = {
     "residential": ("gray_concrete", 15),
     "unclassified": ("stone", 6),
     "service": ("stone", 5),
-    "footway": ("cobblestone", 4),
-    "path": ("cobblestone", 4),
-    "cycleway": ("cobblestone", 4),
-    "pedestrian": ("cobblestone", 4),
-    "track": ("dirt", 2),
+    "footway": ("stone", 4),
+    "path": ("stone", 4),
+    "cycleway": ("stone", 4),
+    "pedestrian": ("stone", 4),
+    "track": ("cobblestone", 4),
     "rail": ("rail", 1),
 }
 
@@ -2262,10 +2262,12 @@ def place_sapling(x, y, z, tree_type):
         above   = level.get_block(x, y+1, z, DIMENSION).base_name
     except Exception:
         return
-    # запреты: вода/занято/инфра
+    # запреты: вода/занято/инфра/запретные зоны
     if surface == "water" or above != "air":
         return
     if (x, z) in building_blocks or (x, z) in road_blocks or (x, z) in rail_blocks or (x, z) in beach_blocks:
+        return
+    if (x, z) in restricted_flora_blocks:
         return
 
     if tree_type == "dark_oak":
@@ -2289,8 +2291,19 @@ forest_zone_keys = {
 }
 park_zone_keys = {"leisure=park"}
 
+# НОВОЕ: «запретные» зоны для любой растительности
+sports_zone_keys = {
+    "leisure=pitch", "leisure=sports_centre", "leisure=stadium",
+    "leisure=golf_course", "leisure=track", "leisure=playground"
+}
+agri_zone_keys = {
+    "landuse=farmland", "landuse=orchard", "landuse=vineyard",
+    "landuse=plant_nursery", "landuse=greenhouse_horticulture"
+}
+
 park_blocks = set()
 forest_blocks = set()
+restricted_flora_blocks = set()
 
 for polygon, key in zone_polygons:
     min_xx, min_zz, max_xx, max_zz = map(int, map(round, polygon.bounds))
@@ -2304,6 +2317,12 @@ for polygon, key in zone_polygons:
             for z in range(min_zz, max_zz+1):
                 if polygon.contains(Point(x, z)):
                     forest_blocks.add((x, z))
+    # НОВОЕ: копим все клетки спорт/игровых/сельхоз зон
+    if key in sports_zone_keys or key in agri_zone_keys:
+        for x in range(min_xx, max_xx+1):
+            for z in range(min_zz, max_zz+1):
+                if polygon.contains(Point(x, z)):
+                    restricted_flora_blocks.add((x, z))
 
 
 print("🌳 Генерация растительности и декора...")
@@ -2316,6 +2335,10 @@ for polygon, key in zone_polygons:
         for z in range(min_z, max_z+1):
             if not polygon.contains(Point(x, z)):
                 continue
+            # НОВОЕ: в запретных зонах ничего не ставим
+            if (x, z) in restricted_flora_blocks:
+                continue
+
             if key in ["leisure=park", "landuse=meadow", "natural=grassland"]:
                 if random.random() < 0.13:
                     y = terrain_y.get((x, z), Y_BASE)
@@ -2330,6 +2353,8 @@ for polygon, key in zone_polygons:
             if block_name == "water":
                 for dx, dz in [(-1,0),(1,0),(0,-1),(0,1)]:
                     nx, nz = x+dx, z+dz
+                    if (nx, nz) in restricted_flora_blocks:
+                        continue
                     if random.random() < 0.005:
                         y = terrain_y.get((x, z), Y_BASE)
                         set_plant(nx, y+1, nz, "sugar_cane")
@@ -2340,6 +2365,8 @@ for polygon, key in zone_polygons:
         for tx in range(min_x, max_x+1, 3):   # плотная сетка
             for tz in range(min_z, max_z+1, 3):
                 if not polygon.contains(Point(tx, tz)):
+                    continue
+                if (tx, tz) in restricted_flora_blocks:
                     continue
                 ttype = random.choice(tree_types)
                 if ttype == "cherry":
@@ -2353,6 +2380,9 @@ for polygon, key in zone_polygons:
 
 print("🌱 Сажаем низкую/высокую траву и цветы...")
 for (x, z) in park_forest_blocks:
+    # НОВОЕ: не сажаем, если точка в запретной зоне
+    if (x, z) in restricted_flora_blocks:
+        continue
     y = terrain_y.get((x, z), Y_BASE)
     ensure_chunk(level, x, z, DIMENSION)
     block_below = level.get_block(x, y, z, DIMENSION)
@@ -2382,6 +2412,8 @@ for (x, z) in park_forest_blocks:
 
 print("🌳 Сажаем саженцы в парках и лесах")
 for (x, z) in park_forest_blocks:
+    if (x, z) in restricted_flora_blocks:
+        continue
     y = terrain_y.get((x, z), Y_BASE)
     ensure_chunk(level, x, z, DIMENSION)
     block_below = level.get_block(x, y, z, DIMENSION)
@@ -2397,6 +2429,8 @@ print("🌲 Сажаем саженцы в жилых районах")
 for (x, z) in residential_blocks:
     if (x, z) in park_forest_blocks:
         continue
+    if (x, z) in restricted_flora_blocks:
+        continue
     y = terrain_y.get((x, z), Y_BASE)
     ensure_chunk(level, x, z, DIMENSION)
     block_below = level.get_block(x, y, z, DIMENSION)
@@ -2410,6 +2444,8 @@ for (x, z) in residential_blocks:
 
 print("🌿 Сажаем саженцы вне всех зон")
 for (x, z) in empty_blocks:
+    if (x, z) in restricted_flora_blocks:
+        continue
     y = terrain_y.get((x, z), Y_BASE)
     ensure_chunk(level, x, z, DIMENSION)
     block_below = level.get_block(x, y, z, DIMENSION)
@@ -2424,6 +2460,8 @@ for (x, z) in empty_blocks:
 
 def can_place_flora_here(x: int, z: int) -> tuple[bool, int]:
     """Единая проверка места посадки для травы/кустов/цветов."""
+    if (x, z) in restricted_flora_blocks:
+        return (False, terrain_y.get((x, z), Y_BASE))
     y = terrain_y.get((x, z), Y_BASE)
     ensure_chunk(level, x, z, DIMENSION)
     try:
@@ -2442,6 +2480,8 @@ def can_place_flora_here(x: int, z: int) -> tuple[bool, int]:
 # 1) ЛЕСА: с частотой 0.02 — КУСТЫ/ВЫСОКАЯ ТРАВА (без цветов)
 print("🌲 Доп. декор в лесах (0.02: кусты/высокая трава)")
 for (x, z) in forest_blocks:
+    if (x, z) in restricted_flora_blocks:
+        continue
     ok, y = can_place_flora_here(x, z)
     if not ok:
         continue
@@ -2449,11 +2489,11 @@ for (x, z) in forest_blocks:
         plant = random.choice(["sweet_berry_bush", "tall_grass", "large_fern"])
         set_plant(x, y+1, z, plant)
 
-# 2) ВЕЗДЕ, КРОМЕ ПАРКОВ: 0.20 — КУСТЫ/ВЫСОКАЯ ТРАВА (без цветов)
-print("🌾 Вне парков (0.20): высокая трава и кустики")
+# 2) ВЕЗДЕ, КРОМЕ ПАРКОВ и ЗАПРЕТНЫХ ЗОН: 0.20 — КУСТЫ/ВЫСОКАЯ ТРАВА (без цветов)
+print("🌾 Вне парков и запретных зон (0.20): высокая трава и кустики")
 for x in range(global_min_x, global_max_x+1):
     for z in range(global_min_z, global_max_z+1):
-        if (x, z) in park_blocks:  # парки оставляем как есть
+        if (x, z) in park_blocks or (x, z) in restricted_flora_blocks:
             continue
         ok, y = can_place_flora_here(x, z)
         if not ok:
@@ -2462,11 +2502,11 @@ for x in range(global_min_x, global_max_x+1):
             plant = random.choice(["tall_grass", "large_fern", "sweet_berry_bush"])
             set_plant(x, y+1, z, plant)
 
-# 3) ВЕЗДЕ, КРОМЕ ПАРКОВ: 0.008 — ЦВЕТЫ (отдельным проходом)
-print("🌼 Вне парков (0.008): цветочки")
+# 3) ВЕЗДЕ, КРОМЕ ПАРКОВ и ЗАПРЕТНЫХ ЗОН: 0.008 — ЦВЕТЫ (отдельным проходом)
+print("🌼 Вне парков и запретных зон (0.008): цветочки")
 for x in range(global_min_x, global_max_x+1):
     for z in range(global_min_z, global_max_z+1):
-        if (x, z) in park_blocks:  # парки оставляем как есть
+        if (x, z) in park_blocks or (x, z) in restricted_flora_blocks:
             continue
         ok, y = can_place_flora_here(x, z)
         if not ok:
