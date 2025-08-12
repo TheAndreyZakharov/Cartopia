@@ -28,7 +28,7 @@ start_time = time.time()
 placed_blocks_count = 0
 
 ROAD_MATERIALS = {
-    "motorway": ("gray_concrete", 15),
+    "motorway": ("gray_concrete", 20),
     "trunk": ("gray_concrete", 15),
     "primary": ("gray_concrete", 15),
     "secondary": ("gray_concrete", 15),
@@ -2217,6 +2217,35 @@ for feature in features:
 
     bx, by, bz = best_xyz
     place_traffic_light(bx, by, bz)
+
+
+# Засеять пшеницей
+def seed_farmland_exact_surface(random_age=True):
+    planted = 0
+
+    for (x, z), y_surface in terrain_y.items():
+        ensure_chunk(level, x, z, DIMENSION)
+        try:
+            below = level.get_block(x, y_surface,   z, DIMENSION).base_name
+            above = level.get_block(x, y_surface+1, z, DIMENSION).base_name
+        except Exception:
+            continue
+
+        if below != "farmland" or above != "air":
+            continue
+
+        if random_age:
+            age = random.randint(0, 7)
+            try:
+                set_block(x, y_surface+1, z, Block("minecraft", "wheat", properties={"age": age}))
+            except Exception:
+                set_block(x, y_surface+1, z, Block("minecraft", "wheat"))
+        else:
+            set_block(x, y_surface+1, z, Block("minecraft", "wheat"))
+
+        planted += 1
+
+seed_farmland_exact_surface(random_age=True)
 
 
 # 🌳 Растительность

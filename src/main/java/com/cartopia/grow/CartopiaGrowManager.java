@@ -11,14 +11,19 @@ import net.minecraftforge.fml.common.Mod;
 @Mod.EventBusSubscriber(modid = CartopiaMod.MODID, bus = Mod.EventBusSubscriber.Bus.FORGE)
 public class CartopiaGrowManager {
 
-    // радиус — сколько чанков от игрока в каждую сторону
+    // Радиус — сколько чанков от игрока в каждую сторону
     private static final int RADIUS_CHUNKS = 12;
-    private static final int SAPLING_TICKS = 64;          // нормально
-    private static final int MAX_SAPLINGS_PER_TICK_PER_PLAYER = 15000; // общий бюджет на тик/игрока
+
+    // Сколько "псевдо-рандом-тиков" подряд давать каждой целевой растюхе
+    private static final int GROW_TICKS_EACH = 64;
+
+    // Жёсткий потолок на количество обработанных растений за один серверный тик на игрока
+    private static final int MAX_TARGETS_PER_TICK_PER_PLAYER = 15_000;
 
     @SubscribeEvent
     public static void onServerTick(TickEvent.ServerTickEvent e) {
         if (e.phase != TickEvent.Phase.END) return;
+
         MinecraftServer server = e.getServer();
         if (server == null) return;
 
@@ -27,11 +32,10 @@ public class CartopiaGrowManager {
                 SaplingBooster.boostAroundPlayer(
                         level, player,
                         RADIUS_CHUNKS,
-                        SAPLING_TICKS,
-                        MAX_SAPLINGS_PER_TICK_PER_PLAYER
+                        GROW_TICKS_EACH,
+                        MAX_TARGETS_PER_TICK_PER_PLAYER
                 );
             }
         }
     }
 }
-
