@@ -24,7 +24,7 @@
     }
     #controls input, #controls button { margin-bottom: 8px; }
     #searchInput {
-      width: 90%;
+      width: 100%;
       margin-bottom: 8px;
       padding: 6px;
       border-radius: 6px;
@@ -64,7 +64,7 @@
 
 <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
 <script>
-  const map = L.map('map', { attributionControl: false }).setView([60.03655975737041, 30.338916778564457], 15);
+  const map = L.map('map', { attributionControl: false }).setView([35, 0], 2);
   L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19 }).addTo(map);
 
   // Удаляем контролы, если вдруг остались
