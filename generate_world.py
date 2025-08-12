@@ -2219,133 +2219,181 @@ for feature in features:
     place_traffic_light(bx, by, bz)
 
 
+# 🌳 Растительность
+
+# --- хелперы для саженцев ---
+SAPLING_BY_TREE = {
+    "oak":       "oak_sapling",
+    "birch":     "birch_sapling",
+    "spruce":    "spruce_sapling",
+    "jungle":    "jungle_sapling",
+    "acacia":    "acacia_sapling",
+    "cherry":    "cherry_sapling",
+    # "dark_oak" — отдельная логика 2x2 ниже
+}
+GOOD_SOILS = {"grass_block", "dirt", "podzol", "coarse_dirt", "rooted_dirt", "coarse_dirt"}
+
+def ensure_soil(x, y, z):
+    """Гарантируем подходящую почву под саженец."""
+    try:
+        below = level.get_block(x, y, z, DIMENSION).base_name
+    except Exception:
+        below = "air"
+    if below not in GOOD_SOILS:
+        set_block(x, y, z, Block("minecraft", "dirt"))
+
+def place_dark_oak_cluster(x, y, z):
+    """Тёмный дуб требует 2x2 саженцев."""
+    coords = [(x, z), (x+1, z), (x, z+1), (x+1, z+1)]
+    for (xx, zz) in coords:
+        ensure_chunk(level, xx, zz, DIMENSION)
+        ensure_soil(xx, y, zz)
+        set_block(xx, y+1, zz, Block("minecraft", "air"))
+    for (xx, zz) in coords:
+        set_block(xx, y+1, zz, Block("minecraft", "dark_oak_sapling"))
+    return True
+
+def place_sapling(x, y, z, tree_type):
+    """Ставим корректный саженец для типа дерева (или кластер для dark_oak)."""
+    ensure_chunk(level, x, z, DIMENSION)
+    y = terrain_y.get((x, z), Y_BASE)
+    try:
+        surface = level.get_block(x, y, z, DIMENSION).base_name
+        above   = level.get_block(x, y+1, z, DIMENSION).base_name
+    except Exception:
+        return
+    # запреты: вода/занято/инфра
+    if surface == "water" or above != "air":
+        return
+    if (x, z) in building_blocks or (x, z) in road_blocks or (x, z) in rail_blocks or (x, z) in beach_blocks:
+        return
+
+    if tree_type == "dark_oak":
+        place_dark_oak_cluster(x, y, z)
+        return
+    if tree_type == "mangrove":
+        # мангры требуют особых условий — пропускаем
+        return
+
+    sap = SAPLING_BY_TREE.get(tree_type, "oak_sapling")
+    ensure_soil(x, y, z)
+    set_block(x, y+1, z, Block("minecraft", sap))
 
 
-
-
-
-
-
-
-
-# --- 4. Растения и деревья (Y_BASE+1)
 print("🌳 Генерация растительности и декора...")
 for polygon, key in zone_polygons:
     block_name = ZONE_MATERIALS[key]
     min_x, min_z, max_x, max_z = map(int, map(round, polygon.bounds))
+
+    # трава/цветы/кусты/бамбук/тростник внутри полигона
     for x in range(min_x, max_x+1):
         for z in range(min_z, max_z+1):
-            if polygon.contains(Point(x, z)):
-                if key in ["leisure=park", "landuse=meadow", "natural=grassland"]:
-                    if random.random() < 0.13:
+            if not polygon.contains(Point(x, z)):
+                continue
+            if key in ["leisure=park", "landuse=meadow", "natural=grassland"]:
+                if random.random() < 0.13:
+                    y = terrain_y.get((x, z), Y_BASE)
+                    set_plant(x, y+1, z, random.choice(GRASS_PLANTS + FLOWERS))
+            if key in ["leisure=park", "landuse=meadow", "natural=wood", "natural=jungle"]:
+                if random.random() < 0.03:
+                    y = terrain_y.get((x, z), Y_BASE)
+                    set_plant(x, y+1, z, "sweet_berry_bush")
+            if key == "natural=jungle" and random.random() < 0.08:
+                y = terrain_y.get((x, z), Y_BASE)
+                set_plant(x, y+1, z, "bamboo")
+            if block_name == "water":
+                for dx, dz in [(-1,0),(1,0),(0,-1),(0,1)]:
+                    nx, nz = x+dx, z+dz
+                    if random.random() < 0.005:
                         y = terrain_y.get((x, z), Y_BASE)
-                        set_plant(x, y+1, z, random.choice(GRASS_PLANTS + FLOWERS))
-                if key in ["leisure=park", "landuse=meadow", "natural=wood", "natural=jungle"]:
-                    if random.random() < 0.03:
-                        set_plant(x, y+1, z, "sweet_berry_bush")
-                if key == "natural=jungle" and random.random() < 0.08:
-                    set_plant(x, y+1, z, "bamboo")
-                if block_name == "water":
-                    for dx, dz in [(-1,0),(1,0),(0,-1),(0,1)]:
-                        nx, nz = x+dx, z+dz
-                        if random.random() < 0.005:
-                            y = terrain_y.get((x, z), Y_BASE)
-                            set_plant(nx, y+1, nz, "sugar_cane")
+                        set_plant(nx, y+1, nz, "sugar_cane")
+
+    # вместо готовых деревьев — сажаем САЖЕНЦЫ по сетке 3×3 с прежними шансами
     tree_types = ZONE_TREES.get(key)
     if tree_types:
-        for tx in range(min_x, max_x+1, 3):  # плотнее сетка
+        for tx in range(min_x, max_x+1, 3):   # плотная сетка, как у тебя
             for tz in range(min_z, max_z+1, 3):
-                if polygon.contains(Point(tx, tz)):
-                    ttype = random.choice(tree_types)
-                    y = get_y_for_block(tx, tz)
-                    # вишня — крайне редкая
-                    if ttype == "cherry":
-                        if random.random() < 0.07:
-                            set_tree(tx, y+1, tz, ttype)
-                    else:
-                        if random.random() < 0.45:
-                            set_tree(tx, y+1, tz, ttype)
+                if not polygon.contains(Point(tx, tz)):
+                    continue
+                ttype = random.choice(tree_types)
+                if ttype == "cherry":
+                    if random.random() < 0.07:
+                        y = terrain_y.get((tx, tz), Y_BASE)
+                        place_sapling(tx, y, tz, ttype)
+                else:
+                    if random.random() < 0.45:
+                        y = terrain_y.get((tx, tz), Y_BASE)
+                        place_sapling(tx, y, tz, ttype)
 
-print("🌱 Сажаем траву, папоротники, цветы в лесах и парках...")
+print("🌱 Сажаем низкую/высокую траву и цветы...")
 for (x, z) in park_forest_blocks:
     y = terrain_y.get((x, z), Y_BASE)
     ensure_chunk(level, x, z, DIMENSION)
     block_below = level.get_block(x, y, z, DIMENSION)
-    block_here = level.get_block(x, y+1, z, DIMENSION)
+    block_here  = level.get_block(x, y+1, z, DIMENSION)
     if block_below.base_name != "grass_block" or block_here.base_name != "air":
         continue
     if (x, z) in building_blocks or (x, z) in road_blocks or (x, z) in rail_blocks or (x, z) in beach_blocks:
         continue
 
-    # В лесах и лесопарках (все кроме чисто парка)
-    if (x, z) in park_forest_blocks and (x, z) not in residential_blocks:
-        # 50% — низкая трава, 20% — высокая трава/папоротник, 15% — цветы, 5% — куст
+    # вне «чистого парка»
+    if (x, z) not in residential_blocks:
         r = random.random()
         if r < 0.50:
-            y = terrain_y.get((x, z), Y_BASE)
             set_plant(x, y+1, z, random.choice(["grass", "fern"]))
         elif r < 0.70:
-            y = terrain_y.get((x, z), Y_BASE)
             set_plant(x, y+1, z, random.choice(["tall_grass", "large_fern"]))
         elif r < 0.85:
-            y = terrain_y.get((x, z), Y_BASE)
             set_plant(x, y+1, z, random.choice(FLOWERS))
         elif r < 0.90:
-            y = terrain_y.get((x, z), Y_BASE)
             set_plant(x, y+1, z, "sweet_berry_bush")
-    # В парках — только цветы (и редко кустики)
-    elif (x, z) in park_forest_blocks:
+    else:
         r = random.random()
         if r < 0.18:
-            y = terrain_y.get((x, z), Y_BASE)
             set_plant(x, y+1, z, random.choice(FLOWERS))
         elif r < 0.22:
-            y = terrain_y.get((x, z), Y_BASE)
             set_plant(x, y+1, z, "sweet_berry_bush")
 
-print("🌳 Сажаем деревья в парках и лесах")
+print("🌳 Сажаем саженцы в парках и лесах")
 for (x, z) in park_forest_blocks:
     y = terrain_y.get((x, z), Y_BASE)
     ensure_chunk(level, x, z, DIMENSION)
     block_below = level.get_block(x, y, z, DIMENSION)
-    block_here = level.get_block(x, y+1, z, DIMENSION)
+    block_here  = level.get_block(x, y+1, z, DIMENSION)
     if block_below.base_name != "grass_block" or block_here.base_name != "air":
         continue
     if (x, z) in building_blocks or (x, z) in road_blocks or (x, z) in rail_blocks or (x, z) in beach_blocks:
         continue
-    if random.random() < 0.0010: # было 0.10, изменено для разработки 
-        y = terrain_y.get((x, z), Y_BASE)
-        set_tree(x, y+1, z, random.choice(["oak", "birch", "spruce", "acacia"]))
+    if random.random() < 0.05:  # та же плотность
+        place_sapling(x, y, z, random.choice(["oak", "birch", "spruce", "acacia", "dark_oak"]))
 
-print("🌲 Сажаем деревья в жилых районах")
+print("🌲 Сажаем саженцы в жилых районах")
 for (x, z) in residential_blocks:
     if (x, z) in park_forest_blocks:
         continue
     y = terrain_y.get((x, z), Y_BASE)
     ensure_chunk(level, x, z, DIMENSION)
     block_below = level.get_block(x, y, z, DIMENSION)
-    block_here = level.get_block(x, y+1, z, DIMENSION)
+    block_here  = level.get_block(x, y+1, z, DIMENSION)
     if block_below.base_name != "grass_block" or block_here.base_name != "air":
         continue
     if (x, z) in building_blocks or (x, z) in road_blocks or (x, z) in rail_blocks or (x, z) in beach_blocks:
         continue
-    if random.random() < 0.0005: # было 0.05, изменено для разработки
-        y = terrain_y.get((x, z), Y_BASE)
-        set_tree(x, y+1, z, random.choice(["oak", "birch", "acacia"]))
+    if random.random() < 0.02:
+        place_sapling(x, y, z, random.choice(["oak", "birch", "acacia"]))
 
-print("🌿 Сажаем деревья вне всех зон")
+print("🌿 Сажаем саженцы вне всех зон")
 for (x, z) in empty_blocks:
     y = terrain_y.get((x, z), Y_BASE)
     ensure_chunk(level, x, z, DIMENSION)
     block_below = level.get_block(x, y, z, DIMENSION)
-    block_here = level.get_block(x, y+1, z, DIMENSION)
+    block_here  = level.get_block(x, y+1, z, DIMENSION)
     if block_below.base_name != "grass_block" or block_here.base_name != "air":
         continue
     if (x, z) in building_blocks or (x, z) in road_blocks or (x, z) in rail_blocks or (x, z) in beach_blocks:
         continue
-    if random.random() < 0.0005: # было 0.05, изменено для разработки
-        y = terrain_y.get((x, z), Y_BASE)
-        set_tree(x, y+1, z, random.choice(["oak", "birch"]))
+    if random.random() < 0.02:
+        place_sapling(x, y, z, random.choice(["oak", "birch"]))
 
 
 if error_count:

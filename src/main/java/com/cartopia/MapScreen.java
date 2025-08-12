@@ -23,8 +23,10 @@ public class MapScreen extends Screen {
                 button -> {
                     try {
                         Player player = Minecraft.getInstance().player;
+                        if (player == null) return;
                         double px = player.getX();
                         double pz = player.getZ();
+
 
                         // Запускаем браузер
                         Runtime.getRuntime().exec(new String[]{"open", "http://localhost:4567"});
