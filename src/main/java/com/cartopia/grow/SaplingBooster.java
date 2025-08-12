@@ -83,9 +83,9 @@ public class SaplingBooster {
                 int wz = baseZ + lz;
 
                 // Шире вертикальный коридор, чтобы точно поймать саженцы возле поверхности
-                int surfaceY = level.getHeight(Heightmap.Types.MOTION_BLOCKING, wx, wz);
-                int yMin = Math.max(worldYMin, surfaceY - 12);
-                int yMax = Math.min(worldYMax, surfaceY + 24);
+                int surfaceY = level.getHeight(Heightmap.Types.MOTION_BLOCKING_NO_LEAVES, wx, wz);
+                int yMin = Math.max(worldYMin, surfaceY - 24);
+                int yMax = Math.min(worldYMax, surfaceY + 48);
 
                 for (int y = yMin; y <= yMax; y++) {
                     BlockPos pos = new BlockPos(wx, y, wz);

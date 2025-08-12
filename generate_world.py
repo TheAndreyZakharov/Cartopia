@@ -625,7 +625,7 @@ def correct_water_blocks(
                     except Exception:
                         pass
                 if not width:
-                    width = 20  # по умолчанию
+                    width = 2  # по умолчанию
                 osm_river_lines.append((line, width))
     # 2. OSM multipolygon воды (relations)
     for feat in features:
@@ -2280,6 +2280,32 @@ def place_sapling(x, y, z, tree_type):
     set_block(x, y+1, z, Block("minecraft", sap))
 
 
+# --- Служебные наборы по зонам OSM для точного таргетинга ---
+forest_zone_keys = {
+    "natural=wood", "landuse=forest",
+    "natural=wood+leaf_type=needleleaved",
+    "natural=wood+leaf_type=broadleaved",
+    "natural=wood+leaf_type=mixed",
+}
+park_zone_keys = {"leisure=park"}
+
+park_blocks = set()
+forest_blocks = set()
+
+for polygon, key in zone_polygons:
+    min_xx, min_zz, max_xx, max_zz = map(int, map(round, polygon.bounds))
+    if key in park_zone_keys:
+        for x in range(min_xx, max_xx+1):
+            for z in range(min_zz, max_zz+1):
+                if polygon.contains(Point(x, z)):
+                    park_blocks.add((x, z))
+    if key in forest_zone_keys:
+        for x in range(min_xx, max_xx+1):
+            for z in range(min_zz, max_zz+1):
+                if polygon.contains(Point(x, z)):
+                    forest_blocks.add((x, z))
+
+
 print("🌳 Генерация растительности и декора...")
 for polygon, key in zone_polygons:
     block_name = ZONE_MATERIALS[key]
@@ -2311,7 +2337,7 @@ for polygon, key in zone_polygons:
     # вместо готовых деревьев — сажаем САЖЕНЦЫ по сетке 3×3 с прежними шансами
     tree_types = ZONE_TREES.get(key)
     if tree_types:
-        for tx in range(min_x, max_x+1, 3):   # плотная сетка, как у тебя
+        for tx in range(min_x, max_x+1, 3):   # плотная сетка
             for tz in range(min_z, max_z+1, 3):
                 if not polygon.contains(Point(tx, tz)):
                     continue
@@ -2364,7 +2390,7 @@ for (x, z) in park_forest_blocks:
         continue
     if (x, z) in building_blocks or (x, z) in road_blocks or (x, z) in rail_blocks or (x, z) in beach_blocks:
         continue
-    if random.random() < 0.05:  # та же плотность
+    if random.random() < 0.05:  # плотность
         place_sapling(x, y, z, random.choice(["oak", "birch", "spruce", "acacia", "dark_oak"]))
 
 print("🌲 Сажаем саженцы в жилых районах")
@@ -2394,6 +2420,59 @@ for (x, z) in empty_blocks:
         continue
     if random.random() < 0.02:
         place_sapling(x, y, z, random.choice(["oak", "birch"]))
+
+
+def can_place_flora_here(x: int, z: int) -> tuple[bool, int]:
+    """Единая проверка места посадки для травы/кустов/цветов."""
+    y = terrain_y.get((x, z), Y_BASE)
+    ensure_chunk(level, x, z, DIMENSION)
+    try:
+        base = level.get_block(x, y, z, DIMENSION).base_name
+        above = level.get_block(x, y+1, z, DIMENSION).base_name
+    except Exception:
+        return (False, y)
+    if base != "grass_block": return (False, y)
+    if above != "air": return (False, y)
+    if (x, z) in building_blocks or (x, z) in road_blocks or (x, z) in rail_blocks or (x, z) in beach_blocks:
+        return (False, y)
+    if surface_material_map.get((x, z)) == "water":
+        return (False, y)
+    return (True, y)
+
+# 1) ЛЕСА: с частотой 0.02 — КУСТЫ/ВЫСОКАЯ ТРАВА (без цветов)
+print("🌲 Доп. декор в лесах (0.02: кусты/высокая трава)")
+for (x, z) in forest_blocks:
+    ok, y = can_place_flora_here(x, z)
+    if not ok:
+        continue
+    if random.random() < 0.02:
+        plant = random.choice(["sweet_berry_bush", "tall_grass", "large_fern"])
+        set_plant(x, y+1, z, plant)
+
+# 2) ВЕЗДЕ, КРОМЕ ПАРКОВ: 0.20 — КУСТЫ/ВЫСОКАЯ ТРАВА (без цветов)
+print("🌾 Вне парков (0.20): высокая трава и кустики")
+for x in range(global_min_x, global_max_x+1):
+    for z in range(global_min_z, global_max_z+1):
+        if (x, z) in park_blocks:  # парки оставляем как есть
+            continue
+        ok, y = can_place_flora_here(x, z)
+        if not ok:
+            continue
+        if random.random() < 0.20:
+            plant = random.choice(["tall_grass", "large_fern", "sweet_berry_bush"])
+            set_plant(x, y+1, z, plant)
+
+# 3) ВЕЗДЕ, КРОМЕ ПАРКОВ: 0.008 — ЦВЕТЫ (отдельным проходом)
+print("🌼 Вне парков (0.008): цветочки")
+for x in range(global_min_x, global_max_x+1):
+    for z in range(global_min_z, global_max_z+1):
+        if (x, z) in park_blocks:  # парки оставляем как есть
+            continue
+        ok, y = can_place_flora_here(x, z)
+        if not ok:
+            continue
+        if random.random() < 0.008:
+            set_plant(x, y+1, z, random.choice(FLOWERS))
 
 
 if error_count:
