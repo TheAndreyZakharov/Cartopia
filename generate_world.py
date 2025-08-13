@@ -11,7 +11,6 @@ from amulet.api.block_entity import BlockEntity
 from amulet_nbt import CompoundTag, ListTag, IntTag, StringTag, NamedTag
 import requests
 import rasterio
-from rasterio.windows import from_bounds
 from collections import Counter
 import copy
 import geopandas as gpd
@@ -171,8 +170,9 @@ LANDCOVER_CLASS_TO_BLOCK = {
     187: "sandstone",    # Tidal flat
     190: "grass_block",  # Impervious surfaces (города)
     140: "snow_block",   # Lichens and mosses
-    0: "grass_block",    # Filled value, ставим траву
-    250: "grass_block",  # Filled value, ставим траву
+    0:   "water",   # раньше было grass_block
+    250: "water",   # раньше было grass_block
+    255: "water",   # на всякий случай: ещё один частый fill/no-data
     # ... 
 }
 
@@ -351,7 +351,6 @@ landcover_map = get_landcover_map_from_tif(
     latlng_to_block_coords, block_coords_to_latlng
 )
 
-
 min_elevation = min(height_map.values())
 print(f"Минимальная высота на участке: {min_elevation} м")
 
@@ -400,17 +399,14 @@ for (x, z), lcover_val in landcover_map.items():
 all_water_blocks =  olm_water_blocks
 
 
-
 surface_material_map = {}
 for x in range(min_x, max_x+1):
     for z in range(min_z, max_z+1):
-        if (x, z) in all_water_blocks:
-            blockname = "water"
+        v = landcover_map.get((x, z))
+        if v is None:
+            blockname = "water"  # ключевая строка
         else:
-            lcover_val = landcover_map.get((x, z))
-            blockname = "grass_block"
-            if lcover_val is not None:
-                blockname = LANDCOVER_CLASS_TO_BLOCK.get(lcover_val, "grass_block")
+            blockname = LANDCOVER_CLASS_TO_BLOCK.get(v, "grass_block")
         surface_material_map[(x, z)] = blockname
 
 # --- OSM полигоны всегда выше landcover ---
@@ -2217,6 +2213,11 @@ for feature in features:
 
     bx, by, bz = best_xyz
     place_traffic_light(bx, by, bz)
+
+
+# Фонари
+
+
 
 
 # Засеять пшеницей
