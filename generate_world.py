@@ -48,39 +48,39 @@ ZONE_MATERIALS = {
     "natural=sand": "sandstone",
     "natural=beach": "sandstone",
     "natural=bare_rock": "stone",
-    "natural=grassland": "grass_block",
-    "landuse=forest": "grass_block",
-    "natural=wood": "grass_block",
-    "landuse=residential": "grass_block",
+    "natural=grassland": "moss_block",
+    "landuse=forest": "moss_block",
+    "natural=wood": "moss_block",
+    "landuse=residential": "moss_block",
     "landuse=industrial": "stone",
     "landuse=farmland": "farmland",
-    "landuse=meadow": "grass_block",
-    "leisure=park": "grass_block",
+    "landuse=meadow": "moss_block",
+    "leisure=park": "moss_block",
     "natural=desert": "sandstone",
-    "natural=jungle": "grass_block",
+    "natural=jungle": "moss_block",
     "natural=swamp": "muddy_mangrove_roots",
-    "natural=savanna": "grass_block",
+    "natural=savanna": "moss_block",
     "natural=snow": "snow_block",
 
-    "amenity=school": "grass_block",
-    "amenity=kindergarten": "grass_block",
+    "amenity=school": "moss_block",
+    "amenity=kindergarten": "moss_block",
     "amenity=hospital": "stone",
-    "amenity=university": "grass_block",
-    "amenity=college": "grass_block",
-    "landuse=cemetery": "grass_block",
+    "amenity=university": "moss_block",
+    "amenity=college": "moss_block",
+    "landuse=cemetery": "moss_block",
     "amenity=prison": "stone",
-    "amenity=fire_station": "grass_block",
-    "amenity=police": "grass_block",
-    "leisure=playground": "grass_block",
-    "amenity=sports_centre": "grass_block",
-    "leisure=sports_centre": "grass_block",
-    "leisure=stadium": "grass_block",
-    "leisure=pitch": "grass_block",
-    "leisure=garden": "grass_block",
+    "amenity=fire_station": "moss_block",
+    "amenity=police": "moss_block",
+    "leisure=playground": "moss_block",
+    "amenity=sports_centre": "moss_block",
+    "leisure=sports_centre": "moss_block",
+    "leisure=stadium": "moss_block",
+    "leisure=pitch": "moss_block",
+    "leisure=garden": "moss_block",
     "amenity=parking": "stone",
-    "amenity=grave_yard": "grass_block",
-    "landuse=recreation_ground": "grass_block",
-    "amenity=marketplace": "grass_block",
+    "amenity=grave_yard": "moss_block",
+    "landuse=recreation_ground": "moss_block",
+    "amenity=marketplace": "moss_block",
 
 }
 
@@ -138,29 +138,29 @@ LANDCOVER_CLASS_TO_BLOCK = {
     210: "water",        # Water body
     220: "snow_block",   # Permanent ice and snow
     200: "sandstone",    # Bare areas (можно sandstone или sand)
-    201: "grass_block",  # Consolidated bare areas
+    201: "moss_block",  # Consolidated bare areas
     202: "sandstone",    # Unconsolidated bare areas (опять песок/пыль)
-    130: "grass_block",  # Grassland
-    120: "grass_block",  # Shrubland
-    121: "grass_block",  # Evergreen shrubland
-    122: "grass_block",  # Deciduous shrubland
-    10: "grass_block",   # Rainfed cropland
-    11: "grass_block",
-    12: "grass_block",
-    20: "grass_block",   # Irrigated cropland
-    51: "grass_block",   # Open evergreen broadleaved forest
-    52: "grass_block",   # Closed evergreen broadleaved forest
-    61: "grass_block",   # Open deciduous broadleaved forest
-    62: "grass_block",
-    71: "grass_block",   # Open evergreen needle-leaved forest
-    72: "grass_block",
-    81: "grass_block",   # Open deciduous needle-leaved forest
-    82: "grass_block",
-    91: "grass_block",   # Open mixed leaf forest
-    92: "grass_block",
-    150: "grass_block",  # Sparse vegetation
-    152: "grass_block",
-    153: "grass_block",
+    130: "moss_block",  # Grassland
+    120: "moss_block",  # Shrubland
+    121: "moss_block",  # Evergreen shrubland
+    122: "moss_block",  # Deciduous shrubland
+    10: "moss_block",   # Rainfed cropland
+    11: "moss_block",
+    12: "moss_block",
+    20: "moss_block",   # Irrigated cropland
+    51: "moss_block",   # Open evergreen broadleaved forest
+    52: "moss_block",   # Closed evergreen broadleaved forest
+    61: "moss_block",   # Open deciduous broadleaved forest
+    62: "moss_block",
+    71: "moss_block",   # Open evergreen needle-leaved forest
+    72: "moss_block",
+    81: "moss_block",   # Open deciduous needle-leaved forest
+    82: "moss_block",
+    91: "moss_block",   # Open mixed leaf forest
+    92: "moss_block",
+    150: "moss_block",  # Sparse vegetation
+    152: "moss_block",
+    153: "moss_block",
     181: "muddy_mangrove_roots",  # Swamp
     182: "muddy_mangrove_roots",  # Marsh
     183: "muddy_mangrove_roots",  # Flooded flat
@@ -168,10 +168,10 @@ LANDCOVER_CLASS_TO_BLOCK = {
     185: "mangrove_log", # Mangrove
     186: "muddy_mangrove_roots",  # Salt marsh
     187: "sandstone",    # Tidal flat
-    190: "grass_block",  # Impervious surfaces (города)
+    190: "moss_block",  # Impervious surfaces (города)
     140: "snow_block",   # Lichens and mosses
-    0:   "water",   # раньше было grass_block
-    250: "water",   # раньше было grass_block
+    0:   "water",   # раньше было moss_block
+    250: "water",   # раньше было moss_block
     255: "water",   # на всякий случай: ещё один частый fill/no-data
     # ... 
 }
@@ -384,10 +384,10 @@ def get_dominant_block_around(x, z, surface_map, radius=20):
         for dz in range(-radius, radius+1):
             if dx == 0 and dz == 0: continue
             b = surface_map.get((x+dx, z+dz))
-            if b in ("grass_block", "snow_block", "sandstone"):
+            if b in ("moss_block", "snow_block", "sandstone"):
                 values.append(b)
     if not values:
-        return "grass_block"
+        return "moss_block"
     return Counter(values).most_common(1)[0][0]
 
 
@@ -406,7 +406,7 @@ for x in range(min_x, max_x+1):
         if v is None:
             blockname = "water"  # ключевая строка
         else:
-            blockname = LANDCOVER_CLASS_TO_BLOCK.get(v, "grass_block")
+            blockname = LANDCOVER_CLASS_TO_BLOCK.get(v, "moss_block")
         surface_material_map[(x, z)] = blockname
 
 # --- OSM полигоны всегда выше landcover ---
@@ -437,12 +437,12 @@ for feature in features:
                 # Город — определяем "по окружению", если просто built-up!
                 if key == "landuse=residential":
                     dom = get_dominant_block_around(x, z, surface_material_map)
-                    if dom == "grass_block" or dom == "snow_block":
+                    if dom == "moss_block" or dom == "snow_block":
                         surface_material_map[(x, z)] = dom
                     elif dom == "sandstone":
                         surface_material_map[(x, z)] = "sandstone"
                     else:
-                        surface_material_map[(x, z)] = "grass_block"
+                        surface_material_map[(x, z)] = "moss_block"
                 # Любой песок, пляж, пустыня = sandstone
                 elif key in ["natural=sand", "natural=beach", "natural=desert"]:
                     surface_material_map[(x, z)] = "sandstone"
@@ -568,7 +568,7 @@ print("🌎 Ставим блоки с нужным материалом стр�
 for x in range(min_x, max_x + 1):
     for z in range(min_z, max_z + 1):
         y = terrain_y[(x, z)]
-        blockname = surface_material_map.get((x, z), "grass_block")
+        blockname = surface_material_map.get((x, z), "moss_block")
         # 1. Ставим нужный блок на правильной высоте
         set_block(x, y, z, Block(namespace="minecraft", base_name=blockname))
         # 2. Всё что выше — чистим (если вдруг что-то там осталось)
@@ -1485,7 +1485,7 @@ for feature in features:
 PILLAR_STEP = 50  # раз в сколько блоков ставить опоры
 
 allowed_foundation = (
-    "grass_block", "dirt", "muddy_mangrove_roots", "sandstone", "water"
+    "moss_block", "dirt", "muddy_mangrove_roots", "sandstone", "water"
 )
 
 print("🧱 Ставим колонны по краям моста...")
@@ -2050,7 +2050,7 @@ for feature in features:
 
 print("🚦 Генерация светофоров")
 
-ALLOWED_FOUNDATION = {"grass_block", "dirt", "sandstone", "snow_block"}
+ALLOWED_FOUNDATION = {"moss_block", "dirt", "sandstone", "snow_block"}
 ROAD_SURFACES = set([m for (m, _w) in ROAD_MATERIALS.values()]) | {"rail"}
 MAX_SEARCH_RADIUS = 24
 PLACED_LIGHTS = set()
@@ -2220,6 +2220,17 @@ for feature in features:
 
 
 
+
+
+
+
+# Велопарковка
+
+
+
+
+
+
 # Засеять пшеницей
 def seed_farmland_exact_surface(random_age=True):
     planted = 0
@@ -2261,7 +2272,7 @@ SAPLING_BY_TREE = {
     "cherry":    "cherry_sapling",
     # "dark_oak" — отдельная логика 2x2 ниже
 }
-GOOD_SOILS = {"grass_block", "dirt", "podzol", "coarse_dirt", "rooted_dirt", "coarse_dirt"}
+GOOD_SOILS = {"moss_block", "dirt", "podzol", "coarse_dirt", "rooted_dirt", "coarse_dirt"}
 
 def ensure_soil(x, y, z):
     """Гарантируем подходящую почву под саженец."""
@@ -2417,7 +2428,7 @@ for (x, z) in park_forest_blocks:
     ensure_chunk(level, x, z, DIMENSION)
     block_below = level.get_block(x, y, z, DIMENSION)
     block_here  = level.get_block(x, y+1, z, DIMENSION)
-    if block_below.base_name != "grass_block" or block_here.base_name != "air":
+    if block_below.base_name != "moss_block" or block_here.base_name != "air":
         continue
     if (x, z) in building_blocks or (x, z) in road_blocks or (x, z) in rail_blocks or (x, z) in beach_blocks:
         continue
@@ -2448,7 +2459,7 @@ for (x, z) in park_forest_blocks:
     ensure_chunk(level, x, z, DIMENSION)
     block_below = level.get_block(x, y, z, DIMENSION)
     block_here  = level.get_block(x, y+1, z, DIMENSION)
-    if block_below.base_name != "grass_block" or block_here.base_name != "air":
+    if block_below.base_name != "moss_block" or block_here.base_name != "air":
         continue
     if (x, z) in building_blocks or (x, z) in road_blocks or (x, z) in rail_blocks or (x, z) in beach_blocks:
         continue
@@ -2465,7 +2476,7 @@ for (x, z) in residential_blocks:
     ensure_chunk(level, x, z, DIMENSION)
     block_below = level.get_block(x, y, z, DIMENSION)
     block_here  = level.get_block(x, y+1, z, DIMENSION)
-    if block_below.base_name != "grass_block" or block_here.base_name != "air":
+    if block_below.base_name != "moss_block" or block_here.base_name != "air":
         continue
     if (x, z) in building_blocks or (x, z) in road_blocks or (x, z) in rail_blocks or (x, z) in beach_blocks:
         continue
@@ -2480,7 +2491,7 @@ for (x, z) in empty_blocks:
     ensure_chunk(level, x, z, DIMENSION)
     block_below = level.get_block(x, y, z, DIMENSION)
     block_here  = level.get_block(x, y+1, z, DIMENSION)
-    if block_below.base_name != "grass_block" or block_here.base_name != "air":
+    if block_below.base_name != "moss_block" or block_here.base_name != "air":
         continue
     if (x, z) in building_blocks or (x, z) in road_blocks or (x, z) in rail_blocks or (x, z) in beach_blocks:
         continue
@@ -2499,7 +2510,7 @@ def can_place_flora_here(x: int, z: int) -> tuple[bool, int]:
         above = level.get_block(x, y+1, z, DIMENSION).base_name
     except Exception:
         return (False, y)
-    if base != "grass_block": return (False, y)
+    if base != "moss_block": return (False, y)
     if above != "air": return (False, y)
     if (x, z) in building_blocks or (x, z) in road_blocks or (x, z) in rail_blocks or (x, z) in beach_blocks:
         return (False, y)
