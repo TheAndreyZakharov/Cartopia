@@ -2048,6 +2048,71 @@ for feature in features:
                 set_block(x, y, z, Block(namespace="minecraft", base_name="smooth_stone_slab"))
 
 
+
+# Светофоры
+
+def snap_dir_to_grid(dx: float, dz: float) -> tuple[int, int]:
+    if dx == 0 and dz == 0:
+        return (1, 0)
+    ax, az = abs(dx), abs(dz)
+    sx = 1 if dx >= 0 else -1
+    sz = 1 if dz >= 0 else -1
+    if ax >= az * 1.5:  # ближе к оси X
+        return (sx, 0)
+    if az >= ax * 1.5:  # ближе к оси Z
+        return (0, sz)
+    return (sx, sz)     # диагональ
+
+def nearest_road_dir(x0: int, z0: int, max_radius: int = 30):
+    """
+    Находит ближайший сегмент 'highway'-way к точке (x0,z0) и возвращает его направление (dx,dz)
+    и расстояние до сегмента. Если не найдено — (None, None).
+    """
+    best = None
+    for way in features:
+        if way.get("type") != "way": 
+            continue
+        tags = way.get("tags", {})
+        if "highway" not in tags:
+            continue
+        nodes = [node_coords.get(nid) for nid in way.get("nodes", []) if nid in node_coords]
+        if len(nodes) < 2:
+            continue
+        for (x1, z1), (x2, z2) in zip(nodes, nodes[1:]):
+            # расстояние от точки до отрезка (в евклидовой метрике)
+            vx, vz = x2 - x1, z2 - z1
+            wx, wz = x0 - x1, z0 - z1
+            seg_len2 = vx*vx + vz*vz
+            if seg_len2 == 0:
+                continue
+            t = max(0.0, min(1.0, (wx*vx + wz*vz) / seg_len2))
+            px = x1 + vx * t
+            pz = z1 + vz * t
+            dx = x2 - x1
+            dz = z2 - z1
+            dist2 = (px - x0)**2 + (pz - z0)**2
+            if best is None or dist2 < best[0]:
+                best = (dist2, dx, dz, tags.get("highway"))
+    if not best:
+        return None, None
+    dist = best[0] ** 0.5
+    if dist > max_radius:
+        return None, None
+    return (best[1], best[2]), dist
+
+def clear_and_set_light(bx: int, by: int, bz: int):
+    ensure_chunk(level, bx, bz, DIMENSION)
+    for dy in range(1, 8):
+        set_block(bx, by + dy, bz, Block("minecraft", "air"))
+    base_y = by + 1
+    for dy in range(3):
+        set_block(bx, base_y + dy, bz, Block("minecraft", "andesite_wall"))
+    set_block(bx, base_y + 3, bz, Block("minecraft", "emerald_block"))
+    set_block(bx, base_y + 4, bz, Block("minecraft", "gold_block"))
+    set_block(bx, base_y + 5, bz, Block("minecraft", "redstone_block"))
+    set_block(bx, base_y + 6, bz, Block("minecraft", "andesite_slab"))
+
+
 print("🚦 Генерация светофоров")
 
 ALLOWED_FOUNDATION = {"moss_block", "dirt", "sandstone", "snow_block"}
@@ -2208,8 +2273,51 @@ for feature in features:
             break
 
     if best_xyz is None:
-        print(f"⚠️ Правый борт: не найдено места для светофора около ({x0},{z0})")
-        continue
+        # Fallback: поставить на правой кромке дороги около узла
+        # берём ширину дороги и правую нормаль
+        road_width = ROAD_MATERIALS.get(main_way.get("tags", {}).get("highway") or main_way.get("tags", {}).get("railway"), ("stone", 3))[1]
+        dx, dz = dir_vec
+        # нормаль вправо
+        rx, rz = -dz, dx
+        norm = (rx*rx + rz*rz) ** 0.5 or 1.0
+        rx /= norm; rz /= norm
+
+        edge_off = int(round(road_width / 2.0))  # кромка
+        bx = int(round(x0 + rx * edge_off))
+        bz = int(round(z0 + rz * edge_off))
+        by = terrain_y.get((bx, bz), Y_BASE)
+
+        # На fallback разрешаем ставить на дороге: убираем road-проверку
+        ok_foundation = True
+        try:
+            above = level.get_block(bx, by + 1, bz, DIMENSION).base_name
+            ok_foundation = (above == "air")
+        except Exception:
+            pass
+
+        if ok_foundation:
+            clear_and_set_light(bx, by, bz)
+            PLACED_LIGHTS.add((bx, bz))
+            continue
+
+        # если прямо в точке нет воздуха сверху — сместимся вдоль дороги на пару клеток
+        sx, sz = snap_dir_to_grid(dx, dz)
+        placed = False
+        for shift in (-2, -1, 1, 2, 3, -3):
+            tx = bx + sx * shift
+            tz = bz + sz * shift
+            ty = terrain_y.get((tx, tz), Y_BASE)
+            try:
+                if level.get_block(tx, ty + 1, tz, DIMENSION).base_name == "air":
+                    clear_and_set_light(tx, ty, tz)
+                    PLACED_LIGHTS.add((tx, tz))
+                    placed = True
+                    break
+            except Exception:
+                continue
+        if not placed:
+            print(f"⚠️ Fallback тоже не удался около ({x0},{z0})")
+        continue  # к следующему светофору
 
     bx, by, bz = best_xyz
     place_traffic_light(bx, by, bz)
@@ -2226,6 +2334,58 @@ for feature in features:
 
 # Велопарковка
 
+def place_lightning_rod_at(x: int, z: int):
+    """
+    Ставит громоотвод и ЗАМЕНЯЕТ блок рельефа под ним на булыжник.
+    Работает и на дороге/траве/воде и т.д.
+    """
+    y = terrain_y.get((x, z), Y_BASE)
+    ensure_chunk(level, x, z, DIMENSION)
+
+    # Подложка: всегда булыжник на уровне рельефа
+    set_block(x, y, z, Block("minecraft", "cobblestone"))
+
+    # Расчистим пространство сверху
+    set_block(x, y + 1, z, Block("minecraft", "air"))
+    set_block(x, y + 2, z, Block("minecraft", "air"))
+
+    # Ставим громоотвод вертикально
+    try:
+        set_block(x, y + 1, z, Block("minecraft", "lightning_rod", properties={"facing": "up"}))
+    except Exception:
+        set_block(x, y + 1, z, Block("minecraft", "lightning_rod"))
+
+
+print("🚲 Велопарковки")
+
+RACK_OFFSETS = [-2, -1, 0, 1, 2]  # 5 подряд
+
+def place_bike_rack_5_rods_at(x0: int, z0: int):
+    # направление: сначала пробуем ближайшую дорогу, иначе вдоль X
+    ndir, ndist = nearest_road_dir(x0, z0, max_radius=40)
+    if ndir is not None:
+        dx, dz = ndir
+    else:
+        dx, dz = (1, 0)
+    sx, sz = snap_dir_to_grid(dx, dz)
+
+    for k in RACK_OFFSETS:
+        px = x0 + sx * k
+        pz = z0 + sz * k
+        place_lightning_rod_at(px, pz)
+
+# ставим на всех узлах bicycle_parking (не важно, входят ли в way)
+for feature in features:
+    if feature.get("type") != "node":
+        continue
+    tags = feature.get("tags", {})
+    if tags.get("amenity") != "bicycle_parking":
+        continue
+    nid = feature["id"]
+    if nid not in node_coords:
+        continue
+    x0, z0 = node_coords[nid]
+    place_bike_rack_5_rods_at(x0, z0)
 
 
 
