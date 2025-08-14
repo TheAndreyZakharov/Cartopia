@@ -59,9 +59,9 @@ ZONE_MATERIALS = {
     "natural=desert": "sandstone",
     "natural=jungle": "moss_block",
     "natural=swamp": "muddy_mangrove_roots",
-    "natural=savanna": "moss_block",
+    "natural=savanna": "red_sandstone",
     "natural=snow": "snow_block",
-
+    "landuse=quarry": "stone",
     "amenity=school": "moss_block",
     "amenity=kindergarten": "moss_block",
     "amenity=hospital": "stone",
@@ -1823,6 +1823,82 @@ for x in range(global_min_x, global_max_x+1):
     for z in range(global_min_z, global_max_z+1):
         if (x, z) not in park_forest_blocks and (x, z) not in residential_blocks:
             empty_blocks.add((x, z))
+
+
+# ⛏️ Карьеры/рудники: камень + вкрапления руды на высоте рельефа
+print("⛏️ Генерация карьеров и рудных вкраплений...")
+
+# --- какие зоны считаем карьерами/рудниками ---
+def is_quarry_or_mine(tags: dict) -> bool:
+    # landuse=quarry ИЛИ промышленная зона с industrial=mining|quarry
+    if tags.get("landuse") == "quarry":
+        return True
+    if tags.get("landuse") == "industrial" and tags.get("industrial") in {"mining", "quarry"}:
+        return True
+    return False
+
+ORE_DISTR = [
+    ("coal_ore",     0.60),
+    ("iron_ore",     0.16),
+    ("copper_ore",   0.08),
+    ("gold_ore",     0.05),
+    ("redstone_ore", 0.04),
+    ("lapis_ore",    0.03),
+    ("diamond_ore",  0.02),
+    ("emerald_ore",  0.02),
+]
+
+def pick_weighted_ore():
+    r = random.random()
+    acc = 0.0
+    for name, w in ORE_DISTR:
+        acc += w
+        if r <= acc:
+            return name
+    return ORE_DISTR[-1][0]
+
+# --- собираем полигоны карьеров из OSM (замкнутые way) ---
+quarry_polygons = []
+for feat in features:
+    if feat.get("type") != "way":
+        continue
+    tags = feat.get("tags", {}) or {}
+    if not is_quarry_or_mine(tags):
+        continue
+    node_ids = feat.get("nodes", [])
+    nodes = [node_coords.get(nid) for nid in node_ids if nid in node_coords]
+    if not nodes or len(nodes) < 3 or nodes[0] != nodes[-1]:
+        continue
+    poly = Polygon(nodes)
+    if poly.is_valid and not poly.is_empty:
+        quarry_polygons.append(poly)
+
+# --- заливаем камнем; с шансом ORE_PROB заменяем на руду ---
+ORE_PROB = 0.20  # 20% шанс, что клетка станет рудой (иначе остаётся stone)
+placed_quarry_cells = 0
+placed_ore_cells = 0
+
+for poly in quarry_polygons:
+    min_xx, min_zz, max_xx, max_zz = map(int, map(round, poly.bounds))
+    for x in range(min_xx, max_xx + 1):
+        for z in range(min_zz, max_zz + 1):
+            if not poly.contains(Point(x, z)):
+                continue
+
+            # строго на высоте рельефа
+            y = terrain_y.get((x, z), Y_BASE)
+
+            # базово кладём камень на рельефе
+            set_block(x, y, z, Block("minecraft", "stone"))
+            surface_material_map[(x, z)] = "stone"
+            placed_quarry_cells += 1
+
+            # с вероятностью 0.20 заменяем камень на выбранную руду (на том же y)
+            if random.random() < ORE_PROB:
+                ore_name = pick_weighted_ore()
+                set_block(x, y, z, Block("minecraft", ore_name))
+                placed_ore_cells += 1
+
 
 print("🚧 Генерация заборов...")
 
