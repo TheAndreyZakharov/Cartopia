@@ -2,7 +2,7 @@ import json
 import os
 import math
 import random
-from shapely.geometry import Polygon, Point, LineString
+from shapely.geometry import Polygon, MultiPolygon, Point, LineString
 from shapely.ops import polygonize
 from amulet import load_level
 from amulet.api.level import World
@@ -1912,8 +1912,6 @@ ROADLIKE_SURFACES = {v[0] for v in ROAD_MATERIALS.values()} | {"rail", "railway"
 WATER_NAMES = {"water"}
 
 # --- Помощники по геометрии ---
-from shapely.geometry import Polygon, MultiPolygon, LineString, Point
-from shapely.ops import polygonize
 
 def _geom_to_polygons(geom) -> list[Polygon]:
     """Нормализация в список Polygon (поддержка Polygon/MultiPolygon)."""
@@ -2697,6 +2695,253 @@ for feature in features:
 
 
 
+# Кладбища
+print("🪦 Генерация надгробий на кладбищах...")
+
+# --- параметры раскладки ---
+CEMETERY_INNER_MARGIN = 5     # отступ от края полигона
+GRAVE_STEP = 4                # шаг сетки (даёт зазор ~2 блока вокруг, учтя slab)
+EMPTY_PLOT_PROB = 0.08        # шанс пропуска «ячейки» для живости
+SAFE_RADIUS_TO_ROADS_BUILDINGS = 5  # не ближе 3 блоков к дорогам/зданиям
+
+# --- допустимые основания (строго) ---
+ALLOWED_FOUNDATIONS = {
+    "sandstone", "moss_block", "farmland", "muddy_mangrove_roots",
+    "red_sandstone", "snow_block"
+}
+
+# материалы могил (70/15/15)
+def pick_grave_materials() -> tuple[str, str, str]:
+    r = random.random()
+    if r < 0.70:
+        return ("cobblestone", "cobblestone_wall", "cobblestone_slab")
+    if r < 0.85:
+        return ("mossy_cobblestone", "mossy_cobblestone_wall", "mossy_cobblestone_slab")
+    return ("smooth_quartz", "diorite_wall", "smooth_quartz_slab")
+
+# направления (dx, dz) — одно на конкретное кладбище
+DIR4 = [(1, 0), (-1, 0), (0, 1), (0, -1)]  # East, West, South, North
+
+# Поверхности дорог/рельс (совместимо с остальным кодом)
+ROAD_SURFACES = set([m for (m, _w) in ROAD_MATERIALS.values()]) | {"rail"}
+
+# --- предикаты окружения ---
+def _is_water(x: int, z: int) -> bool:
+    return surface_material_map.get((x, z)) == "water"
+
+def _is_road_or_rail(x: int, z: int) -> bool:
+    return actual_surface_material_map.get((x, z)) in ROAD_SURFACES or (x, z) in road_blocks or (x, z) in rail_blocks
+
+def _is_building(x: int, z: int) -> bool:
+    return (x, z) in building_blocks
+
+def _near_road_or_building(x: int, z: int, r: int = SAFE_RADIUS_TO_ROADS_BUILDINGS) -> bool:
+    # Простая квадратная окрестность
+    for dx in range(-r, r + 1):
+        for dz in range(-r, r + 1):
+            nx, nz = x + dx, z + dz
+            if (nx, nz) in building_blocks:
+                return True
+            if (nx, nz) in road_blocks or (nx, nz) in rail_blocks:
+                return True
+            if actual_surface_material_map.get((nx, nz)) in ROAD_SURFACES:
+                return True
+    return False
+
+# --- проверки места и расчистка ---
+def can_place_base_strict(x: int, z: int) -> tuple[bool, int]:
+    """
+    Строгая проверка точки основания/плиты:
+    - не вода, не дорога/рельсы, не здание
+    - на расстоянии >= SAFE_RADIUS_TO_ROADS_BUILDINGS от дорог/зданий
+    - сам рельефный блок принадлежит ALLOWED_FOUNDATIONS
+    Возвращает (ok, y).
+    """
+    if _is_water(x, z) or _is_road_or_rail(x, z) or _is_building(x, z):
+        return (False, terrain_y.get((x, z), Y_BASE))
+    if _near_road_or_building(x, z):
+        return (False, terrain_y.get((x, z), Y_BASE))
+
+    y = terrain_y.get((x, z), Y_BASE)
+    ensure_chunk(level, x, z, DIMENSION)
+    try:
+        base_name = level.get_block(x, y, z, DIMENSION).base_name
+    except Exception:
+        return (False, y)
+
+    if base_name not in ALLOWED_FOUNDATIONS:
+        return (False, y)
+    return (True, y)
+
+def clear_air_column(x: int, y: int, z: int, height: int):
+    """Мягко очищаем воздух над рельефом (не трогаем сам рельеф)."""
+    for dy in range(1, height + 1):
+        set_block(x, y + dy, z, Block("minecraft", "air"))
+
+def place_grave(x: int, z: int, face_dir: tuple[int, int]) -> bool:
+    """
+    Надгробие:
+      - блок-основание на y+1
+      - на нём wall на y+2
+      - slab на соседнем блоке (в сторону face_dir) на y_slab+1
+    Все точки проходят строгую проверку и отступы.
+    """
+    ok, y = can_place_base_strict(x, z)
+    if not ok:
+        return False
+    if random.random() < EMPTY_PLOT_PROB:
+        return False
+
+    dx, dz = face_dir
+    sx, sz = x + dx, z + dz
+
+    ok_slab, y_slab = can_place_base_strict(sx, sz)
+    if not ok_slab:
+        return False
+
+    # расчистка воздуха: база ~3 блока, slab ~2 блока
+    clear_air_column(x,  y,     z,  height=3)
+    clear_air_column(sx, y_slab, sz, height=2)
+
+    base_block, wall_block, slab_block = pick_grave_materials()
+    set_block(x,  y+1,     z,  Block("minecraft", base_block))
+    set_block(x,  y+2,     z,  Block("minecraft", wall_block))
+    set_block(sx, y_slab+1, sz, Block("minecraft", slab_block))
+    return True
+
+
+# --- Сбор полигонов кладбищ напрямую из features (way + relation multipolygon) ---
+from shapely.geometry import Polygon, MultiPolygon, LineString, Point
+from shapely.ops import polygonize
+
+def _normalize_polys(geom) -> list[Polygon]:
+    if geom is None or geom.is_empty:
+        return []
+    if isinstance(geom, Polygon):
+        return [geom]
+    if isinstance(geom, MultiPolygon):
+        return [p for p in geom.geoms if isinstance(p, Polygon) and p.is_valid and not p.is_empty]
+    return []
+
+cem_polys: list[Polygon] = []
+
+# 1) Замкнутые way: landuse=cemetery / amenity=grave_yard
+for feat in features:
+    if feat.get("type") != "way":
+        continue
+    tags = feat.get("tags", {}) or {}
+    if not (tags.get("landuse") == "cemetery" or tags.get("amenity") == "grave_yard"):
+        continue
+    node_ids = feat.get("nodes", []) or []
+    coords = [node_coords.get(nid) for nid in node_ids if nid in node_coords]
+    coords = [c for c in coords if c is not None]
+    if len(coords) >= 3 and coords[0] == coords[-1]:
+        poly = Polygon(coords)
+        if not poly.is_valid or poly.is_empty:
+            poly = poly.buffer(0)
+        if poly.is_valid and not poly.is_empty:
+            cem_polys.extend(_normalize_polys(poly))
+
+# 2) relation type=multipolygon: landuse=cemetery / amenity=grave_yard
+for rel in features:
+    if rel.get("type") != "relation":
+        continue
+    rtags = rel.get("tags", {}) or {}
+    if rtags.get("type") != "multipolygon":
+        continue
+    if not (rtags.get("landuse") == "cemetery" or rtags.get("amenity") == "grave_yard"):
+        continue
+
+    # собрать outer-линии
+    outers = []
+    for m in rel.get("members", []):
+        if m.get("type") == "way" and m.get("role") in {"outer", "", None}:
+            wid = m.get("ref")
+            way = next((w for w in features if w.get("type") == "way" and w.get("id") == wid), None)
+            if not way:
+                continue
+            wcoords = [node_coords.get(nid) for nid in way.get("nodes", []) if nid in node_coords]
+            wcoords = [c for c in wcoords if c is not None]
+            if len(wcoords) >= 2:
+                outers.append(LineString(wcoords))
+
+    polys = list(polygonize(outers))
+
+    # fallback: если polygonize ничего не дал — возьмём первый замкнутый outer-way
+    if not polys:
+        for m in rel.get("members", []):
+            if m.get("type") == "way" and m.get("role") in {"outer", "", None}:
+                wid = m.get("ref")
+                way = next((w for w in features if w.get("type") == "way" and w.get("id") == wid), None)
+                if not way:
+                    continue
+                wcoords = [node_coords.get(nid) for nid in way.get("nodes", []) if nid in node_coords]
+                wcoords = [c for c in wcoords if c is not None]
+                if len(wcoords) >= 3 and wcoords[0] == wcoords[-1]:
+                    p = Polygon(wcoords)
+                    if p.is_valid and not p.is_empty:
+                        polys = [p]
+                        break
+
+    for p in polys:
+        cem_polys.extend(_normalize_polys(p))
+
+print(f"🪦 Найдено полигонов кладбищ: {len(cem_polys)}")
+
+# --- Генерация надгробий внутри каждого кладбища ---
+placed_graves_total = 0
+EDGE_EPS = 0.1
+
+for cem_poly in cem_polys:
+    # единое случайное направление для этого кладбища — оставить
+    face_dir = random.choice(DIR4)
+
+    # «внутренняя» область с отступом от забора; если съелась — используем исходный с ручной проверкой края
+    inner = cem_poly.buffer(-CEMETERY_INNER_MARGIN)
+    inner_polys = _normalize_polys(inner)
+    work_poly = inner_polys[0] if inner_polys else cem_poly
+
+    min_x, min_z, max_x, max_z = map(int, map(round, work_poly.bounds))
+
+    # растеризация допустимых клеток (учитываем край, воду/дороги/здания и строгие основания + безопасный радиус)
+    allowed = set()
+    exterior = work_poly.exterior
+    for x in range(min_x, max_x + 1):
+        for z in range(min_z, max_z + 1):
+            p = Point(x, z)
+            if not work_poly.covers(p):
+                continue
+            # если работаем по исходному (без inner), вручную отступаем от края
+            if work_poly is cem_poly and exterior.distance(p) + EDGE_EPS < CEMETERY_INNER_MARGIN:
+                continue
+            # базовые запреты и безопасная дистанция
+            if _is_water(x, z) or _is_road_or_rail(x, z) or _is_building(x, z):
+                continue
+            if _near_road_or_building(x, z):
+                continue
+            # строгая проверка по материалу основания
+            ok_base, _ = can_place_base_strict(x, z)
+            if not ok_base:
+                continue
+            allowed.add((x, z))
+
+    if not allowed:
+        continue
+
+    # сетка могил: база и slab обязаны быть в allowed
+    start_x = (min_x // GRAVE_STEP) * GRAVE_STEP
+    start_z = (min_z // GRAVE_STEP) * GRAVE_STEP
+
+    dx, dz = face_dir
+    for x in range(start_x, max_x + 1, GRAVE_STEP):
+        for z in range(start_z, max_z + 1, GRAVE_STEP):
+            if (x, z) not in allowed:
+                continue
+            sx, sz = x + dx, z + dz
+            if (sx, sz) not in allowed:
+                continue
+            if place_grave(x, z, face_dir):
+                placed_graves_total += 1
 
 
 # Засеять пшеницей
@@ -2740,7 +2985,9 @@ SAPLING_BY_TREE = {
     "cherry":    "cherry_sapling",
     # "dark_oak" — требует 2x2, ниже отдельная функция
 }
-GOOD_SOILS = {"moss_block", "dirt", "podzol", "coarse_dirt", "rooted_dirt", "coarse_dirt"}
+GOOD_SOILS = {"moss_block", "dirt", "podzol", "coarse_dirt", "rooted_dirt"}
+
+MUSHROOMS = ["brown_mushroom", "red_mushroom"]
 
 def ensure_soil(x, y, z):
     """Гарантируем подходящую почву под саженец."""
@@ -2800,7 +3047,7 @@ forest_zone_keys = {
 }
 park_zone_keys = {"leisure=park"}
 
-# «запретные» зоны для любой растительности (как у тебя было)
+# «запретные» зоны для любой растительности
 sports_zone_keys = {
     "leisure=pitch", "leisure=sports_centre", "leisure=stadium",
     "leisure=golf_course", "leisure=track", "leisure=playground"
@@ -2825,11 +3072,9 @@ def choose_from_pool_with_cherry_cap(pool: list[str]) -> str:
     """
     if "cherry" not in pool:
         return random.choice(pool)
-    # с шансом 2% — cherry; иначе равномерно из пула без cherry
     if random.random() < CHERRY_GLOBAL_PROB:
         return "cherry"
     non_cherry = [t for t in pool if t != "cherry"]
-    # защита от пустого пула (на всякий случай)
     return random.choice(non_cherry) if non_cherry else "cherry"
 
 def _weighted_pool_pick(main_pool, alt_pool, p_main=0.8) -> str:
@@ -2859,7 +3104,6 @@ def choose_tree_for_zone_key(zone_key: str) -> str:
         return choose_from_pool_with_cherry_cap(ALL_TREES)
 
     if zone_key == "natural=jungle":
-        # 80% — jungle, 20% — всё прочее (с учётом cherry-cap)
         if random.random() < 0.8:
             return choose_from_pool_with_cherry_cap(["jungle"])
         else:
@@ -2883,7 +3127,7 @@ def choose_tree_for_zone_key(zone_key: str) -> str:
     return choose_from_pool_with_cherry_cap(ALL_TREES)
 
 
-# --- собираем карты зон для быстрого доступа по клетке (нужно, чтобы "понимать" тип листвы в общих проходах) ---
+# --- собираем карты зон для быстрого доступа по клетке ---
 park_blocks = set()
 forest_blocks = set()
 restricted_flora_blocks = set()
@@ -2913,6 +3157,23 @@ for polygon, key in zone_polygons:
                     restricted_flora_blocks.add((x, z))
                     zone_key_at[(x, z)] = key
 
+# --- зоны, где разрешаем сетку 3×3 для деревьев ---
+TREE_ZONE_KEYS = set().union(
+    forest_zone_keys,
+    park_zone_keys,
+    {
+        "natural=wood",
+        "landuse=forest",
+        "natural=wood+leaf_type=needleleaved",
+        "natural=wood+leaf_type=broadleaved",
+        "natural=wood+leaf_type=mixed",
+        "natural=jungle",
+        "natural=swamp",
+        "natural=savanna",
+        "leisure=garden",
+        # "landuse=meadow",  # включай при желании редкие деревья на лугах
+    }
+)
 
 print("🌳 Генерация растительности и декора...")
 for polygon, key in zone_polygons:
@@ -2947,24 +3208,25 @@ for polygon, key in zone_polygons:
                         y = terrain_y.get((x, z), Y_BASE)
                         set_plant(nx, y+1, nz, "sugar_cane")
 
-    # Сажаем САЖЕНЦЫ по сетке 3×3 — сохраняем твои шансы посадки:
+    # Сажаем САЖЕНЦЫ по сетке 3×3 (ТОЛЬКО в TREE_ZONE_KEYS):
     # - если выбран cherry → шанс посадки 0.07
     # - иначе → шанс 0.45
     # Тип дерева выбираем «умно» по зоне, с cherry-cap=2%.
-    for tx in range(min_x, max_x+1, 3):
-        for tz in range(min_z, max_z+1, 3):
-            if not polygon.contains(Point(tx, tz)):
-                continue
-            if (tx, tz) in restricted_flora_blocks:
-                continue
-            ttype = choose_tree_for_zone_key(key)
-            y = terrain_y.get((tx, tz), Y_BASE)
-            if ttype == "cherry":
-                if random.random() < 0.07:
-                    place_sapling(tx, y, tz, ttype)
-            else:
-                if random.random() < 0.45:
-                    place_sapling(tx, y, tz, ttype)
+    if key in TREE_ZONE_KEYS:
+        for tx in range(min_x, max_x+1, 3):
+            for tz in range(min_z, max_z+1, 3):
+                if not polygon.contains(Point(tx, tz)):
+                    continue
+                if (tx, tz) in restricted_flora_blocks:
+                    continue
+                ttype = choose_tree_for_zone_key(key)
+                y = terrain_y.get((tx, tz), Y_BASE)
+                if ttype == "cherry":
+                    if random.random() < 0.07:
+                        place_sapling(tx, y, tz, ttype)
+                else:
+                    if random.random() < 0.45:
+                        place_sapling(tx, y, tz, ttype)
 
 
 print("🌱 Сажаем низкую/высокую траву и цветы...")
@@ -3011,7 +3273,7 @@ for (x, z) in park_forest_blocks:
         continue
     if (x, z) in building_blocks or (x, z) in road_blocks or (x, z) in rail_blocks or (x, z) in beach_blocks:
         continue
-    if random.random() < 0.05:  # плотность — как у тебя
+    if random.random() < 0.05:  # плотность
         key_here = zone_key_at.get((x, z))
         if key_here:
             ttype = choose_tree_for_zone_key(key_here)
@@ -3034,7 +3296,7 @@ for (x, z) in residential_blocks:
         continue
     if (x, z) in building_blocks or (x, z) in road_blocks or (x, z) in rail_blocks or (x, z) in beach_blocks:
         continue
-    if random.random() < 0.02:  # как было
+    if random.random() < 0.02:
         # 70% берём лиственные, 30% хвойные — но с cherry-cap
         ttype = _weighted_pool_pick(DECIDUOUS, CONIFERS, 0.7)
         place_sapling(x, y, z, ttype)
@@ -3052,7 +3314,7 @@ for (x, z) in empty_blocks:
         continue
     if (x, z) in building_blocks or (x, z) in road_blocks or (x, z) in rail_blocks or (x, z) in beach_blocks:
         continue
-    if random.random() < 0.02:  # как было
+    if random.random() < 0.02:
         ttype = choose_from_pool_with_cherry_cap(ALL_TREES)
         place_sapling(x, y, z, ttype)
 
@@ -3077,7 +3339,7 @@ def can_place_flora_here(x: int, z: int) -> tuple[bool, int]:
     return (True, y)
 
 # 1) ЛЕСА: 0.02 — кусты/высокая трава (без цветов)
-print("🌲 Доп. декор в лесах (0.02: кусты/высокая трава)")
+print("🌲 Доп. декор в лесах (0.02: кусты/высокая трава/папоротник/ягоды + грибы)")
 for (x, z) in forest_blocks:
     if (x, z) in restricted_flora_blocks:
         continue
@@ -3085,7 +3347,11 @@ for (x, z) in forest_blocks:
     if not ok:
         continue
     if random.random() < 0.02:
-        plant = random.choice(["sweet_berry_bush", "tall_grass", "large_fern"])
+        # ~70% привычная растительность, ~30% грибы
+        if random.random() < 0.30:
+            plant = random.choice(MUSHROOMS)
+        else:
+            plant = random.choice(["sweet_berry_bush", "tall_grass", "large_fern"])
         set_plant(x, y+1, z, plant)
 
 # 2) ВЕЗДЕ, КРОМЕ ПАРКОВ и ЗАПРЕТНЫХ ЗОН: 0.20 — высокая трава и кусты
