@@ -1824,32 +1824,57 @@ for x in range(global_min_x, global_max_x+1):
         if (x, z) not in park_forest_blocks and (x, z) not in residential_blocks:
             empty_blocks.add((x, z))
 
-# --- Ограждение зон по периметру (Y_BASE+1)
-def is_fenced_zone(key):
-    return any(key.startswith(prefix) for prefix in FENCED_ZONE_PREFIXES)
-
 print("🚧 Генерация заборов...")
 
-# 1. Собираем все fence-точки:
-fence_points = set()
+# --- Настройки материалов ---
+FENCE_MATERIAL_DEFAULT = Block(namespace="minecraft", base_name="oak_fence")              # обычный забор
+FENCE_MATERIAL_CEMETERY = Block(namespace="minecraft", base_name="dark_oak_fence")        # кладбища
+FENCE_MATERIAL_SECURE = Block(namespace="minecraft", base_name="stone_brick_wall")        # охраняемые / важные объекты
+
+# --- Категории зон ---
+SECURE_ZONE_KEYWORDS = [
+    "parking", "prison", "school", "kindergarten", "hospital", "clinic",
+    "nuclear", "hydroelectric", "power_plant", "thermal_power_plant",
+    "military", "government"
+]
+CEMETERY_KEYWORDS = ["cemetery", "graveyard"]
+
+# --- Функция определения материала забора по ключу зоны ---
+def get_fence_material_for_zone(key: str) -> Block:
+    key_lower = key.lower()
+    if any(word in key_lower for word in CEMETERY_KEYWORDS):
+        return FENCE_MATERIAL_CEMETERY
+    if any(word in key_lower for word in SECURE_ZONE_KEYWORDS):
+        return FENCE_MATERIAL_SECURE
+    return FENCE_MATERIAL_DEFAULT
+
+# --- Определение: это ограждаемая зона или нет ---
+def is_fenced_zone(key: str) -> bool:
+    # FENCED_ZONE_PREFIXES уже есть в твоём коде — используется как основной фильтр
+    return any(key.startswith(prefix) for prefix in FENCED_ZONE_PREFIXES)
+
+# --- Сбор точек для заборов ---
+fence_segments = []  # список кортежей (x, z, материал)
+
 for polygon, key in zone_polygons:
     if not is_fenced_zone(key):
         continue
-    coords = [(int(round(x)), int(round(z))) for (x, z) in polygon.exterior.coords]
-    for i in range(len(coords)-1):
-        x0, z0 = coords[i]
-        x1, z1 = coords[i+1]
-        for x, z in bresenham_line(x0, z0, x1, z1):
-            if (x, z) not in road_blocks and (x, z) not in rail_blocks:
-                fence_points.add((x, z))
 
-# 2. Ставим fence
-for x, z in fence_points:
+    fence_material = get_fence_material_for_zone(key)
+
+    coords = [(int(round(x)), int(round(z))) for (x, z) in polygon.exterior.coords]
+    for i in range(len(coords) - 1):
+        x0, z0 = coords[i]
+        x1, z1 = coords[i + 1]
+        for x, z in bresenham_line(x0, z0, x1, z1):
+            # Не ставим забор прямо на дорогах и рельсах
+            if (x, z) not in road_blocks and (x, z) not in rail_blocks:
+                fence_segments.append((x, z, fence_material))
+
+# --- Установка заборов ---
+for x, z, fence_material in fence_segments:
     y = terrain_y.get((x, z), Y_BASE)
-    set_block(
-        x, y+1, z,
-        Block(namespace="minecraft", base_name="oak_fence")
-    )
+    set_block(x, y + 1, z, fence_material)
 
 
 # --- Инфраструктура ---
