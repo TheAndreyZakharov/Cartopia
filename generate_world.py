@@ -2738,7 +2738,7 @@ SAPLING_BY_TREE = {
     "jungle":    "jungle_sapling",
     "acacia":    "acacia_sapling",
     "cherry":    "cherry_sapling",
-    # "dark_oak" — отдельная логика 2x2 ниже
+    # "dark_oak" — требует 2x2, ниже отдельная функция
 }
 GOOD_SOILS = {"moss_block", "dirt", "podzol", "coarse_dirt", "rooted_dirt", "coarse_dirt"}
 
@@ -2752,7 +2752,7 @@ def ensure_soil(x, y, z):
         set_block(x, y, z, Block("minecraft", "dirt"))
 
 def place_dark_oak_cluster(x, y, z):
-    """Тёмный дуб требует 2x2 саженцев."""
+    """Тёмный дуб требует 2x2 саженцев — ставим сразу квадрат."""
     coords = [(x, z), (x+1, z), (x, z+1), (x+1, z+1)]
     for (xx, zz) in coords:
         ensure_chunk(level, xx, zz, DIMENSION)
@@ -2763,7 +2763,7 @@ def place_dark_oak_cluster(x, y, z):
     return True
 
 def place_sapling(x, y, z, tree_type):
-    """Ставим корректный саженец для типа дерева (или кластер для dark_oak)."""
+    """Ставим корректный саженец (или 2x2 для dark_oak). Не меняет шанс посадки — только тип."""
     ensure_chunk(level, x, z, DIMENSION)
     y = terrain_y.get((x, z), Y_BASE)
     try:
@@ -2782,8 +2782,8 @@ def place_sapling(x, y, z, tree_type):
     if tree_type == "dark_oak":
         place_dark_oak_cluster(x, y, z)
         return
-    if tree_type == "mangrove":
-        # мангры требуют особых условий — пропускаем
+    # мангры/кактусы/бамбук — не сажаем как саженцы в этом проходе
+    if tree_type in {"mangrove", "cactus", "bamboo"}:
         return
 
     sap = SAPLING_BY_TREE.get(tree_type, "oak_sapling")
@@ -2791,7 +2791,7 @@ def place_sapling(x, y, z, tree_type):
     set_block(x, y+1, z, Block("minecraft", sap))
 
 
-# --- Служебные наборы по зонам OSM для точного таргетинга ---
+# --- Служебные наборы по зонам OSM для таргетинга ---
 forest_zone_keys = {
     "natural=wood", "landuse=forest",
     "natural=wood+leaf_type=needleleaved",
@@ -2800,7 +2800,7 @@ forest_zone_keys = {
 }
 park_zone_keys = {"leisure=park"}
 
-# НОВОЕ: «запретные» зоны для любой растительности
+# «запретные» зоны для любой растительности (как у тебя было)
 sports_zone_keys = {
     "leisure=pitch", "leisure=sports_centre", "leisure=stadium",
     "leisure=golf_course", "leisure=track", "leisure=playground"
@@ -2810,28 +2810,108 @@ agri_zone_keys = {
     "landuse=plant_nursery", "landuse=greenhouse_horticulture"
 }
 
+# --- Пулы пород ---
+CONIFERS   = ["spruce"]  # хвойные в Minecraft фактически — spruce
+DECIDUOUS  = ["oak", "birch", "cherry", "acacia", "dark_oak", "jungle"]  # лиственные + тропические
+ALL_TREES  = CONIFERS + DECIDUOUS
+
+# === ГЛОБАЛЬНОЕ ОГРАНИЧЕНИЕ ВИШНИ (2%) ===
+CHERRY_GLOBAL_PROB = 0.02
+
+def choose_from_pool_with_cherry_cap(pool: list[str]) -> str:
+    """
+    Выбор породы из заданного пула с жёстким ограничением:
+    'cherry' выпадает не чаще 2% независимо от пула/зоны.
+    """
+    if "cherry" not in pool:
+        return random.choice(pool)
+    # с шансом 2% — cherry; иначе равномерно из пула без cherry
+    if random.random() < CHERRY_GLOBAL_PROB:
+        return "cherry"
+    non_cherry = [t for t in pool if t != "cherry"]
+    # защита от пустого пула (на всякий случай)
+    return random.choice(non_cherry) if non_cherry else "cherry"
+
+def _weighted_pool_pick(main_pool, alt_pool, p_main=0.8) -> str:
+    """Выбор пула (основной/альтернативный) и затем породы из него с cherry-cap."""
+    pool = main_pool if random.random() < p_main else alt_pool
+    return choose_from_pool_with_cherry_cap(pool)
+
+def choose_tree_for_zone_key(zone_key: str) -> str:
+    """
+    Возвращает тип дерева с нужным приоритетом (и глобальным cherry=2%):
+    - leaf_type=needleleaved  → 80% хвойные, 20% лиственные
+    - leaf_type=broadleaved  → 80% лиственные, 20% хвойные
+    - leaf_type=mixed        → равные шансы для всех
+    - natural=jungle         → 80% jungle, 20% остальные
+    - natural=swamp          → 60% oak/birch, 40% всё остальное (без mangrove)
+    - natural=savanna        → 80% acacia, 20% остальные
+    - leisure=park           → мягкий уклон в лиственные (60/40)
+    иначе                    → равномерно из ALL_TREES
+    """
+    if zone_key in {"natural=wood+leaf_type=needleleaved", "landuse=forest+leaf_type=needleleaved"}:
+        return _weighted_pool_pick(CONIFERS, DECIDUOUS, 0.8)
+
+    if zone_key in {"natural=wood+leaf_type=broadleaved", "landuse=forest+leaf_type=broadleaved"}:
+        return _weighted_pool_pick(DECIDUOUS, CONIFERS, 0.8)
+
+    if zone_key in {"natural=wood+leaf_type=mixed", "landuse=forest+leaf_type=mixed"}:
+        return choose_from_pool_with_cherry_cap(ALL_TREES)
+
+    if zone_key == "natural=jungle":
+        # 80% — jungle, 20% — всё прочее (с учётом cherry-cap)
+        if random.random() < 0.8:
+            return choose_from_pool_with_cherry_cap(["jungle"])
+        else:
+            return choose_from_pool_with_cherry_cap([t for t in ALL_TREES if t != "jungle"])
+
+    if zone_key == "natural=swamp":
+        swamp_main = ["oak", "birch"]
+        swamp_alt  = [t for t in ALL_TREES if t not in {"mangrove"}]
+        return _weighted_pool_pick(swamp_main, swamp_alt, 0.6)
+
+    if zone_key == "natural=savanna":
+        if random.random() < 0.8:
+            return choose_from_pool_with_cherry_cap(["acacia"])
+        else:
+            return choose_from_pool_with_cherry_cap([t for t in ALL_TREES if t != "acacia"])
+
+    if zone_key == "leisure=park":
+        return _weighted_pool_pick(DECIDUOUS, CONIFERS, 0.6)
+
+    # по умолчанию — равномерно
+    return choose_from_pool_with_cherry_cap(ALL_TREES)
+
+
+# --- собираем карты зон для быстрого доступа по клетке (нужно, чтобы "понимать" тип листвы в общих проходах) ---
 park_blocks = set()
 forest_blocks = set()
 restricted_flora_blocks = set()
+zone_key_at: dict[tuple[int, int], str] = {}
 
 for polygon, key in zone_polygons:
     min_xx, min_zz, max_xx, max_zz = map(int, map(round, polygon.bounds))
+    # парки
     if key in park_zone_keys:
         for x in range(min_xx, max_xx+1):
             for z in range(min_zz, max_zz+1):
                 if polygon.contains(Point(x, z)):
                     park_blocks.add((x, z))
-    if key in forest_zone_keys:
+                    zone_key_at[(x, z)] = key
+    # леса
+    if key in forest_zone_keys or key.startswith("natural=wood+leaf_type=") or key.startswith("landuse=forest+leaf_type="):
         for x in range(min_xx, max_xx+1):
             for z in range(min_zz, max_zz+1):
                 if polygon.contains(Point(x, z)):
                     forest_blocks.add((x, z))
-    # НОВОЕ: копим все клетки спорт/игровых/сельхоз зон
+                    zone_key_at[(x, z)] = key
+    # запретные зоны
     if key in sports_zone_keys or key in agri_zone_keys:
         for x in range(min_xx, max_xx+1):
             for z in range(min_zz, max_zz+1):
                 if polygon.contains(Point(x, z)):
                     restricted_flora_blocks.add((x, z))
+                    zone_key_at[(x, z)] = key
 
 
 print("🌳 Генерация растительности и декора...")
@@ -2844,7 +2924,6 @@ for polygon, key in zone_polygons:
         for z in range(min_z, max_z+1):
             if not polygon.contains(Point(x, z)):
                 continue
-            # НОВОЕ: в запретных зонах ничего не ставим
             if (x, z) in restricted_flora_blocks:
                 continue
 
@@ -2868,28 +2947,28 @@ for polygon, key in zone_polygons:
                         y = terrain_y.get((x, z), Y_BASE)
                         set_plant(nx, y+1, nz, "sugar_cane")
 
-    # вместо готовых деревьев — сажаем САЖЕНЦЫ по сетке 3×3 с прежними шансами
-    tree_types = ZONE_TREES.get(key)
-    if tree_types:
-        for tx in range(min_x, max_x+1, 3):   # плотная сетка
-            for tz in range(min_z, max_z+1, 3):
-                if not polygon.contains(Point(tx, tz)):
-                    continue
-                if (tx, tz) in restricted_flora_blocks:
-                    continue
-                ttype = random.choice(tree_types)
-                if ttype == "cherry":
-                    if random.random() < 0.07:
-                        y = terrain_y.get((tx, tz), Y_BASE)
-                        place_sapling(tx, y, tz, ttype)
-                else:
-                    if random.random() < 0.45:
-                        y = terrain_y.get((tx, tz), Y_BASE)
-                        place_sapling(tx, y, tz, ttype)
+    # Сажаем САЖЕНЦЫ по сетке 3×3 — сохраняем твои шансы посадки:
+    # - если выбран cherry → шанс посадки 0.07
+    # - иначе → шанс 0.45
+    # Тип дерева выбираем «умно» по зоне, с cherry-cap=2%.
+    for tx in range(min_x, max_x+1, 3):
+        for tz in range(min_z, max_z+1, 3):
+            if not polygon.contains(Point(tx, tz)):
+                continue
+            if (tx, tz) in restricted_flora_blocks:
+                continue
+            ttype = choose_tree_for_zone_key(key)
+            y = terrain_y.get((tx, tz), Y_BASE)
+            if ttype == "cherry":
+                if random.random() < 0.07:
+                    place_sapling(tx, y, tz, ttype)
+            else:
+                if random.random() < 0.45:
+                    place_sapling(tx, y, tz, ttype)
+
 
 print("🌱 Сажаем низкую/высокую траву и цветы...")
 for (x, z) in park_forest_blocks:
-    # НОВОЕ: не сажаем, если точка в запретной зоне
     if (x, z) in restricted_flora_blocks:
         continue
     y = terrain_y.get((x, z), Y_BASE)
@@ -2919,7 +2998,8 @@ for (x, z) in park_forest_blocks:
         elif r < 0.22:
             set_plant(x, y+1, z, "sweet_berry_bush")
 
-print("🌳 Сажаем саженцы в парках и лесах")
+
+print("🌳 Сажаем саженцы в парках и лесах (шанс прежний, выбор с cherry-cap)")
 for (x, z) in park_forest_blocks:
     if (x, z) in restricted_flora_blocks:
         continue
@@ -2931,10 +3011,16 @@ for (x, z) in park_forest_blocks:
         continue
     if (x, z) in building_blocks or (x, z) in road_blocks or (x, z) in rail_blocks or (x, z) in beach_blocks:
         continue
-    if random.random() < 0.05:  # плотность
-        place_sapling(x, y, z, random.choice(["oak", "birch", "spruce", "acacia", "dark_oak"]))
+    if random.random() < 0.05:  # плотность — как у тебя
+        key_here = zone_key_at.get((x, z))
+        if key_here:
+            ttype = choose_tree_for_zone_key(key_here)
+        else:
+            ttype = choose_from_pool_with_cherry_cap(ALL_TREES)
+        place_sapling(x, y, z, ttype)
 
-print("🌲 Сажаем саженцы в жилых районах")
+
+print("🌲 Саженцы в жилых районах (шанс прежний, мягкий уклон к лиственным)")
 for (x, z) in residential_blocks:
     if (x, z) in park_forest_blocks:
         continue
@@ -2948,10 +3034,13 @@ for (x, z) in residential_blocks:
         continue
     if (x, z) in building_blocks or (x, z) in road_blocks or (x, z) in rail_blocks or (x, z) in beach_blocks:
         continue
-    if random.random() < 0.02:
-        place_sapling(x, y, z, random.choice(["oak", "birch", "acacia"]))
+    if random.random() < 0.02:  # как было
+        # 70% берём лиственные, 30% хвойные — но с cherry-cap
+        ttype = _weighted_pool_pick(DECIDUOUS, CONIFERS, 0.7)
+        place_sapling(x, y, z, ttype)
 
-print("🌿 Сажаем саженцы вне всех зон")
+
+print("🌿 Саженцы вне всех зон (шанс прежний, равномерный выбор с cherry-cap)")
 for (x, z) in empty_blocks:
     if (x, z) in restricted_flora_blocks:
         continue
@@ -2963,12 +3052,13 @@ for (x, z) in empty_blocks:
         continue
     if (x, z) in building_blocks or (x, z) in road_blocks or (x, z) in rail_blocks or (x, z) in beach_blocks:
         continue
-    if random.random() < 0.02:
-        place_sapling(x, y, z, random.choice(["oak", "birch"]))
+    if random.random() < 0.02:  # как было
+        ttype = choose_from_pool_with_cherry_cap(ALL_TREES)
+        place_sapling(x, y, z, ttype)
 
 
 def can_place_flora_here(x: int, z: int) -> tuple[bool, int]:
-    """Единая проверка места посадки для травы/кустов/цветов."""
+    """Единая проверка места посадки для травы/кустов/цветов (без изменений)."""
     if (x, z) in restricted_flora_blocks:
         return (False, terrain_y.get((x, z), Y_BASE))
     y = terrain_y.get((x, z), Y_BASE)
@@ -2986,7 +3076,7 @@ def can_place_flora_here(x: int, z: int) -> tuple[bool, int]:
         return (False, y)
     return (True, y)
 
-# 1) ЛЕСА: с частотой 0.02 — КУСТЫ/ВЫСОКАЯ ТРАВА (без цветов)
+# 1) ЛЕСА: 0.02 — кусты/высокая трава (без цветов)
 print("🌲 Доп. декор в лесах (0.02: кусты/высокая трава)")
 for (x, z) in forest_blocks:
     if (x, z) in restricted_flora_blocks:
@@ -2998,7 +3088,7 @@ for (x, z) in forest_blocks:
         plant = random.choice(["sweet_berry_bush", "tall_grass", "large_fern"])
         set_plant(x, y+1, z, plant)
 
-# 2) ВЕЗДЕ, КРОМЕ ПАРКОВ и ЗАПРЕТНЫХ ЗОН: 0.20 — КУСТЫ/ВЫСОКАЯ ТРАВА (без цветов)
+# 2) ВЕЗДЕ, КРОМЕ ПАРКОВ и ЗАПРЕТНЫХ ЗОН: 0.20 — высокая трава и кусты
 print("🌾 Вне парков и запретных зон (0.20): высокая трава и кустики")
 for x in range(global_min_x, global_max_x+1):
     for z in range(global_min_z, global_max_z+1):
@@ -3011,7 +3101,7 @@ for x in range(global_min_x, global_max_x+1):
             plant = random.choice(["tall_grass", "large_fern", "sweet_berry_bush"])
             set_plant(x, y+1, z, plant)
 
-# 3) ВЕЗДЕ, КРОМЕ ПАРКОВ и ЗАПРЕТНЫХ ЗОН: 0.008 — ЦВЕТЫ (отдельным проходом)
+# 3) ВЕЗДЕ, КРОМЕ ПАРКОВ и ЗАПРЕТНЫХ ЗОН: 0.008 — цветы
 print("🌼 Вне парков и запретных зон (0.008): цветочки")
 for x in range(global_min_x, global_max_x+1):
     for z in range(global_min_z, global_max_z+1):
