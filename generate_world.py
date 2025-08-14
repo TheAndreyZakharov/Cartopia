@@ -1902,55 +1902,262 @@ for poly in quarry_polygons:
 
 print("🚧 Генерация заборов...")
 
-# --- Настройки материалов ---
-FENCE_MATERIAL_DEFAULT = Block(namespace="minecraft", base_name="oak_fence")              # обычный забор
-FENCE_MATERIAL_CEMETERY = Block(namespace="minecraft", base_name="dark_oak_fence")        # кладбища
-FENCE_MATERIAL_SECURE = Block(namespace="minecraft", base_name="stone_brick_wall")        # охраняемые / важные объекты
+# --- Материалы ---
+FENCE_MATERIAL_DEFAULT   = Block("minecraft", "oak_fence")            # обычный деревянный
+FENCE_MATERIAL_CEMETERY  = Block("minecraft", "dark_oak_fence")       # кладбища
+FENCE_MATERIAL_SECURE    = Block("minecraft", "stone_brick_wall")     # каменный забор
 
-# --- Категории зон ---
-SECURE_ZONE_KEYWORDS = [
-    "parking", "prison", "school", "kindergarten", "hospital", "clinic",
-    "nuclear", "hydroelectric", "power_plant", "thermal_power_plant",
-    "military", "government"
-]
-CEMETERY_KEYWORDS = ["cemetery", "graveyard"]
+# --- Наборы покрытий дорог/рельс для избегания установки прямо на них ---
+ROADLIKE_SURFACES = {v[0] for v in ROAD_MATERIALS.values()} | {"rail", "railway"}
+WATER_NAMES = {"water"}
 
-# --- Функция определения материала забора по ключу зоны ---
-def get_fence_material_for_zone(key: str) -> Block:
-    key_lower = key.lower()
-    if any(word in key_lower for word in CEMETERY_KEYWORDS):
-        return FENCE_MATERIAL_CEMETERY
-    if any(word in key_lower for word in SECURE_ZONE_KEYWORDS):
-        return FENCE_MATERIAL_SECURE
-    return FENCE_MATERIAL_DEFAULT
+# --- Помощники по геометрии ---
+from shapely.geometry import Polygon, MultiPolygon, LineString, Point
+from shapely.ops import polygonize
 
-# --- Определение: это ограждаемая зона или нет ---
-def is_fenced_zone(key: str) -> bool:
-    # FENCED_ZONE_PREFIXES уже есть в твоём коде — используется как основной фильтр
-    return any(key.startswith(prefix) for prefix in FENCED_ZONE_PREFIXES)
+def _geom_to_polygons(geom) -> list[Polygon]:
+    """Нормализация в список Polygon (поддержка Polygon/MultiPolygon)."""
+    if geom is None or geom.is_empty:
+        return []
+    if isinstance(geom, Polygon):
+        return [geom]
+    if isinstance(geom, MultiPolygon):
+        return [p for p in geom.geoms if isinstance(p, Polygon)]
+    return []
 
-# --- Сбор точек для заборов ---
-fence_segments = []  # список кортежей (x, z, материал)
-
-for polygon, key in zone_polygons:
-    if not is_fenced_zone(key):
-        continue
-
-    fence_material = get_fence_material_for_zone(key)
-
+def _add_fence_along_polygon(polygon: Polygon, fence_block: Block):
+    """Ставит забор по внешнему контуру полигона с учётом высоты и покрытий (сложные формы поддержаны)."""
     coords = [(int(round(x)), int(round(z))) for (x, z) in polygon.exterior.coords]
     for i in range(len(coords) - 1):
         x0, z0 = coords[i]
         x1, z1 = coords[i + 1]
         for x, z in bresenham_line(x0, z0, x1, z1):
-            # Не ставим забор прямо на дорогах и рельсах
-            if (x, z) not in road_blocks and (x, z) not in rail_blocks:
-                fence_segments.append((x, z, fence_material))
+            y = terrain_y.get((x, z), Y_BASE)
+            surf_now = actual_surface_material_map.get((x, z))
+            if surf_now in ROADLIKE_SURFACES:
+                continue
+            if surface_material_map.get((x, z)) in WATER_NAMES or surf_now in WATER_NAMES:
+                continue
+            set_block(x, y + 1, z, fence_block)
 
-# --- Установка заборов ---
-for x, z, fence_material in fence_segments:
-    y = terrain_y.get((x, z), Y_BASE)
-    set_block(x, y + 1, z, fence_material)
+def _add_fence_along_polyline(coords_list, fence_block: Block):
+    """Ставит забор вдоль линейного way (barrier=*), без требования замыкания."""
+    coords = [(int(round(x)), int(round(z))) for (x, z) in coords_list if x is not None and z is not None]
+    for i in range(1, len(coords)):
+        x0, z0 = coords[i - 1]
+        x1, z1 = coords[i]
+        for x, z in bresenham_line(x0, z0, x1, z1):
+            y = terrain_y.get((x, z), Y_BASE)
+            surf_now = actual_surface_material_map.get((x, z))
+            if surf_now in ROADLIKE_SURFACES:
+                continue
+            if surface_material_map.get((x, z)) in WATER_NAMES or surf_now in WATER_NAMES:
+                continue
+            set_block(x, y + 1, z, fence_block)
+
+# --- Классификация зон для ограждения ---
+GOV_AMENITIES = {"townhall", "courthouse", "embassy", "public_building"}
+GOV_BUILDINGS = {"public", "government", "civic"}
+GOV_OFFICES   = {"government", "administrative", "public_service"}
+
+ENERGY_POWER  = {"plant", "substation", "generator", "station", "transformer", "sub_station"}
+ENERGY_INDUSTRIAL = {"power"}  # industrial=power
+ENERGY_SOURCES = {"nuclear", "thermal", "coal", "gas", "hydro", "wind", "solar", "biomass", "geothermal"}
+
+SEC_SERVICES_AMEN = {"police", "fire_station", "prison"}
+
+EDU_HEALTH_AMEN = {"school", "kindergarten", "college", "university", "hospital", "clinic"}
+
+LEISURE_FENCED = {"park", "stadium", "pitch", "sports_centre", "playground", "garden"}
+
+# ▶️ парковки: любые, кроме велопарковок
+PARKING_AMEN      = {"parking", "parking_entrance", "parking_space", "motorcycle_parking"}
+PARKING_BUILDINGS = {"parking"}                            # building=parking
+BICYCLE_PARKING_AMEN = {"bicycle_parking"}                 # исключаем из «парковок»
+
+CEMETERY_KEYS  = {("landuse", "cemetery"), ("amenity", "grave_yard")}
+
+# --- Аллотменты (дачные участки) — соберём полигоны для проверки «заборчиков внутри» ---
+allotments_polygons: list[Polygon] = []
+for feat in features:
+    if feat.get("type") != "way":
+        continue
+    tags = feat.get("tags", {}) or {}
+    if tags.get("landuse") != "allotments":
+        continue
+    node_ids = feat.get("nodes", []) or []
+    nodes = [node_coords.get(nid) for nid in node_ids if nid in node_coords]
+    if len(nodes) >= 3 and nodes[0] == nodes[-1]:
+        poly = Polygon(nodes)
+        if not poly.is_valid or poly.is_empty:
+            poly = poly.buffer(0)
+        if poly.is_valid and not poly.is_empty:
+            allotments_polygons.append(poly)
+
+# --- Функции классификации ---
+def is_government(tags: dict) -> bool:
+    a, b, o = tags.get("amenity"), tags.get("building"), tags.get("office")
+    if a in GOV_AMENITIES: return True
+    if b in GOV_BUILDINGS: return True
+    if o in GOV_OFFICES:   return True
+    if tags.get("government"): return True
+    if tags.get("operator:type") in {"government", "public"}: return True
+    return False
+
+def is_energy(tags: dict) -> bool:
+    if tags.get("power") in ENERGY_POWER: return True
+    if tags.get("industrial") in ENERGY_INDUSTRIAL: return True
+    if tags.get("generator:source") in ENERGY_SOURCES: return True
+    name = (tags.get("name") or "").lower()
+    if any(k in name for k in ["аэс", "гэс", "гэc", "тэц", "теплоэлектро", "nuclear", "hydro", "thermal", "power plant"]):
+        return True
+    return False
+
+def is_military(tags: dict) -> bool:
+    return tags.get("landuse") == "military" or bool(tags.get("military"))
+
+def is_sec_services(tags: dict) -> bool:
+    return tags.get("amenity") in SEC_SERVICES_AMEN
+
+def is_edu_health(tags: dict) -> bool:
+    return tags.get("amenity") in EDU_HEALTH_AMEN
+
+def is_parking(tags: dict) -> bool:
+    # любые парковки, кроме вело
+    amen = tags.get("amenity")
+    if amen in BICYCLE_PARKING_AMEN:
+        return False
+    return (amen in PARKING_AMEN) or (tags.get("building") in PARKING_BUILDINGS) or ("parking" in (tags.get("amenity") or "")) or ("parking" in (tags.get("name") or "").lower())
+
+def is_leisure_fenced(tags: dict) -> bool:
+    return tags.get("leisure") in LEISURE_FENCED
+
+def is_cemetery(tags: dict) -> bool:
+    return any(tags.get(k) == v for k, v in CEMETERY_KEYS)
+
+def should_fence(tags: dict) -> bool:
+    return (
+        is_government(tags) or
+        is_energy(tags) or
+        is_military(tags) or
+        is_sec_services(tags) or
+        is_edu_health(tags) or
+        is_parking(tags) or
+        is_leisure_fenced(tags) or
+        is_cemetery(tags)
+    )
+
+def fence_material_for(tags: dict) -> Block:
+    # кладбища — тёмный дуб
+    if is_cemetery(tags):
+        return FENCE_MATERIAL_CEMETERY
+    # каменный: гос/энергетика/военные/силовые/парковки (кроме вело)
+    if is_government(tags) or is_energy(tags) or is_military(tags) or is_sec_services(tags) or is_parking(tags):
+        return FENCE_MATERIAL_SECURE
+    # остальное — деревом
+    return FENCE_MATERIAL_DEFAULT
+
+# --- 1) Замкнутые way-полигоны (включая любые «зоны» парковок) ---
+for feat in features:
+    if feat.get("type") != "way":
+        continue
+    tags = feat.get("tags", {}) or {}
+    if not should_fence(tags):
+        continue
+    node_ids = feat.get("nodes", []) or []
+    nodes = [node_coords.get(nid) for nid in node_ids if nid in node_coords]
+    if len(nodes) < 3:
+        continue
+    if nodes[0] != nodes[-1]:
+        continue
+    poly = Polygon(nodes)
+    if not poly.is_valid or poly.is_empty:
+        poly = poly.buffer(0)
+    if not poly.is_valid or poly.is_empty:
+        continue
+    mat = fence_material_for(tags)
+    for p in _geom_to_polygons(poly):
+        _add_fence_along_polygon(p, mat)
+
+# --- 2) Мультиполигоны (relation type=multipolygon) — ограждаем наружные контуры ---
+for rel in features:
+    if rel.get("type") != "relation":
+        continue
+    rtags = rel.get("tags", {}) or {}
+    if rtags.get("type") != "multipolygon":
+        continue
+    if not should_fence(rtags):
+        continue
+
+    outer_lines = []
+    for member in rel.get("members", []):
+        if member.get("type") == "way" and member.get("role") in {"outer", "", None}:
+            way_id = member.get("ref")
+            way = next((w for w in features if w.get("type") == "way" and w.get("id") == way_id), None)
+            if not way:
+                continue
+            coords = [node_coords.get(nid) for nid in way.get("nodes", []) if nid in node_coords]
+            coords = [c for c in coords if c is not None]
+            if len(coords) >= 2:
+                outer_lines.append(LineString(coords))
+
+    polygons = list(polygonize(outer_lines))
+    if not polygons:
+        # fallback: если первый outer замкнут — используем как полигон
+        for member in rel.get("members", []):
+            if member.get("type") == "way" and member.get("role") in {"outer", "", None}:
+                way_id = member.get("ref")
+                way = next((w for w in features if w.get("type") == "way" and w.get("id") == way_id), None)
+                if not way:
+                    continue
+                coords = [node_coords.get(nid) for nid in way.get("nodes", []) if nid in node_coords]
+                if coords and coords[0] == coords[-1] and len(coords) >= 3:
+                    p = Polygon(coords)
+                    if p.is_valid and not p.is_empty:
+                        polygons = [p]
+                        break
+
+    if not polygons:
+        continue
+
+    mat = fence_material_for(rtags)
+    for p in polygons:
+        for poly in _geom_to_polygons(p):
+            _add_fence_along_polygon(poly, mat)
+
+# --- 3) Линейные заборы/ограждения по OSM (barrier=*) ---
+#    Любой barrier=* рисуем каменным, КРОМЕ тех, что лежат внутри landuse=allotments — там деревянный «дачный» забор.
+BARRIER_KEYS_STONE = {
+    "fence", "wall", "retaining_wall", "city_wall", "guard_rail", "block", "jersey_barrier", "bollard"
+}
+# всё остальное barrier тоже считаем ограждением; материал определим по местоположению
+for feat in features:
+    if feat.get("type") != "way":
+        continue
+    tags = feat.get("tags", {}) or {}
+    barrier = tags.get("barrier")
+    if not barrier:
+        continue
+    node_ids = feat.get("nodes", []) or []
+    coords = [node_coords.get(nid) for nid in node_ids if nid in node_coords]
+    coords = [c for c in coords if c is not None]
+    if len(coords) < 2:
+        continue
+
+    # определим материал: внутри аллотментов — дерево, вне — камень
+    # используем середину линии как репрезентативную точку
+    mid_idx = len(coords) // 2
+    mid_pt = Point(coords[mid_idx])
+    inside_allotments = any(poly.contains(mid_pt) for poly in allotments_polygons)
+
+    if inside_allotments:
+        fence_block = FENCE_MATERIAL_DEFAULT
+    else:
+        fence_block = FENCE_MATERIAL_SECURE  # требование: явно отмеченные барьеры — каменные
+
+    _add_fence_along_polyline(coords, fence_block)
+
+
 
 
 # --- Инфраструктура ---
