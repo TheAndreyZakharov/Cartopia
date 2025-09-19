@@ -1,0 +1,41 @@
+{
+  "center": {
+    "lat": 74.1160468394894,
+    "lng": -42.552036930657124
+  },
+  "sizeMeters": 200,
+  "bbox": {
+    "south": 74.1151485283144,
+    "north": 74.11694515066439,
+    "west": -42.55531915382147,
+    "east": -42.548754707492776
+  },
+  "overpass_status": "ok",
+  "features": {
+    "version": 0.6,
+    "generator": "Overpass API 0.7.62.8 e802775f",
+    "osm3s": {
+      "timestamp_osm_base": "2025-09-18T23:07:14Z",
+      "copyright": "The data included in this document is from www.openstreetmap.org. The data is made available under ODbL."
+    },
+    "elements": []
+  },
+  "olm": {
+    "mode": "file"
+  },
+  "tuning": {
+    "surfaceBlurIters": 15,
+    "surfaceBlurMinMajority": 4
+  },
+  "landcoverBounds": {
+    "west": -42.55531915382147,
+    "east": -42.548754707492776,
+    "south": 74.1151485283144,
+    "north": 74.11694515066439
+  },
+  "paths": {
+    "dem": "/Users/andrey/Documents/projects/Cartopia/area-packs/area_20250918_230836_lat74.11605_lon-42.55204/dem.tif",
+    "landcover": "/Users/andrey/Documents/projects/Cartopia/area-packs/area_20250918_230836_lat74.11605_lon-42.55204/olm_landcover.tif",
+    "packDir": "/Users/andrey/Documents/projects/Cartopia/area-packs/area_20250918_230836_lat74.11605_lon-42.55204"
+  }
+}

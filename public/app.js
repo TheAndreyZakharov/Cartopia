@@ -1,0 +1,508 @@
+/* ===================== Константы карты/геометрии ===================== */
+const SOUTH_LIMIT = -60;
+const NORTH_LIMIT = 85.05112878;
+const HEADER_HEIGHT = 72;
+const PAD_TOP_FROM_HEADER = 30;
+const DEFAULT_OFFSET_TOP = HEADER_HEIGHT + PAD_TOP_FROM_HEADER;
+const DEFAULT_OFFSET_RIGHT = 30;
+
+/* ===================== Настройки Overpass/Nominatim ===================== */
+const OVERPASS_ENDPOINTS = [
+  "https://overpass-api.de/api/interpreter",
+  "https://lz4.overpass-api.de/api/interpreter",
+  "https://overpass.kumi.systems/api/interpreter",
+  "https://overpass.openstreetmap.ru/api/interpreter",
+  "https://overpass.nchc.org.tw/api/interpreter"
+];
+
+// Таймаут одного запроса, мс
+const OVERPASS_TIMEOUT_MS = 120000;
+
+/* ===================== Утилиты ===================== */
+function clampLat(lat){ return Math.min(Math.max(lat, SOUTH_LIMIT), NORTH_LIMIT); }
+function setStatus(text){ statusLine.textContent = text || ""; }
+
+/* ===================== Инициализация карты ===================== */
+const map = L.map('map', {
+  attributionControl: false,
+  worldCopyJump: true,
+  maxBounds: L.latLngBounds([SOUTH_LIMIT, -540],[NORTH_LIMIT, 540]),
+  maxBoundsViscosity: 1.0,
+  minZoom: 2
+}).setView([35, 0], 2);
+
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+  maxZoom: 19,
+  minZoom: 2,
+  bounds: L.latLngBounds([SOUTH_LIMIT, -180],[NORTH_LIMIT, 180])
+}).addTo(map);
+
+setTimeout(() => {
+  document.querySelectorAll('.leaflet-bottom.leaflet-right, .leaflet-control-attribution, .leaflet-control-container').forEach(el => el.remove());
+}, 500);
+
+/* ===================== DOM ===================== */
+const box = document.getElementById('selectionBox');
+const controls = document.getElementById('controls');
+const collapseTab = document.getElementById('collapseTab');
+const dragTab = document.getElementById('dragTab');
+const toggleBtn = document.getElementById('toggleBtn');
+const sizeInput = document.getElementById('sizeInput');
+const confirmBtn = document.getElementById('confirmBtn');
+const searchInput = document.getElementById('searchInput');
+const searchBtn = document.getElementById('searchBtn');
+const areaInfo = document.getElementById('areaInfo');
+const statusLine = document.getElementById('statusLine');
+
+
+// Размеры итогового GeoTIFF (single-band) под твой bbox
+const OLM_TIFF_WIDTH   = 1024;   // при больших окнах можно 2048–4096
+const OLM_TIFF_HEIGHT  = 1024;
+
+/* ===================== Состояния ===================== */
+let selecting = false;
+let selectionSize = parseInt(sizeInput.value, 10);
+let centerLatLng = null;
+let centerSquare = null;
+let userMoved = false;
+
+/* ===================== DRAG панели ===================== */
+(function enableControlsDrag() {
+  let dragging = false;
+  let startX = 0, startY = 0;
+  let startLeft = 0, startTop = 0;
+
+  function clamp(v, a, b){ return Math.min(Math.max(v, a), b); }
+
+  function onPointerDown(clientX, clientY) {
+    if (controls.classList.contains('collapsed')) return;
+    dragging = true;
+    userMoved = true;
+
+    const rect = controls.getBoundingClientRect();
+    controls.style.position = 'fixed';
+    controls.style.left = rect.left + 'px';
+    controls.style.top  = rect.top  + 'px';
+    controls.style.right = 'auto';
+    controls.style.transform = 'translate(0,0)';
+
+    startX = clientX;
+    startY = clientY;
+    startLeft = rect.left;
+    startTop  = rect.top;
+
+    document.addEventListener('mousemove', onMouseMove, { passive: false });
+    document.addEventListener('mouseup', onMouseUp, { passive: false });
+    document.addEventListener('touchmove', onTouchMove, { passive: false });
+    document.addEventListener('touchend', onTouchEnd, { passive: false });
+  }
+
+  function onMouseDown(e){ e.preventDefault(); onPointerDown(e.clientX, e.clientY); }
+  function onTouchStart(e){
+    if (!e.touches || e.touches.length === 0) return;
+    const t = e.touches[0]; e.preventDefault(); onPointerDown(t.clientX, t.clientY);
+  }
+
+  function applyMove(clientX, clientY){
+    const dx = clientX - startX;
+    const dy = clientY - startY;
+
+    let left = startLeft + dx;
+    let top  = startTop  + dy;
+
+    const pad = 8;
+    const maxLeft = window.innerWidth - controls.offsetWidth - pad;
+    const maxTop  = window.innerHeight - controls.offsetHeight - pad;
+
+    left = clamp(left, pad, Math.max(pad, maxLeft));
+    top  = clamp(top, HEADER_HEIGHT + pad, Math.max(HEADER_HEIGHT + pad, maxTop));
+
+    controls.style.left = left + 'px';
+    controls.style.top  = top  + 'px';
+  }
+
+  function onMouseMove(e){ if (!dragging) return; e.preventDefault(); applyMove(e.clientX, e.clientY); }
+  function onTouchMove(e){
+    if (!dragging || !e.touches || e.touches.length === 0) return;
+    e.preventDefault(); const t = e.touches[0]; applyMove(t.clientX, t.clientY);
+  }
+
+  function stopDrag(){
+    dragging = false;
+    document.removeEventListener('mousemove', onMouseMove);
+    document.removeEventListener('mouseup', onMouseUp);
+    document.removeEventListener('touchmove', onTouchMove);
+    document.removeEventListener('touchend', onTouchEnd);
+  }
+  function onMouseUp(){ stopDrag(); }
+  function onTouchEnd(){ stopDrag(); }
+
+  dragTab.addEventListener('mousedown', onMouseDown, { passive: false });
+  dragTab.addEventListener('touchstart', onTouchStart, { passive: false });
+})();
+
+/* ===================== COLLAPSE панели ===================== */
+(function enableCollapse(){
+  const pad = 12;
+  const tabVisible = 32;
+  let baseLeft = 0, baseTop = 0;
+
+  function setTabIcon() {
+    if (controls.classList.contains('collapsed')) { collapseTab.textContent = '‹'; collapseTab.title = 'Show'; }
+    else { collapseTab.textContent = '›'; collapseTab.title = 'Hide'; }
+  }
+  function getDefaultLeft() { return window.innerWidth - controls.offsetWidth - DEFAULT_OFFSET_RIGHT; }
+  function getDefaultTop()  { return DEFAULT_OFFSET_TOP; }
+
+  function syncCollapsedPosition() {
+    if (!controls.classList.contains('collapsed')) return;
+    const targetLeft = window.innerWidth - pad - tabVisible;
+    const targetTop  = DEFAULT_OFFSET_TOP;
+    const dx = targetLeft - baseLeft;
+    const dy = targetTop  - baseTop;
+    controls.style.transform = `translate(${dx}px, ${dy}px)`;
+  }
+
+  function collapse() {
+    if (controls.classList.contains('collapsed')) return;
+    const rect = controls.getBoundingClientRect();
+    baseLeft = rect.left;
+    baseTop  = rect.top;
+
+    controls.style.position = 'fixed';
+    controls.style.left = baseLeft + 'px';
+    controls.style.top  = baseTop  + 'px';
+    controls.style.right = 'auto';
+    controls.style.transform = 'translate(0,0)';
+
+    controls.classList.add('collapsed');
+    setTabIcon();
+    requestAnimationFrame(syncCollapsedPosition);
+  }
+
+  function expand() {
+    if (!controls.classList.contains('collapsed')) return;
+
+    const defLeft = getDefaultLeft();
+    const defTop  = getDefaultTop();
+
+    controls.style.left = defLeft + 'px';
+    controls.style.top  = defTop  + 'px';
+    controls.style.right = 'auto';
+
+    const cur = controls.getBoundingClientRect();
+    const backDx = cur.left - defLeft;
+    const backDy = cur.top  - defTop;
+    controls.style.transform = `translate(${backDx}px, ${backDy}px)`;
+
+    function onBackEnd(ev){
+      if (ev.propertyName !== 'transform') return;
+      controls.removeEventListener('transitionend', onBackEnd);
+      controls.classList.remove('collapsed');
+      setTabIcon();
+      baseLeft = defLeft;
+      baseTop  = defTop;
+      userMoved = false;
+    }
+    controls.addEventListener('transitionend', onBackEnd);
+    requestAnimationFrame(() => { controls.style.transform = 'translate(0,0)'; });
+  }
+
+  collapseTab.addEventListener('click', () => {
+    if (controls.classList.contains('collapsed')) expand(); else collapse();
+  });
+  window.addEventListener('resize', syncCollapsedPosition);
+  setTabIcon();
+})();
+
+/* ===================== Resize: держим панель видимой ===================== */
+(function keepPanelVisibleOnResize(){
+  function clamp(v, a, b){ return Math.min(Math.max(v, a), b); }
+  window.addEventListener('resize', () => {
+    if (controls.classList.contains('collapsed')) return;
+    if (userMoved) {
+      const pad = 8;
+      const rect = controls.getBoundingClientRect();
+      const maxLeft = window.innerWidth  - controls.offsetWidth  - pad;
+      const maxTop  = window.innerHeight - controls.offsetHeight - pad;
+      const left = clamp(rect.left, pad, Math.max(pad, maxLeft));
+      const top  = clamp(rect.top,  HEADER_HEIGHT + pad, Math.max(HEADER_HEIGHT + pad, maxTop));
+      controls.style.position = 'fixed';
+      controls.style.left = left + 'px';
+      controls.style.top  = top  + 'px';
+      controls.style.right = 'auto';
+      controls.style.transform = 'translate(0,0)';
+    } else {
+      const defLeft = window.innerWidth - controls.offsetWidth - DEFAULT_OFFSET_RIGHT;
+      const defTop  = DEFAULT_OFFSET_TOP;
+      controls.style.position = 'fixed';
+      controls.style.left = defLeft + 'px';
+      controls.style.top  = defTop  + 'px';
+      controls.style.right = 'auto';
+      controls.style.transform = 'translate(0,0)';
+    }
+  });
+})();
+
+/* ===================== Карта/селектор ===================== */
+function updateAreaInfo() {
+  const side = selectionSize;
+  const area = side * side;
+  const sideStr = Number.isFinite(side) ? side.toLocaleString() : String(side);
+  const areaStr = Number.isFinite(area) ? area.toLocaleString() : String(area);
+  areaInfo.innerHTML = side >= 1_000_000
+    ? `Approx. area: ${sideStr} × ${sideStr} m²<br>= ${areaStr} m²`
+    : `Approx. area: ${sideStr} × ${sideStr} m² = ${areaStr} m²`;
+}
+function getMapScreenCenterLatLng() {
+  const mapSize = map.getSize();
+  const centerPx = L.point(mapSize.x / 2, mapSize.y / 2);
+  return map.containerPointToLatLng(centerPx);
+}
+function updateBoxAndCenter(){ if(!selecting) return; centerLatLng = getMapScreenCenterLatLng(); updateBox(); updateCenterSquare(); }
+function updateBox(){
+  if(!centerLatLng || !selecting) return;
+  const lat = clampLat(centerLatLng.lat);
+  const mpp = 40075016.686 * Math.cos(lat * Math.PI/180) / (256 * Math.pow(2, map.getZoom()));
+  const px = selectionSize / mpp;
+  box.style.width = px + 'px';
+  box.style.height = px + 'px';
+  box.style.left = `calc(50% - ${px/2}px)`;
+  box.style.top  = `calc(50% - ${px/2}px)`;
+}
+function updateCenterSquare(){
+  if(!centerLatLng || !selecting){ if(centerSquare){ map.removeLayer(centerSquare); centerSquare=null; } return; }
+  const cl = clampLat(centerLatLng.lat);
+  const lat10m = 10/111320, lng10m = 10/(111320*Math.cos(cl*Math.PI/180));
+  const b = [[cl-lat10m/2, centerLatLng.lng-lng10m/2],[cl+lat10m/2, centerLatLng.lng+lng10m/2]];
+  if(centerSquare) centerSquare.setBounds(b); else centerSquare = L.rectangle(b,{color:"red",weight:2,fillOpacity:0.5}).addTo(map);
+}
+map.on('zoom move', updateBoxAndCenter);
+toggleBtn.onclick = () => { selecting = !selecting; toggleBtn.textContent = selecting ? 'Cancel selection' : 'Select area'; confirmBtn.disabled = !selecting; box.style.display = selecting ? 'block' : 'none'; if (selecting) updateBoxAndCenter(); else { centerLatLng=null; updateCenterSquare(); } };
+sizeInput.addEventListener('input', () => { const v = parseInt(sizeInput.value,10); if(!isNaN(v)){ selectionSize=v; updateAreaInfo(); if(selecting) updateBoxAndCenter(); } });
+sizeInput.addEventListener('blur', () => { let v = parseInt(sizeInput.value,10); if(isNaN(v)) v=200; v=Math.min(Math.max(v,200),20000000); sizeInput.value=v; selectionSize=v; updateAreaInfo(); if(selecting) updateBoxAndCenter(); });
+searchBtn.onclick = async () => {
+  const q = searchInput.value.trim(); if(!q) return;
+  try{
+    const url=`https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&q=${encodeURIComponent(q)}`;
+    const r = await fetch(url,{headers:{"Accept-Language":"en"}});
+    const d = await r.json();
+    if(Array.isArray(d)&&d.length>0){
+      const lat=clampLat(parseFloat(d[0].lat)); const lon=parseFloat(d[0].lon);
+      map.setView([lat,lon],15);
+    } else alert('Not found!');
+  }catch(e){ console.error(e); alert('Search error!'); }
+};
+searchInput.addEventListener('keydown', e => { if (e.key === 'Enter') searchBtn.onclick(); });
+
+/* ===================== Построение «монолитного» Overpass-запроса ===================== */
+
+function buildMonolithicQuery(bboxStr, includeAllNodes){
+  return `
+[out:json][timeout:180];
+(
+  /* Дороги и связанные элементы */
+  nwr["highway"](${bboxStr});
+  node["highway"="crossing"](${bboxStr});
+  way ["footway"="crossing"](${bboxStr});
+  node["highway"="traffic_signals"](${bboxStr});
+  nwr["traffic_calming"](${bboxStr});
+  nwr["kerb"](${bboxStr});
+  nwr["barrier"](${bboxStr});
+
+  /* Рельсы, платформы, ОТ */
+  nwr["railway"](${bboxStr});
+  nwr["railway"~"^(platform|platform_edge|platform_section|halt|tram_stop|station)$"](${bboxStr});
+  nwr["public_transport"~"^(platform|stop_position|station)$"](${bboxStr});
+  relation["type"="public_transport"]["public_transport"="stop_area"](${bboxStr});
+  node["highway"="bus_stop"](${bboxStr});
+
+  /* Вода/берега */
+  nwr["waterway"](${bboxStr});
+  nwr["water"](${bboxStr});
+
+  /* Авиа + канатки */
+  nwr["aeroway"](${bboxStr});
+  nwr["aeroway"="apron"](${bboxStr});                 /* аэроперроны */
+  nwr["aerialway"](${bboxStr});
+
+  /* Землепользование, покрытие, природные */
+  nwr["landuse"](${bboxStr});
+  nwr["landcover"](${bboxStr});
+  nwr["natural"](${bboxStr});
+  nwr["leisure"](${bboxStr});
+  nwr["military"](${bboxStr});
+
+  /* Здания/indoor */
+  nwr["building"](${bboxStr});
+  nwr["building:part"](${bboxStr});
+  relation["type"="building"](${bboxStr});
+  nwr["entrance"](${bboxStr});
+  nwr["door"](${bboxStr});
+  nwr["indoor"](${bboxStr});
+  nwr["level"](${bboxStr});
+  nwr["level:ref"](${bboxStr});
+
+  /* POI и инфраструктура */
+  nwr["amenity"](${bboxStr});
+  nwr["shop"](${bboxStr});
+  nwr["office"](${bboxStr});
+  nwr["craft"](${bboxStr});
+  nwr["tourism"](${bboxStr});
+  nwr["sport"](${bboxStr});
+  nwr["healthcare"](${bboxStr});
+  nwr["emergency"](${bboxStr});
+  nwr["historic"](${bboxStr});
+  nwr["information"](${bboxStr});
+  nwr["man_made"](${bboxStr});
+  nwr["power"](${bboxStr});
+  nwr["pipeline"](${bboxStr});
+  nwr["telecom"](${bboxStr});
+
+  /* Границы/нас.пункты */
+  nwr["boundary"](${bboxStr});
+  nwr["place"](${bboxStr});
+
+  /* «как раньше»: ВСЕ узлы — осторожно! */
+  ${includeAllNodes ? `node(${bboxStr});` : ''}
+);
+/* Рекурсивно подтянуть все зависимые элементы (узлы для путей, члены отношений) */
+(._; >>;);
+out body geom;
+>;
+out skel qt;
+`.trim();
+}
+
+/* ===================== HTTP к Overpass (один удачный вызов) ===================== */
+async function overpassPostOnce(url, query){
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), OVERPASS_TIMEOUT_MS);
+  try{
+    const res = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+        "Accept": "application/json"
+      },
+      body: `data=${encodeURIComponent(query)}`,
+      signal: controller.signal
+    });
+    clearTimeout(timer);
+    if (!res.ok) {
+      const txt = await res.text().catch(()=> '');
+      const err = new Error(`HTTP ${res.status} ${res.statusText} ${txt.slice(0,200)}`);
+      err.status = res.status;
+      throw err;
+    }
+    const json = await res.json().catch(()=> ({}));
+    return { ok:true, data: (json && Array.isArray(json.elements)) ? json : { elements: [] } };
+  }catch(error){
+    clearTimeout(timer);
+    return { ok:false, error };
+  }
+}
+
+/** Пробуем по очереди эндпоинты, пока не получим один успешный ответ */
+async function tryOverpassEndpoints(query){
+  let lastErr = null;
+  for (let i=0;i<OVERPASS_ENDPOINTS.length;i++){
+    const url = OVERPASS_ENDPOINTS[i];
+    setStatus(`Querying Overpass (${i+1}/${OVERPASS_ENDPOINTS.length})…`);
+    const r = await overpassPostOnce(url, query);
+    if (r.ok) { setStatus(`Overpass OK via ${new URL(url).host}`); return { overpass_status:"ok", features:r.data }; }
+    lastErr = r.error;
+  }
+  console.warn('All Overpass endpoints failed:', lastErr);
+  setStatus('Overpass temporarily unavailable.');
+  return { overpass_status:"failed", features:{ elements: [] } };
+}
+
+/* ===================== Confirm: вычисление bbox + один запрос + сохранение ===================== */
+confirmBtn.onclick = async () => {
+  if (!selecting) return;
+
+  const size = selectionSize;
+  const C = getMapScreenCenterLatLng();
+  const lat = clampLat(C.lat);
+  const lng = C.lng;
+
+  const latMeters = 111320;
+  const lngMeters = 111320 * Math.cos(lat * Math.PI / 180);
+  const dLat = (size/2)/latMeters;
+  const dLng = (size/2)/lngMeters;
+
+  let south = lat - dLat, north = lat + dLat, west = lng - dLng, east = lng + dLng;
+  if (south < SOUTH_LIMIT) south = SOUTH_LIMIT;
+  if (north > NORTH_LIMIT) north = NORTH_LIMIT;
+
+  const bboxStr = `${south},${west},${north},${east}`;
+
+  // Предупреждение на очень больших окнах (данных будет ОЧЕНЬ много)
+  if (size > 10000) {
+    const km = (size/1000).toFixed(1);
+    const sure = confirm(`You selected a very large area: ${km} km. Continue?\n(One huge Overpass query, may be slow/denied)`);
+    if (!sure) return;
+  }
+
+  // На супер-больших окнах выключим «все узлы» — иначе практически гарантированный отказ.
+  const includeAllNodes = size <= 10000;
+
+  const query = buildMonolithicQuery(bboxStr, includeAllNodes);
+
+  let overpass_status = "ok";
+  let features = { elements: [] };
+
+  confirmBtn.disabled = true; toggleBtn.disabled = true;
+  setStatus('Fetching OSM data (single request)…');
+
+  try{
+    const res = await tryOverpassEndpoints(query);
+    overpass_status = res.overpass_status;
+    features = res.features;
+  }catch(e){
+    console.error('Collector exception:', e);
+    overpass_status = "failed";
+    features = { elements: [] };
+  }finally{
+    confirmBtn.disabled = false; toggleBtn.disabled = false;
+  }
+
+ const payload = {
+  center: { lat, lng },
+  sizeMeters: size,
+  bbox: { south, north, west, east },
+  overpass_status,
+  features,
+  // Говорим модулю «не скачивай онлайн» — используем локальный файл, который сделает сервер.
+  olm: { mode: 'file' },
+
+  // (опционально) те же тюнинги сглаживания
+  tuning: { surfaceBlurIters: 15, surfaceBlurMinMajority: 4 }
+};
+
+
+  try {
+    
+    const r = await fetch('http://localhost:4567/save-coords', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    const txt = await r.text().catch(()=> '');
+    if (!r.ok) {
+      console.error('Backend error:', r.status, txt);
+      alert(`Backend error ${r.status}: ${txt || 'see console'}`);
+      return;
+    }
+    alert(overpass_status === "ok" ? 'Saved!' : 'Saved! (Overpass failed — payload is empty)');
+  } catch (e2) {
+    console.error(e2);
+    alert('Could not save selection to backend (network error).');
+  } finally {
+    setStatus('');
+  }
+};
+
+/* ===================== Go ===================== */
+updateAreaInfo();

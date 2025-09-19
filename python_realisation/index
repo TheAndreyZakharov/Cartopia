@@ -1,0 +1,602 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Cartopia</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
+  <style>
+    html, body { height: 100%; margin: 0; }
+    #map { height: 100%; width: 100%; position: relative; }
+    #selectionBox {
+      position: fixed;
+      border: 3px dashed rgba(255, 0, 0, 0.8); /* толще и полупрозрачный */
+      pointer-events: none;
+      display: none;
+      z-index: 999;
+    }
+
+    /* === Общие переменные для «стекла» === */
+    :root{
+      --glass-alpha: 0.55;  /* одним числом меняется прозрачность везде */
+      --glass-dark: rgba(15, 18, 20, var(--glass-alpha));    /* как у хедера */
+      --glass-light: rgba(255, 255, 255, var(--glass-alpha));/* белая версия для панели */
+      --glass-blur: 6px;   /* интенсивность блюра */
+    }
+
+    /* --- Хедер Cartopia --- */
+    #header {
+      position: fixed;
+      inset: 0 0 auto 0;          /* top:0; left:0; right:0 */
+      height: 72px;
+      background: var(--glass-dark);
+      color: #fff;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font: 700 22px/1.2 system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+      border-bottom-left-radius: 16px;
+      border-bottom-right-radius: 16px;
+      backdrop-filter: blur(var(--glass-blur));
+      -webkit-backdrop-filter: blur(var(--glass-blur));
+      z-index: 2000;
+      pointer-events: none;        /* чтобы не мешал кликам по карте */
+      user-select: none;
+    }
+
+    /* --- Панель управления (остается полупрозрачной) --- */
+    #controls {
+      position: fixed;
+      top: calc(72px + 30px);      /* от нижнего края хедера */
+      right: 30px;
+      background: var(--glass-light);
+      padding: 16px 48px;          /* + место под правый кружок */
+      border-radius: 10px;
+      z-index: 1000;
+      box-shadow: 0 2px 12px rgba(0,0,0,0.10);
+      min-width: 280px;
+      text-align: right;
+      transition: transform 320ms cubic-bezier(.22,.61,.36,1);
+      will-change: transform;
+      backdrop-filter: blur(var(--glass-blur));
+      -webkit-backdrop-filter: blur(var(--glass-blur));
+    }
+
+    /* --- Кнопки-«ушки» (теперь НЕпрозрачные) --- */
+    #collapseTab, #dragTab {
+      position: absolute;
+      top: 0px;
+      width: 32px;
+      height: 32px;
+      border-radius: 50%;
+      -webkit-appearance: none;
+      appearance: none;
+      background: #fff;                   /* сплошной белый */
+      color: #333;
+      border: 1px solid rgba(0,0,0,0.12);
+      box-shadow: none;                   /* без внешней тени */
+      cursor: pointer;
+      display: grid;
+      place-items: center;
+      font: 700 16px/1 system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+      user-select: none;
+      padding: 0;
+      z-index: 1001;
+      background-clip: padding-box;       /* убираем тёмные кромки в Safari */
+    }
+    #collapseTab { left: -16px; }
+    #dragTab { right: -16px; }
+
+    /* --- Ввод и кнопки внутри панели --- */
+    #controls input, 
+    #controls button { margin-bottom: 8px; }
+    #searchInput {
+      width: 95%;
+      margin-bottom: 8px;
+      padding: 6px;
+      border-radius: 6px;
+      border: 1px solid #ccc;
+      background: #fff;                  /* чтобы поле не выглядело мутным */
+    }
+    #controls label {
+      font-size: 13px;
+      color: #333;
+      margin-bottom: 3px;
+      display: block;
+      text-align: left;
+    }
+    #searchBtn,
+    #toggleBtn,
+    #confirmBtn {
+      border-radius: 8px;
+      height: 25px;         /* выше кнопки */
+      min-width: 110px;     /* одинаковая ширина */
+    }
+    /* Кнопки в панели — тоже НЕпрозрачные белые */
+    #controls button{
+      -webkit-appearance: none;
+      appearance: none;
+      background: #fff;                   /* сплошной белый */
+      color: #111;
+      border: 1px solid rgba(0,0,0,0.12);
+      box-shadow: none;                   /* без теней */
+      background-clip: padding-box;       /* чистые края в Safari */
+    }
+    #controls button:hover{ filter: brightness(1.03); }
+    #controls button:active{ filter: brightness(0.97); }
+    #controls button:focus-visible{
+      outline: 2px solid rgba(17,17,17,0.25);
+      outline-offset: 2px;
+    }
+
+    /* --- Скрываем дефолтные контролы Leaflet --- */
+    .leaflet-bottom.leaflet-right,
+    .leaflet-control-attribution,
+    .leaflet-control-container { display: none !important; }
+
+    /* --- Состояние свёрнутой панели --- */
+    #controls.collapsed > :not(#collapseTab) { display: none !important; }
+    #controls.collapsed #collapseTab { left: -12px; right: auto; }
+  </style>
+</head>
+<body>
+<div id="header">Cartopia</div>
+
+
+<div id="map"></div>
+<div id="selectionBox"></div>
+
+<div id="controls">
+  <button id="collapseTab" title="Hide">›</button>
+  <button id="dragTab" title="Move">✣</button>
+
+  <label for="searchInput">Search for a city, address, or coordinates:</label>
+  <input type="text" id="searchInput" placeholder="For example, Москва, Moscow or 55.7558,37.6176">
+  <button id="searchBtn">Find</button><br>
+  <button id="toggleBtn">Select area</button><br>
+  <div style="display: flex; align-items: center; margin-bottom: 4px;">
+    <label for="sizeInput" style="margin-right: 8px; margin-bottom: 0;">Side length (meters):</label>
+    <input type="number" id="sizeInput" value="500" min="200" step="100" style="width: 160px; margin-bottom: 0;">
+  </div>
+  <div id="areaInfo" style="font-size: 12px; color: #666; margin-bottom: 8px; text-align: left;">
+    Approx. area: side × side (m²)
+  </div>
+  <button id="confirmBtn" disabled>Confirm</button>
+</div>
+
+<script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+<script>
+  const SOUTH_LIMIT = -60;
+  const NORTH_LIMIT = 85.05112878;
+  function clampLat(lat) { return Math.min(Math.max(lat, SOUTH_LIMIT), NORTH_LIMIT); }
+
+  // Геометрия хедера
+  const HEADER_HEIGHT = 72;                 // должен совпадать с CSS
+  const PAD_TOP_FROM_HEADER = 30;
+  const DEFAULT_OFFSET_TOP = HEADER_HEIGHT + PAD_TOP_FROM_HEADER;
+  const DEFAULT_OFFSET_RIGHT = 30;
+
+  const map = L.map('map', {
+    attributionControl: false,
+    worldCopyJump: true,
+    maxBounds: L.latLngBounds([SOUTH_LIMIT, -540],[NORTH_LIMIT, 540]),
+    maxBoundsViscosity: 1.0,
+    minZoom: 2
+  }).setView([35, 0], 2);
+
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    maxZoom: 19,
+    minZoom: 2,
+    bounds: L.latLngBounds([SOUTH_LIMIT, -180],[NORTH_LIMIT, 180])
+  }).addTo(map);
+
+  setTimeout(() => {
+    document.querySelectorAll('.leaflet-bottom.leaflet-right, .leaflet-control-attribution, .leaflet-control-container').forEach(el => el.remove());
+  }, 500);
+
+  const box = document.getElementById('selectionBox');
+  const controls = document.getElementById('controls');
+  const collapseTab = document.getElementById('collapseTab');
+  const dragTab = document.getElementById('dragTab');
+  const toggleBtn = document.getElementById('toggleBtn');
+  const sizeInput = document.getElementById('sizeInput');
+  const confirmBtn = document.getElementById('confirmBtn');
+  const searchInput = document.getElementById('searchInput');
+  const searchBtn = document.getElementById('searchBtn');
+  const areaInfo = document.getElementById('areaInfo');
+
+  let selecting = false;
+  let selectionSize = parseInt(sizeInput.value);
+  let centerLatLng = null;
+  let centerSquare = null;
+
+  // пользователь таскал панель
+  let userMoved = false;
+
+  // ========= DRAG =========
+  (function enableControlsDrag() {
+    let dragging = false;
+    let startX = 0, startY = 0;
+    let startLeft = 0, startTop = 0;
+
+    function clamp(v, a, b){ return Math.min(Math.max(v, a), b); }
+
+    function onPointerDown(clientX, clientY) {
+      if (controls.classList.contains('collapsed')) return;
+      dragging = true;
+      userMoved = true;
+
+      const rect = controls.getBoundingClientRect();
+      controls.style.position = 'fixed';
+      controls.style.left = rect.left + 'px';
+      controls.style.top  = rect.top  + 'px';
+      controls.style.right = 'auto';
+      controls.style.transform = 'translate(0,0)';
+
+      startX = clientX;
+      startY = clientY;
+      startLeft = rect.left;
+      startTop  = rect.top;
+
+      document.addEventListener('mousemove', onMouseMove, { passive: false });
+      document.addEventListener('mouseup', onMouseUp, { passive: false });
+      document.addEventListener('touchmove', onTouchMove, { passive: false });
+      document.addEventListener('touchend', onTouchEnd, { passive: false });
+    }
+
+    function onMouseDown(e){ e.preventDefault(); onPointerDown(e.clientX, e.clientY); }
+    function onTouchStart(e){
+      if (!e.touches || e.touches.length === 0) return;
+      const t = e.touches[0]; e.preventDefault(); onPointerDown(t.clientX, t.clientY);
+    }
+
+    function applyMove(clientX, clientY){
+      const dx = clientX - startX;
+      const dy = clientY - startY;
+
+      let left = startLeft + dx;
+      let top  = startTop  + dy;
+
+      const pad = 8;
+      const maxLeft = window.innerWidth - controls.offsetWidth - pad;
+      const maxTop  = window.innerHeight - controls.offsetHeight - pad;
+
+      left = clamp(left, pad, Math.max(pad, maxLeft));
+      // не заезжаем на хедер 
+      top  = clamp(top,  HEADER_HEIGHT + pad, Math.max(HEADER_HEIGHT + pad, maxTop));
+
+      controls.style.left = left + 'px';
+      controls.style.top  = top  + 'px';
+    }
+
+    function onMouseMove(e){ if (!dragging) return; e.preventDefault(); applyMove(e.clientX, e.clientY); }
+    function onTouchMove(e){
+      if (!dragging || !e.touches || e.touches.length === 0) return;
+      e.preventDefault(); const t = e.touches[0]; applyMove(t.clientX, t.clientY);
+    }
+
+    function stopDrag(){
+      dragging = false;
+      document.removeEventListener('mousemove', onMouseMove);
+      document.removeEventListener('mouseup', onMouseUp);
+      document.removeEventListener('touchmove', onTouchMove);
+      document.removeEventListener('touchend', onTouchEnd);
+    }
+    function onMouseUp(){ stopDrag(); }
+    function onTouchEnd(){ stopDrag(); }
+
+    dragTab.addEventListener('mousedown', onMouseDown, { passive: false });
+    dragTab.addEventListener('touchstart', onTouchStart, { passive: false });
+  })();
+
+  // ========= COLLAPSE / EXPAND =========
+  (function enableCollapse(){
+    const pad = 12;
+    const tabVisible = 32;
+
+    let baseLeft = 0, baseTop = 0;
+
+    function setTabIcon() {
+      if (controls.classList.contains('collapsed')) { collapseTab.textContent = '‹'; collapseTab.title = 'Show'; }
+      else { collapseTab.textContent = '›'; collapseTab.title = 'Hide'; }
+    }
+
+    function getDefaultLeft() { return window.innerWidth - controls.offsetWidth - DEFAULT_OFFSET_RIGHT; }
+    function getDefaultTop()  { return DEFAULT_OFFSET_TOP; }
+
+    function syncCollapsedPosition() {
+      if (!controls.classList.contains('collapsed')) return;
+      const targetLeft = window.innerWidth - pad - tabVisible;
+      const targetTop  = DEFAULT_OFFSET_TOP;
+      const dx = targetLeft - baseLeft;
+      const dy = targetTop  - baseTop;
+      controls.style.transform = `translate(${dx}px, ${dy}px)`;
+    }
+
+    function collapse() {
+      if (controls.classList.contains('collapsed')) return;
+      const rect = controls.getBoundingClientRect();
+      baseLeft = rect.left;
+      baseTop  = rect.top;
+
+      controls.style.position = 'fixed';
+      controls.style.left = baseLeft + 'px';
+      controls.style.top  = baseTop  + 'px';
+      controls.style.right = 'auto';
+      controls.style.transform = 'translate(0,0)';
+
+      controls.classList.add('collapsed');
+      setTabIcon();
+      requestAnimationFrame(syncCollapsedPosition);
+    }
+
+    function expand() {
+      if (!controls.classList.contains('collapsed')) return;
+
+      const defLeft = getDefaultLeft();
+      const defTop  = getDefaultTop();
+
+      controls.style.left = defLeft + 'px';
+      controls.style.top  = defTop  + 'px';
+      controls.style.right = 'auto';
+
+      const cur = controls.getBoundingClientRect();
+      const backDx = cur.left - defLeft;
+      const backDy = cur.top  - defTop;
+      controls.style.transform = `translate(${backDx}px, ${backDy}px)`;
+
+      function onBackEnd(ev){
+        if (ev.propertyName !== 'transform') return;
+        controls.removeEventListener('transitionend', onBackEnd);
+        controls.classList.remove('collapsed');
+        setTabIcon();
+        // вернули в дефолт
+        baseLeft = defLeft;
+        baseTop  = defTop;
+        userMoved = false; // снова «пришпилено»
+      }
+      controls.addEventListener('transitionend', onBackEnd);
+      requestAnimationFrame(() => { controls.style.transform = 'translate(0,0)'; });
+    }
+
+    collapseTab.addEventListener('click', () => {
+      if (controls.classList.contains('collapsed')) expand(); else collapse();
+    });
+
+    // свёрнуто — держим хвостик у края
+    window.addEventListener('resize', () => { syncCollapsedPosition(); });
+
+    setTabIcon();
+  })();
+
+  // ========= RESIZE: держим панель видимой =========
+  (function keepPanelVisibleOnResize(){
+    function clamp(v, a, b){ return Math.min(Math.max(v, a), b); }
+
+    window.addEventListener('resize', () => {
+      // свёрнуто — управляется в enableCollapse()
+      if (controls.classList.contains('collapsed')) return;
+
+      if (userMoved) {
+        // пользователь двигал — клампим внутрь окна
+        const pad = 8;
+        const rect = controls.getBoundingClientRect();
+        const maxLeft = window.innerWidth  - controls.offsetWidth  - pad;
+        const maxTop  = window.innerHeight - controls.offsetHeight - pad;
+        const left = clamp(rect.left, pad, Math.max(pad, maxLeft));
+        const top  = clamp(rect.top,  HEADER_HEIGHT + pad, Math.max(HEADER_HEIGHT + pad, maxTop));
+        controls.style.position = 'fixed';
+        controls.style.left = left + 'px';
+        controls.style.top  = top  + 'px';
+        controls.style.right = 'auto';
+        controls.style.transform = 'translate(0,0)';
+      } else {
+        // пользователь НЕ двигал — возвращаем/держим дефолт (под хедером)
+        const defLeft = window.innerWidth - controls.offsetWidth - DEFAULT_OFFSET_RIGHT;
+        const defTop  = DEFAULT_OFFSET_TOP;
+        controls.style.position = 'fixed';
+        controls.style.left = defLeft + 'px';
+        controls.style.top  = defTop  + 'px';
+        controls.style.right = 'auto';
+        controls.style.transform = 'translate(0,0)';
+      }
+    });
+  })();
+
+  // ========= Остальной функционал карты/селекта =========
+  function updateAreaInfo() {
+    const side = selectionSize;
+    const area = side * side;
+    const sideStr = Number.isFinite(side) ? side.toLocaleString() : String(side);
+    const areaStr = Number.isFinite(area) ? area.toLocaleString() : String(area);
+    const longSide = side >= 1000000;
+    if (longSide) {
+      areaInfo.innerHTML = `Approx. area: ${sideStr} × ${sideStr} m²<br>= ${areaStr} m²`;
+    } else {
+      areaInfo.innerHTML = `Approx. area: ${sideStr} × ${sideStr} m² = ${areaStr} m²`;
+    }
+  }
+
+  function getMapScreenCenterLatLng() {
+    const mapSize = map.getSize();
+    const centerPx = L.point(mapSize.x / 2, mapSize.y / 2);
+    return map.containerPointToLatLng(centerPx);
+  }
+
+  function updateBoxAndCenter() {
+    if (!selecting) return;
+    centerLatLng = getMapScreenCenterLatLng();
+    updateBox();
+    updateCenterSquare();
+  }
+
+  function updateBox() {
+    if (!centerLatLng || !selecting) return;
+    const latForScale = clampLat(centerLatLng.lat);
+    const metersPerPx = 40075016.686 * Math.cos(latForScale * Math.PI / 180) / (256 * Math.pow(2, map.getZoom()));
+    const pxSize = selectionSize / metersPerPx;
+    box.style.width = pxSize + 'px';
+    box.style.height = pxSize + 'px';
+    box.style.left = `calc(50% - ${pxSize / 2}px)`;
+    box.style.top = `calc(50% - ${pxSize / 2}px)`;
+  }
+
+  function updateCenterSquare() {
+    if (!centerLatLng || !selecting) {
+      if (centerSquare) { map.removeLayer(centerSquare); centerSquare = null; }
+      return;
+    }
+    const clampedLat = clampLat(centerLatLng.lat);
+    const lat10m = 10 / 111320;
+    const lng10m = 10 / (111320 * Math.cos(clampedLat * Math.PI / 180));
+    const bounds = [
+      [clampedLat - lat10m / 2, centerLatLng.lng - lng10m / 2],
+      [clampedLat + lat10m / 2, centerLatLng.lng + lng10m / 2]
+    ];
+    if (centerSquare) centerSquare.setBounds(bounds);
+    else centerSquare = L.rectangle(bounds, { color: "red", weight: 2, fillOpacity: 0.5 }).addTo(map);
+  }
+
+  map.on('zoom move', updateBoxAndCenter);
+
+  toggleBtn.onclick = () => {
+    selecting = !selecting;
+    toggleBtn.textContent = selecting ? 'Cancel selection' : 'Select area';
+    confirmBtn.disabled = !selecting;
+    box.style.display = selecting ? 'block' : 'none';
+    if (selecting) { updateBoxAndCenter(); } else { centerLatLng = null; updateCenterSquare(); }
+  };
+
+  sizeInput.addEventListener('input', () => {
+    const val = parseInt(sizeInput.value);
+    if (!isNaN(val)) {
+      selectionSize = val;
+      updateAreaInfo();
+      if (selecting) updateBoxAndCenter();
+    }
+  });
+
+  sizeInput.addEventListener('blur', () => {
+    let val = parseInt(sizeInput.value);
+    if (isNaN(val)) val = 200;
+    if (val < 200) val = 200;
+    if (val > 20000000) val = 20000000;
+    sizeInput.value = val;
+    selectionSize = val;
+    updateAreaInfo();
+    if (selecting) updateBoxAndCenter();
+  });
+
+  searchBtn.onclick = async () => {
+    const query = searchInput.value.trim();
+    if (!query) return;
+    try {
+      const url = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(query)}`;
+      const res = await fetch(url);
+      const data = await res.json();
+      if (data.length > 0) {
+        const lat = clampLat(parseFloat(data[0].lat));
+        const lon = parseFloat(data[0].lon);
+        map.setView([lat, lon], 15);
+      } else {
+        alert('Not found!');
+      }
+    } catch { alert('Search error!'); }
+  };
+
+  searchInput.addEventListener('keydown', e => { if (e.key === 'Enter') searchBtn.onclick(); });
+
+  async function fetchOverpassFeatures(bbox) {
+    const [s, w, n, e] = bbox;
+    const bboxStr = `${s},${w},${n},${e}`;
+    const query = `
+    [out:json][timeout:45];
+    (
+      way["highway"](${bboxStr});
+      way["railway"](${bboxStr});
+      way["building"](${bboxStr});
+      relation["building"](${bboxStr});
+      way["landuse"](${bboxStr});
+      way["leisure"](${bboxStr});
+      way["natural"](${bboxStr});
+      way["waterway"](${bboxStr});
+      way["amenity"](${bboxStr});
+      way["barrier"](${bboxStr});
+      relation["landuse"](${bboxStr});
+      relation["leisure"](${bboxStr});
+      relation["natural"](${bboxStr});
+      node(${bboxStr});
+    );
+    out body geom;
+    >;
+    out skel qt;
+    `;
+    const response = await fetch("https://overpass-api.de/api/interpreter", { method: "POST", body: query });
+    if (!response.ok) throw new Error("Overpass API error");
+    return await response.json();
+  }
+
+  confirmBtn.onclick = async () => {
+    if (!selecting) return;
+
+    const size = selectionSize;
+    const boxCenterLatLng = getMapScreenCenterLatLng();
+    const lat = clampLat(boxCenterLatLng.lat);
+    const lng = boxCenterLatLng.lng;
+
+    const latMeters = 111320;
+    const lngMeters = 111320 * Math.cos(lat * Math.PI / 180);
+    const deltaLat = (size / 2) / latMeters;
+    const deltaLng = (size / 2) / lngMeters;
+
+    let south = lat - deltaLat;
+    let north = lat + deltaLat;
+    let west  = lng - deltaLng;
+    let east  = lng + deltaLng;
+
+    if (south < SOUTH_LIMIT) south = SOUTH_LIMIT;
+    if (north > NORTH_LIMIT) north = NORTH_LIMIT;
+
+    const bbox = [south, west, north, east];
+
+    if (size > 10000) {
+      const km = (size / 1000).toFixed(1);
+      const sure = confirm(`You selected a very large area: ${km} km. Continue?`);
+      if (!sure) return;
+    }
+
+    let features = { elements: [] };
+    let overpass_status = "ok";
+
+    try {
+      features = await fetchOverpassFeatures(bbox);
+    } catch (e1) {
+      console.warn("Overpass failed, falling back to OLM-only:", e1);
+      overpass_status = "failed";
+      features = { elements: [] };
+    }
+
+    const payload = {
+      center: { lat, lng },
+      sizeMeters: size,
+      bbox: { south, north, west, east },
+      overpass_status,
+      features
+    };
+
+    try {
+      await fetch('http://localhost:4567/save-coords', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      alert(overpass_status === "ok" ? 'Saved!' : 'Saved! (OSM unavailable — using OLM only)');
+    } catch (e2) {
+      console.error(e2);
+      alert('Could not save selection to backend.');
+    }
+  };
+
+  updateAreaInfo();
+</script>
+</body>
+</html>

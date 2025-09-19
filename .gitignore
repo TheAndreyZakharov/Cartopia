@@ -10,6 +10,7 @@ run/
 logs/
 out/
 *.log
+*.pid
 
 # Node.js
 node_modules/

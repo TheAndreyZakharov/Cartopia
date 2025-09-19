@@ -9,10 +9,20 @@
   "keywords": [],
   "author": "",
   "license": "ISC",
-  "description": "",
+  "description": "Создание точной 3D-реконструкции любого участка реального мира в Minecraft с масштабом **1:1**.",
   "dependencies": {
     "cors": "^2.8.5",
     "express": "^5.1.0",
     "node-fetch": "^3.3.2"
-  }
+  },
+  "devDependencies": {},
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/TheAndreyZakharov/Cartopia.git"
+  },
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/TheAndreyZakharov/Cartopia/issues"
+  },
+  "homepage": "https://github.com/TheAndreyZakharov/Cartopia#readme"
 }

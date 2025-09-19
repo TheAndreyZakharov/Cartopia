@@ -3,7 +3,8 @@ import os
 import math
 import random
 from shapely.geometry import Polygon, MultiPolygon, Point, LineString
-from shapely.ops import polygonize
+from shapely.ops import polygonize, unary_union
+import geopandas as gpd
 from amulet import load_level
 from amulet.api.level import World
 from amulet.api.block import Block
@@ -13,8 +14,8 @@ import requests
 import rasterio
 from collections import Counter
 import copy
-import geopandas as gpd
 import time
+import re
 
 # === Настройки ===
 Y_BASE = -60
@@ -81,7 +82,12 @@ ZONE_MATERIALS = {
     "amenity=grave_yard": "moss_block",
     "landuse=recreation_ground": "moss_block",
     "amenity=marketplace": "moss_block",
-
+    "aeroway=apron": "stone",
+    "aeroway=runway": "gray_concrete",
+    "aeroway=taxiway": "gray_concrete",
+    "aeroway=helipad": "gray_concrete",
+    "aeroway=runway_link": "gray_concrete",
+    "aeroway=taxilane": "gray_concrete",
 }
 
 MC_TREES = [
@@ -425,53 +431,64 @@ for feature in features:
         key = f"amenity={tags['amenity']}"
     if key not in ZONE_MATERIALS:
         continue
+
     nodes = [node_coords.get(nid) for nid in feature.get("nodes", []) if nid in node_coords]
     if not nodes or nodes[0] != nodes[-1]:
         continue
+
     polygon = Polygon(nodes)
     block_name = ZONE_MATERIALS[key]
     min_xx, min_zz, max_xx, max_zz = map(int, map(round, polygon.bounds))
+
     for x in range(min_xx, max_xx+1):
         for z in range(min_zz, max_zz+1):
             if polygon.contains(Point(x, z)):
-                # Город — определяем "по окружению", если просто built-up!
+                # НИКОГДА не перезаписываем воду
+                if surface_material_map.get((x, z)) == "water":
+                    continue
+
                 if key == "landuse=residential":
                     dom = get_dominant_block_around(x, z, surface_material_map)
-                    if dom == "moss_block" or dom == "snow_block":
+                    if dom in ("moss_block", "snow_block"):
                         surface_material_map[(x, z)] = dom
                     elif dom == "sandstone":
                         surface_material_map[(x, z)] = "sandstone"
                     else:
                         surface_material_map[(x, z)] = "moss_block"
-                # Любой песок, пляж, пустыня = sandstone
                 elif key in ["natural=sand", "natural=beach", "natural=desert"]:
                     surface_material_map[(x, z)] = "sandstone"
-                # Всё остальное по маппингу
                 else:
                     surface_material_map[(x, z)] = block_name
 
 
 def blur_surface(surface_map, iterations=15):
+    # Воду не трогаем и не порождаем в результате сглаживания
     for _ in range(iterations):
         new_map = copy.deepcopy(surface_map)
         for (x, z), mat in surface_map.items():
-            # Все 8 соседей (крест + диагонали)
+            if mat == "water":
+                # вода остаётся водой
+                continue
             neighbors = [
                 surface_map.get((x+1, z)), surface_map.get((x-1, z)),
                 surface_map.get((x, z+1)), surface_map.get((x, z-1)),
                 surface_map.get((x+1, z+1)), surface_map.get((x-1, z-1)),
                 surface_map.get((x+1, z-1)), surface_map.get((x-1, z+1)),
             ]
-            count = Counter([n for n in neighbors if n is not None])
+            # считаем только НЕ-воду
+            valid = [n for n in neighbors if n is not None and n != "water"]
+            count = Counter(valid)
             if count:
-                # Если больше соседей другого типа — сменить материал
                 most_common, freq = count.most_common(1)[0]
-                if most_common != mat and freq >= 4:  # Подбирать
+                if most_common != mat and freq >= 4:
                     new_map[(x, z)] = most_common
         surface_map = new_map
     return surface_map
 
+
 surface_material_map = blur_surface(surface_material_map, iterations=15)
+
+WATER_MASK = {(x, z) for (x, z), m in surface_material_map.items() if m == "water"}
 
 
 
@@ -564,19 +581,21 @@ def blur_height_map(height_map, iterations=20):
 terrain_y = blur_height_map(terrain_y, iterations=20)
 
 
-print("🌎 Ставим блоки с нужным материалом строго по выровненной поверхности...")
-for x in range(min_x, max_x + 1):
-    for z in range(min_z, max_z + 1):
-        y = terrain_y[(x, z)]
-        blockname = surface_material_map.get((x, z), "moss_block")
-        # 1. Ставим нужный блок на правильной высоте
-        set_block(x, y, z, Block(namespace="minecraft", base_name=blockname))
-        # 2. Всё что выше — чистим (если вдруг что-то там осталось)
-        for y_above in range(y+1, Y_BASE+100):  # 100 — запас по высоте мира
-            set_block(x, y_above, z, Block(namespace="minecraft", base_name="air"))
-        # 3. Всё что ниже — тоже чистим (опционально)
-        for y_below in range(Y_BASE, y):
-            set_block(x, y_below, z, Block(namespace="minecraft", base_name="air"))
+def osm_width_to_blocks(tags):
+    """
+    Ширина русла в блоках.
+    Понимает '12', '10 m', '12;8', '8,5', и даёт умные дефолты по waterway.
+    """
+    for k in ("width", "est_width", "width:avg"):
+        if k in tags and tags[k]:
+            s = str(tags[k])
+            m = re.search(r"(\d+([.,]\d+)?)", s)
+            if m:
+                val = float(m.group(1).replace(",", "."))
+                return max(2, int(round(val)))
+    defaults = {"river": 12, "canal": 8, "stream": 4, "drain": 3, "ditch": 2}
+    return defaults.get(tags.get("waterway"), 4)
+
 
 
 def correct_water_blocks(
@@ -589,49 +608,44 @@ def correct_water_blocks(
     from shapely.geometry import Polygon, LineString, Point
     import geopandas as gpd
 
-    # 1. OSM: реки (way) и озёра (полигон natural=water или waterway=riverbank/lake)
+    # 1. OSM: реки/озера (полигоны и линии)
     osm_water_polygons = []
     osm_river_lines = []
+
     for feat in features:
         tags = feat.get("tags", {})
-        if feat["type"] == "way":
-            nodes = [node_coords.get(nid) for nid in feat.get("nodes", []) if nid in node_coords]
-            if not nodes or len(nodes) < 2:
-                continue
-            # Полигоны воды (natural=water, water=lake, waterway=riverbank и тд)
-            is_water_poly = False
-            if nodes[0] == nodes[-1] and len(nodes) > 3:
-                if (
-                    tags.get("natural") == "water" or
-                    tags.get("waterway") == "riverbank" or
-                    tags.get("water") in ["lake", "pond", "basin", "reservoir"]
-                ):
-                    is_water_poly = True
-            if is_water_poly:
+        if feat["type"] != "way":
+            continue
+
+        nodes = [node_coords.get(nid) for nid in feat.get("nodes", []) if nid in node_coords]
+        if not nodes or len(nodes) < 2:
+            continue
+
+        # Полигоны воды (закрытые контуры)
+        if nodes[0] == nodes[-1] and len(nodes) > 3:
+            if (
+                tags.get("natural") == "water" or
+                tags.get("waterway") in ("riverbank", "dock") or
+                tags.get("water") in ("lake", "pond", "basin", "reservoir")
+            ):
                 poly = Polygon(nodes)
                 if poly.is_valid and not poly.is_empty:
                     osm_water_polygons.append(poly)
-            # Линии рек
-            elif tags.get("waterway") in ("river", "stream", "canal", "drain", "ditch"):
-                line = LineString(nodes)
-                width = None
-                if "width" in tags:
-                    try:
-                        width = float(tags["width"])
-                    except Exception:
-                        pass
-                if not width:
-                    width = 2  # по умолчанию
-                osm_river_lines.append((line, width))
+            continue
+
+        # Линейные водотоки (река/ручеёк/канал/дренаж)
+        if tags.get("waterway") in ("river", "stream", "canal", "drain", "ditch"):
+            line = LineString(nodes)
+            width = osm_width_to_blocks(tags)  # <-- теперь ширина адекватная
+            osm_river_lines.append((line, width))
+
     # 2. OSM multipolygon воды (relations)
     for feat in features:
         if feat["type"] != "relation":
             continue
         tags = feat.get("tags", {})
-        if (
-            tags.get("type") == "multipolygon" and (
-                tags.get("natural") == "water" or tags.get("waterway") == "riverbank"
-            )
+        if tags.get("type") == "multipolygon" and (
+            tags.get("natural") == "water" or tags.get("waterway") == "riverbank"
         ):
             lines = []
             for member in feat.get("members", []):
@@ -641,10 +655,8 @@ def correct_water_blocks(
                     if not way:
                         continue
                     nodes = [node_coords.get(nid) for nid in way.get("nodes", []) if nid in node_coords]
-                    if len(nodes) < 2:
-                        continue
-                    lines.append(LineString(nodes))
-            # Сборка полигона из всех линий мультиполигона
+                    if len(nodes) >= 2:
+                        lines.append(LineString(nodes))
             for poly in polygonize(lines):
                 if poly.is_valid and not poly.is_empty:
                     osm_water_polygons.append(poly)
@@ -690,15 +702,15 @@ def correct_water_blocks(
                 if buf.contains(p):
                     water_blocks.add((x, z))
 
-    # 6. Корректируем блоки
+    # 6. Корректируем блоки: выставляем воду на y-1, воздух на y
     print("  Корректируем блоки мира: ставим воду...")
     for (x, z) in water_blocks:
         y = terrain_y.get((x, z), Y_BASE)
-        # Не трогать если тут уже вода
-        if surface_material_map.get((x, z)) == "water":
-            continue
+        # верх — воздух
         set_block(x, y, z, Block(namespace="minecraft", base_name="air"))
+        # вода — на y-1
         set_block(x, y-1, z, Block(namespace="minecraft", base_name="water"))
+        # помечаем материал сразу
         surface_material_map[(x, z)] = "water"
 
 
@@ -711,8 +723,34 @@ correct_water_blocks(
 )
 
 
+WATER_MASK = {(x, z) for (x, z), m in surface_material_map.items() if m == "water"}
 
 
+print("🌎 Ставим блоки с нужным материалом строго по выровненной поверхности...")
+for x in range(min_x, max_x + 1):
+    for z in range(min_z, max_z + 1):
+        y = terrain_y.get((x, z), Y_BASE)
+        blockname = surface_material_map.get((x, z), "moss_block")
+
+        if blockname == "water":
+            # ВОДА ДОЛЖНА ОСТАТЬСЯ НА УРОВНЕ -1 ОТ ПОВЕРХНОСТИ
+            # 1) Верхняя крышка — воздух на уровне y
+            set_block(x, y, z, Block(namespace="minecraft", base_name="air"))
+            # 2) Вода на y-1
+            set_block(x, y-1, z, Block(namespace="minecraft", base_name="water"))
+            # 3) Чистим выше воды
+            for y_above in range(y+1, Y_BASE+100):
+                set_block(x, y_above, z, Block(namespace="minecraft", base_name="air"))
+            # 4) Чистим ниже, НО не трогаем сам уровень воды y-1
+            for y_below in range(Y_BASE, y-1):
+                set_block(x, y_below, z, Block(namespace="minecraft", base_name="air"))
+        else:
+            # Обычные материалы стоят ровно на поверхности y
+            set_block(x, y, z, Block(namespace="minecraft", base_name=blockname))
+            for y_above in range(y+1, Y_BASE+100):
+                set_block(x, y_above, z, Block(namespace="minecraft", base_name="air"))
+            for y_below in range(Y_BASE, y):
+                set_block(x, y_below, z, Block(namespace="minecraft", base_name="air"))
 
 def set_plant(x, y, z, plant):
     if plant in GRASS_PLANTS + FLOWERS + BUSHES:
@@ -805,10 +843,23 @@ for feature in features:
     for x in range(min_x, max_x+1):
         for z in range(min_z, max_z+1):
             if polygon.contains(Point(x, z)):
+                if (x, z) in WATER_MASK or surface_material_map.get((x, z)) == "water":
+                    continue
                 y = terrain_y.get((x, z), Y_BASE)
                 set_block(x, y, z, block)
 
 level.save()
+
+
+
+
+
+
+
+
+
+
+
 
 # --- 3. Дороги и рельсы (тоже на Y_BASE)
 print("🛣️ Генерация дорог и рельсов...")
@@ -842,38 +893,6 @@ def bresenham_line(x0, z0, x1, z1):
         points.append((x, z))
     return points
 
-def get_rail_shape(x1, z1, x2, z2, x3, z3):
-    # определяем форму рельсы по соседям (x2,z2 - это наш блок)
-    dx1, dz1 = x2-x1, z2-z1
-    dx2, dz2 = x3-x2, z3-z2
-    dirs = {(0,1):'south', (0,-1):'north', (1,0):'east', (-1,0):'west'}
-    if (dx1, dz1) == (dx2, dz2):  # прямая
-        if abs(dx1) > abs(dz1):
-            return 'east_west'
-        else:
-            return 'north_south'
-    # Повороты: 4 возможных угла
-    if (dx1, dz1) == (0,1) and (dx2, dz2) == (1,0):
-        return 'south_east'
-    if (dx1, dz1) == (1,0) and (dx2, dz2) == (0,1):
-        return 'south_east'
-    if (dx1, dz1) == (0,1) and (dx2, dz2) == (-1,0):
-        return 'south_west'
-    if (dx1, dz1) == (-1,0) and (dx2, dz2) == (0,1):
-        return 'south_west'
-    if (dx1, dz1) == (0,-1) and (dx2, dz2) == (1,0):
-        return 'north_east'
-    if (dx1, dz1) == (1,0) and (dx2, dz2) == (0,-1):
-        return 'north_east'
-    if (dx1, dz1) == (0,-1) and (dx2, dz2) == (-1,0):
-        return 'north_west'
-    if (dx1, dz1) == (-1,0) and (dx2, dz2) == (0,-1):
-        return 'north_west'
-    # fallback
-    if abs(dx1) > abs(dz1):
-        return 'east_west'
-    else:
-        return 'north_south'
 
 # --- Получаем актуальную карту высот и материалов (поверхность уже построенного мира) ---
 def get_actual_surface_y_and_material_map(level, min_x, max_x, min_z, max_z, terrain_y, DIMENSION):
@@ -1900,6 +1919,9 @@ for poly in quarry_polygons:
                 placed_ore_cells += 1
 
 
+# --- Инфраструктура ---
+
+
 print("🚧 Генерация заборов...")
 
 # --- Материалы ---
@@ -2157,8 +2179,6 @@ for feat in features:
 
 
 
-
-# --- Инфраструктура ---
 
 
 print("🚸 Генерация наземных пешеходных переходов (зебр)...")
