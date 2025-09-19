@@ -1,4 +1,5 @@
 html, body { height: 100%; margin: 0; }
+#appRoot { height: 100%; }
 #map { height: 100%; width: 100%; position: relative; }
 #selectionBox {
   position: fixed;
@@ -13,10 +14,10 @@ html, body { height: 100%; margin: 0; }
   --glass-alpha: 0.55;
   --glass-dark: rgba(15, 18, 20, var(--glass-alpha));
   --glass-light: rgba(255, 255, 255, var(--glass-alpha));
-  --glass-blur: 6px;
+  --glass-blur: 5px;
 }
 
-/* --- Хедер Cartopia --- */
+/* --- Хедер --- */
 #header {
   position: fixed;
   inset: 0 0 auto 0;
@@ -32,108 +33,254 @@ html, body { height: 100%; margin: 0; }
   backdrop-filter: blur(var(--glass-blur));
   -webkit-backdrop-filter: blur(var(--glass-blur));
   z-index: 2000;
-  pointer-events: none;
+  pointer-events: auto;
   user-select: none;
+
+  transition: transform 520ms cubic-bezier(.22,.61,.36,1),
+              opacity   360ms cubic-bezier(.22,.61,.36,1);
+}
+#header .brand{ display: inline-flex; align-items: center; gap: 10px; }
+#header .brand-logo{ height: 40px; width: auto; display: block; }
+#header .brand-title{ display: block; }
+
+/* Лёгкий «нажим» логотипа */
+#header .brand-logo{
+  cursor: pointer;
+  transition: transform 120ms cubic-bezier(.2,.6,.2,1), filter 120ms ease;
+}
+#header .brand-logo:active,
+#header .brand-logo.pressed{
+  transform: scale(.92);
+  filter: brightness(.9);
 }
 
-/* --- Панель управления --- */
+/* --- Футер --- */
+#footer {
+  position: fixed;
+  inset: auto 0 0 0;
+  height: 50px;
+  background: var(--glass-dark);
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font: 500 14px/1.2 system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+  border-top-left-radius: 16px;
+  border-top-right-radius: 16px;
+  backdrop-filter: blur(var(--glass-blur));
+  -webkit-backdrop-filter: blur(var(--glass-blur));
+  z-index: 2000;
+  pointer-events: auto;
+  user-select: none;
+
+  transition: transform 520ms cubic-bezier(.22,.61,.36,1),
+              opacity   360ms cubic-bezier(.22,.61,.36,1);
+}
+.footer-inner{ display: flex; align-items: center; justify-content: center; gap: 12px; }
+.footer-text,
+.footer-logos{ display: flex; align-items: center; justify-content: center; gap: 10px; white-space: nowrap; }
+#footer a{ color: #fff; text-decoration: underline; cursor: pointer; }
+.footer-logo{ height: 22px; width: auto; display: inline-block; vertical-align: middle; object-fit: contain; opacity: 0.95; }
+.sep{ opacity: 0.75; }
+
+/* Адаптив футера */
+/* Компактные состояния, которые будем включать из JS */
+#footer.compact .footer-inner{ 
+  flex-direction: column; 
+  gap: 4px; 
+}
+#footer.compact .footer-text{ 
+  font-size: 12px; 
+  white-space: normal;
+}
+#footer.compact .footer-logo{ height: 18px; }
+
+#footer.tiny .footer-text{ font-size: 11px; }
+#footer.tiny .footer-logo{ height: 16px; }
+
+/* --- Панель: контейнер без фона (ездит целиком), «стекло» внутри --- */
 #controls {
   position: fixed;
   top: calc(72px + 30px);
   right: 30px;
-  background: var(--glass-light);
-  padding: 16px 48px;
-  border-radius: 10px;
   z-index: 1000;
-  box-shadow: 0 2px 12px rgba(0,0,0,0.10);
-  min-width: 280px;
-  text-align: right;
-  transition: transform 320ms cubic-bezier(.22,.61,.36,1);
-  will-change: transform;
+
+  /* стеклянный фон + blur ТОЛЬКО под белым прямоугольником */
+  background: var(--glass-light);
   backdrop-filter: blur(var(--glass-blur));
   -webkit-backdrop-filter: blur(var(--glass-blur));
+  border-radius: 10px;
+  box-shadow: 0 2px 12px rgba(0,0,0,0.10);
+  overflow: visible;
+  isolation: isolate;
+
+  will-change: transform, opacity;
+  transition: transform 520ms cubic-bezier(.22,.61,.36,1),
+              opacity   220ms cubic-bezier(.22,.61,.36,1);
 }
 
 #collapseTab, #dragTab {
-  position: absolute;
-  top: 0px;
-  width: 32px;
-  height: 32px;
-  border-radius: 50%;
-  -webkit-appearance: none;
-  appearance: none;
-  background: #fff;
-  color: #333;
+  position: absolute; top: 0px;
+  width: 32px; height: 32px; border-radius: 50%;
+  -webkit-appearance: none; appearance: none;
+  background: #fff; color: #333;
   border: 1px solid rgba(0,0,0,0.12);
-  box-shadow: none;
-  cursor: pointer;
-  display: grid;
-  place-items: center;
+  box-shadow: none; cursor: pointer;
+  display: grid; place-items: center;
   font: 700 16px/1 system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
-  user-select: none;
-  padding: 0;
-  z-index: 1001;
+  user-select: none; padding: 0; z-index: 1001;
   background-clip: padding-box;
 }
 #collapseTab { left: -16px; }
-#dragTab { right: -16px; }
+#dragTab     { right: -16px; }
+#controls.collapsed #dragTab { display: none; }
+#controls.collapsed #collapseTab { left: -12px; right: auto; }
 
-#controls input, 
-#controls button { margin-bottom: 8px; }
-
-#searchInput {
-  width: 95%;
-  margin-bottom: 8px;
-  padding: 6px;
-  border-radius: 6px;
-  border: 1px solid #ccc;
-  background: #fff;
-}
-
-#controls label {
-  font-size: 13px;
-  color: #333;
-  margin-bottom: 3px;
-  display: block;
-  text-align: left;
-}
-
-#searchBtn,
-#toggleBtn,
-#confirmBtn {
-  border-radius: 8px;
-  height: 25px;
-  min-width: 110px;
-}
-
-#controls button{
-  -webkit-appearance: none;
-  appearance: none;
-  background: #fff;
+/* --- «Стекло» панели: анимируем ТОЛЬКО height --- */
+#controlsGlass{
+  background: transparent;
   color: #111;
+  overflow: hidden; /* ← ВАЖНО: прячем содержимое, пока высота маленькая */
+
+  will-change: height, opacity;
+  transition: height 260ms cubic-bezier(.22,.61,.36,1),
+              opacity 220ms cubic-bezier(.22,.61,.36,1);
+}
+
+/* внутренняя обёртка с паддингами и мин-шириной */
+.glass-inner{
+  padding: 16px 48px;
+  min-width: 280px;
+}
+
+/* В схлопнутом состоянии «линия»; высоту ставим из JS равной высоте кнопки */
+#controlsGlass.glass-collapsed{
+  pointer-events: none; /* кликаем только по стрелке */
+}
+
+/* Контент прячем при схлопывании, чтобы не ловил таб-фокус */
+#controlsBody.content-hidden { visibility: hidden; }
+
+#controlsBody{
+  opacity: 1;
+  transition: opacity 200ms cubic-bezier(.22,.61,.36,1) 10ms; 
+}
+
+/* стартовое состояние для фейда при раскрытии */
+#controlsBody.fade-start{ opacity: 0; }
+
+/* Внутренние элементы */
+#controls input, #controls button { margin-bottom: 8px; }
+#searchInput {
+  width: 95%; margin-bottom: 8px; padding: 6px;
+  border-radius: 6px; border: 1px solid #ccc; background: #fff;
+}
+#controls label {
+  font-size: 13px; color: #333; margin-bottom: 3px; display: block; text-align: left;
+}
+#searchBtn, #toggleBtn, #confirmBtn {
+  border-radius: 8px; height: 25px; min-width: 110px;
+}
+#controls button{
+  -webkit-appearance: none; appearance: none;
+  background: #fff; color: #111;
   border: 1px solid rgba(0,0,0,0.12);
-  box-shadow: none;
-  background-clip: padding-box;
+  box-shadow: none; background-clip: padding-box;
 }
 #controls button:hover{ filter: brightness(1.03); }
 #controls button:active{ filter: brightness(0.97); }
-#controls button:focus-visible{
-  outline: 2px solid rgba(17,17,17,0.25);
-  outline-offset: 2px;
-}
+#controls button:focus-visible{ outline: 2px solid rgba(17,17,17,0.25); outline-offset: 2px; }
 
 /* --- Скрываем дефолтные контролы Leaflet --- */
 .leaflet-bottom.leaflet-right,
 .leaflet-control-attribution,
 .leaflet-control-container { display: none !important; }
 
-/* --- Состояние свёрнутой панели --- */
-#controls.collapsed > :not(#collapseTab) { display: none !important; }
-#controls.collapsed #collapseTab { left: -12px; right: auto; }
-
+/* --- Статус --- */
 #statusLine {
   margin-top: 6px;
   font: 12px/1.3 system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
-  color: #333;
-  text-align: left;
+  color: #333; text-align: left;
+}
+
+/* ===== ВХОДНЫЕ АНИМАЦИИ ПРИ ЗАГРУЗКЕ СТРАНИЦЫ ===== */
+body:not(.page-ready) #header { transform: translateY(-100%); opacity: 0; }
+body:not(.page-ready) #footer { transform: translateY( 100%); opacity: 0; }
+/* панель просто «въезжает справа» целиком раскрытая */
+body:not(.page-ready) #controls{
+  transform: translateX(calc(100% + 60px));
+  opacity: 0;
+}
+
+
+/* ===== FX: Пикселизация всей страницы («майнкрафт») ===== */
+.fx-pixel-wrap{
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  /* блокируем ВСЕ взаимодействия под оверлеем */
+  pointer-events: all;
+  display: grid;
+  place-items: stretch;
+
+  /* плавное появление/исчезновение */
+  opacity: 0;
+  transition: opacity 1000ms ease; /* 1s in + 1s out => суммарно ~5s */
+}
+
+/* визуальный намёк, что нельзя кликать */
+.fx-pixel-wrap.block-input{ cursor: not-allowed; }
+
+/* трюк пикселизации: даунскейл внутри, апскейл снаружи, + pixelated */
+.fx-pixel-wrap .fx-outer{
+  width: 100%;
+  height: 100%;
+  transform: scale(var(--up,1));     /* апскейл, например 6 */
+  transform-origin: 50% 50%;
+}
+.fx-pixel-wrap .fx-inner{
+  width: 100%;
+  height: 100%;
+  transform: scale(var(--down,1));   /* даунскейл = 1/--up, например 1/6 */
+  transform-origin: 50% 50%;
+  image-rendering: pixelated;
+  image-rendering: crisp-edges;
+}
+
+/* лёгкий «нажим» логотипа  */
+#header .brand-logo{
+  cursor: pointer;
+  transition: transform 120ms cubic-bezier(.2,.6,.2,1), filter 120ms ease;
+}
+#header .brand-logo:active,
+#header .brand-logo.pressed{
+  transform: scale(.92);
+  filter: brightness(.9);
+}
+
+/* ===== Пиксельный оверлей-картинка (скриншот страницы) ===== */
+.fx-pixel-overlay{
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  pointer-events: all;           /* блокируем взаимодействие */
+  display: grid;
+  place-items: center;
+  background: transparent;
+  opacity: 0;
+  transition: opacity 1000ms ease; /* 1s in / 1s out */
+}
+/* Пока работает пиксельный эффект — показывать курсор "not-allowed" */
+.fx-pixel-overlay,
+.fx-pixel-overlay * {
+  cursor: not-allowed !important;
+}
+.fx-pixel-overlay.visible{ opacity: 1; }
+
+.fx-pixel-overlay__img{
+  width: 100vw;
+  height: 100vh;
+  object-fit: cover;
+  image-rendering: pixelated;
+  image-rendering: crisp-edges;
 }

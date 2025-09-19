@@ -7,35 +7,89 @@
   <link rel="stylesheet" href="./styles.css" />
 </head>
 <body>
-  <div id="header">Cartopia</div>
 
-  <div id="map"></div>
-  <div id="selectionBox"></div>
-
-  <div id="controls">
-    <button id="collapseTab" title="Hide">›</button>
-    <button id="dragTab" title="Move">✣</button>
-
-    <label for="searchInput">Search for a city, address, or coordinates:</label>
-    <input type="text" id="searchInput" placeholder="For example, Москва, Moscow or 55.7558,37.6176" />
-    <button id="searchBtn">Find</button><br />
-
-    <button id="toggleBtn">Select area</button><br />
-
-    <div style="display:flex;align-items:center;margin-bottom:4px;">
-      <label for="sizeInput" style="margin-right:8px;margin-bottom:0;">Side length (meters):</label>
-      <input type="number" id="sizeInput" value="500" min="200" step="100" style="width:160px;margin-bottom:0;" />
+  <div id="appRoot">
+    <div id="header">
+      <div class="brand">
+        <img
+          class="brand-logo"
+          src="./logos/Cartopia_logo_globe.png"
+          alt="Cartopia logo"
+          draggable="false"
+          tabindex="0"
+          role="button"
+          title="Blocky filter"
+        />
+        <span class="brand-title">Cartopia</span>
+      </div>
     </div>
 
-    <div id="areaInfo" style="font-size:12px;color:#666;margin-bottom:8px;text-align:left;">
-      Approx. area: side × side (m²)
+    <div id="map"></div>
+    <div id="selectionBox"></div>
+
+    <div id="controls">
+      <button id="collapseTab" title="Hide">›</button>
+      <button id="dragTab" title="Move">✣</button>
+
+      <div id="controlsGlass">
+        <div class="glass-inner">
+          <div id="controlsBody">
+            <label for="searchInput">Search for a city, address, or coordinates:</label>
+            <input
+              type="text"
+              id="searchInput"
+              placeholder="For example, Москва, Moscow or 55.7558,37.6176"
+            />
+            <button id="searchBtn">Find</button><br />
+
+            <button id="toggleBtn">Select area</button><br />
+
+            <div style="display:flex;align-items:center;margin-bottom:4px;">
+              <label for="sizeInput" style="margin-right:8px;margin-bottom:0;">Side length (meters):</label>
+              <input
+                type="number"
+                id="sizeInput"
+                value="500"
+                min="200"
+                step="100"
+                style="width:160px;margin-bottom:0;"
+              />
+            </div>
+
+            <div id="areaInfo" style="font-size:12px;color:#666;margin-bottom:8px;text-align:left;">
+              Approx. area: side × side (m²)
+            </div>
+
+            <button id="confirmBtn" disabled>Confirm</button>
+
+            <div id="statusLine" aria-live="polite"></div>
+          </div>
+        </div>
+      </div>
     </div>
 
-    <button id="confirmBtn" disabled>Confirm</button>
-    <div id="statusLine" aria-live="polite"></div>
-  </div>
+    <div id="footer">
+      <div class="footer-inner">
+        <div class="footer-text">
+          <span class="made-by">by
+            <a href="https://github.com/TheAndreyZakharov" target="_blank" rel="noopener">Andrey Zakharov</a>
+          </span>
+          <span class="sep">-</span>
+          <span class="powered">powered by</span>
+        </div>
+
+        <div class="footer-logos">
+          <img class="footer-logo" src="./logos/OpenStreetMap_logo.png" alt="OpenStreetMap" />
+          <img class="footer-logo" src="./logos/OpenLandMap_logo.png" alt="OpenLandMap" />
+          <img class="footer-logo" src="./logos/OpenTopography_logo.png" alt="OpenTopography" />
+          <img class="footer-logo" src="./logos/GMRT_logo.png" alt="GMRT" />
+        </div>
+      </div>
+    </div>
+  </div> 
 
   <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
   <script src="./app.js"></script>
 </body>
 </html>

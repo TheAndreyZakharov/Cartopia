@@ -2,6 +2,7 @@
 const SOUTH_LIMIT = -60;
 const NORTH_LIMIT = 85.05112878;
 const HEADER_HEIGHT = 72;
+const FOOTER_HEIGHT = 50;
 const PAD_TOP_FROM_HEADER = 30;
 const DEFAULT_OFFSET_TOP = HEADER_HEIGHT + PAD_TOP_FROM_HEADER;
 const DEFAULT_OFFSET_RIGHT = 30;
@@ -22,6 +23,15 @@ const OVERPASS_TIMEOUT_MS = 120000;
 function clampLat(lat){ return Math.min(Math.max(lat, SOUTH_LIMIT), NORTH_LIMIT); }
 function setStatus(text){ statusLine.textContent = text || ""; }
 
+function waitTransition(el, fallbackMs = 500){
+  return new Promise(resolve => {
+    let done = false;
+    const finish = () => { if (done) return; done = true; el.removeEventListener('transitionend', finish); resolve(); };
+    el.addEventListener('transitionend', finish, { once: true });
+    setTimeout(finish, fallbackMs);
+  });
+}
+
 /* ===================== Инициализация карты ===================== */
 const map = L.map('map', {
   attributionControl: false,
@@ -34,7 +44,8 @@ const map = L.map('map', {
 L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
   maxZoom: 19,
   minZoom: 2,
-  bounds: L.latLngBounds([SOUTH_LIMIT, -180],[NORTH_LIMIT, 180])
+  bounds: L.latLngBounds([SOUTH_LIMIT, -180],[NORTH_LIMIT, 180]),
+  crossOrigin: 'anonymous'
 }).addTo(map);
 
 setTimeout(() => {
@@ -54,6 +65,10 @@ const searchBtn = document.getElementById('searchBtn');
 const areaInfo = document.getElementById('areaInfo');
 const statusLine = document.getElementById('statusLine');
 
+const controlsGlass = document.getElementById('controlsGlass');
+const controlsBody  = document.getElementById('controlsBody');
+
+let lastExpandedHeightPx = null; // сюда запишем высоту стекла перед схлопыванием
 
 // Размеры итогового GeoTIFF (single-band) под твой bbox
 const OLM_TIFF_WIDTH   = 1024;   // при больших окнах можно 2048–4096
@@ -112,7 +127,7 @@ let userMoved = false;
 
     const pad = 8;
     const maxLeft = window.innerWidth - controls.offsetWidth - pad;
-    const maxTop  = window.innerHeight - controls.offsetHeight - pad;
+    const maxTop  = window.innerHeight - controls.offsetHeight - pad - FOOTER_HEIGHT;
 
     left = clamp(left, pad, Math.max(pad, maxLeft));
     top  = clamp(top, HEADER_HEIGHT + pad, Math.max(HEADER_HEIGHT + pad, maxTop));
@@ -141,11 +156,12 @@ let userMoved = false;
   dragTab.addEventListener('touchstart', onTouchStart, { passive: false });
 })();
 
-/* ===================== COLLAPSE панели ===================== */
+/* ===================== COLLAPSE панели: анимируем высоту «стекла» ===================== */
 (function enableCollapse(){
   const pad = 12;
   const tabVisible = 32;
   let baseLeft = 0, baseTop = 0;
+  let lastExpandedHeightPx = null;
 
   function setTabIcon() {
     if (controls.classList.contains('collapsed')) { collapseTab.textContent = '‹'; collapseTab.title = 'Show'; }
@@ -163,8 +179,23 @@ let userMoved = false;
     controls.style.transform = `translate(${dx}px, ${dy}px)`;
   }
 
-  function collapse() {
+  // аккуратно меряем «естественную» высоту стекла без анимаций
+  function measureExpandedHeight(){
+    const prevH = controlsGlass.style.height;
+    const prevT = controlsGlass.style.transition;
+    controlsGlass.style.transition = 'none';
+    controlsGlass.style.height = 'auto';
+    const h = controlsGlass.offsetHeight;
+    controlsGlass.style.height = prevH;
+    controlsGlass.style.transition = prevT;
+    return h;
+  }
+
+  /* 1) СВЕРНУТЬ: стекло -> высота кнопки; затем «линия» уезжает вправо */
+  async function collapse() {
     if (controls.classList.contains('collapsed')) return;
+
+    // 1.1 зафиксировать текущие координаты панели
     const rect = controls.getBoundingClientRect();
     baseLeft = rect.left;
     baseTop  = rect.top;
@@ -175,17 +206,35 @@ let userMoved = false;
     controls.style.right = 'auto';
     controls.style.transform = 'translate(0,0)';
 
+    // 1.2 меряем целевую «большую» высоту (на будущее разворачивание)
+    lastExpandedHeightPx = measureExpandedHeight();
+
+    // фиксируем стартовую высоту и начинаем схлопывать
+    controlsGlass.style.height = `${lastExpandedHeightPx}px`;
+    await new Promise(r => requestAnimationFrame(r));
+    controlsBody.classList.add('content-hidden');
+    controlsGlass.classList.add('glass-collapsed');
+
+    const collapsedH = collapseTab.getBoundingClientRect().height || 32;
+    controlsGlass.style.height = `${collapsedH}px`;
+
+    // дождаться конца анимации высоты
+    await waitTransition(controlsGlass);
+
+    // 1.3 теперь увозим «линию» к правому краю
     controls.classList.add('collapsed');
     setTabIcon();
     requestAnimationFrame(syncCollapsedPosition);
   }
 
-  function expand() {
+  /* 2) РАЗВЕРНУТЬ: СНАЧАЛА «линия» возвращается в исходную точку, ПОТОМ стекло разжимается */
+  async function expand() {
     if (!controls.classList.contains('collapsed')) return;
 
     const defLeft = getDefaultLeft();
     const defTop  = getDefaultTop();
 
+    // 2.1 линия возвращается на место
     controls.style.left = defLeft + 'px';
     controls.style.top  = defTop  + 'px';
     controls.style.right = 'auto';
@@ -194,25 +243,56 @@ let userMoved = false;
     const backDx = cur.left - defLeft;
     const backDy = cur.top  - defTop;
     controls.style.transform = `translate(${backDx}px, ${backDy}px)`;
+    await new Promise(r => requestAnimationFrame(r));
+    controls.style.transform = 'translate(0,0)';
+    await waitTransition(controls);
 
-    function onBackEnd(ev){
-      if (ev.propertyName !== 'transform') return;
-      controls.removeEventListener('transitionend', onBackEnd);
-      controls.classList.remove('collapsed');
-      setTabIcon();
-      baseLeft = defLeft;
-      baseTop  = defTop;
-      userMoved = false;
-    }
-    controls.addEventListener('transitionend', onBackEnd);
-    requestAnimationFrame(() => { controls.style.transform = 'translate(0,0)'; });
+    // === закрепляем панель за правым краем и сбрасываем состояние
+    controls.style.transform = '';                 // очистить inline-transform
+    controls.style.left = 'auto';                  // больше не фиксируем слева
+    controls.style.right = DEFAULT_OFFSET_RIGHT + 'px'; // 30px от правого края по умолчанию
+    baseLeft = getDefaultLeft();                   // обновим базовые координаты
+    baseTop  = getDefaultTop();
+    userMoved = false;                             // считаем, что пользовательское положение сброшено
+
+    // 2.2 выключаем состояние collapsed (линия уже на месте)
+    controls.classList.remove('collapsed');
+    setTabIcon();
+
+    // 2.3 показываем контент, но высота пока остаётся «тонкой»
+
+    // целевая высота — сохранённая (или пересчитаем на всякий случай)
+    const targetH = lastExpandedHeightPx || measureExpandedHeight();
+
+    // убеждаемся, что стартовая высота = высоте кнопки
+    const collapsedH = collapseTab.getBoundingClientRect().height || 32;
+    controlsGlass.style.height = `${collapsedH}px`;
+
+    // 2.4 запускаем ЕДИНСТВЕННУЮ анимацию высоты
+    await new Promise(r => requestAnimationFrame(r));
+    controlsGlass.style.height = `${targetH}px`;
+    await waitTransition(controlsGlass);
+
+    // 2.4.1 ТЕПЕРЬ показываем контент и плавно проявляем
+    controlsBody.classList.remove('content-hidden');
+    controlsBody.classList.add('fade-start');
+    await new Promise(r => requestAnimationFrame(r));
+    controlsBody.classList.remove('fade-start');
+
+    // 2.5 чистим временные стили/классы
+    controlsGlass.style.height = '';           // auto
+    controlsGlass.classList.remove('glass-collapsed');
   }
 
   collapseTab.addEventListener('click', () => {
     if (controls.classList.contains('collapsed')) expand(); else collapse();
   });
+
   window.addEventListener('resize', syncCollapsedPosition);
   setTabIcon();
+
+  // экспорт для отладки
+  window.__cartopiaToggle = { collapse, expand };
 })();
 
 /* ===================== Resize: держим панель видимой ===================== */
@@ -224,7 +304,7 @@ let userMoved = false;
       const pad = 8;
       const rect = controls.getBoundingClientRect();
       const maxLeft = window.innerWidth  - controls.offsetWidth  - pad;
-      const maxTop  = window.innerHeight - controls.offsetHeight - pad;
+      const maxTop  = window.innerHeight - controls.offsetHeight - pad - FOOTER_HEIGHT;
       const left = clamp(rect.left, pad, Math.max(pad, maxLeft));
       const top  = clamp(rect.top,  HEADER_HEIGHT + pad, Math.max(HEADER_HEIGHT + pad, maxTop));
       controls.style.position = 'fixed';
@@ -233,12 +313,11 @@ let userMoved = false;
       controls.style.right = 'auto';
       controls.style.transform = 'translate(0,0)';
     } else {
-      const defLeft = window.innerWidth - controls.offsetWidth - DEFAULT_OFFSET_RIGHT;
       const defTop  = DEFAULT_OFFSET_TOP;
       controls.style.position = 'fixed';
-      controls.style.left = defLeft + 'px';
-      controls.style.top  = defTop  + 'px';
-      controls.style.right = 'auto';
+      controls.style.top  = defTop + 'px';
+      controls.style.right = DEFAULT_OFFSET_RIGHT + 'px';
+      controls.style.left = 'auto';
       controls.style.transform = 'translate(0,0)';
     }
   });
@@ -506,3 +585,167 @@ confirmBtn.onclick = async () => {
 
 /* ===================== Go ===================== */
 updateAreaInfo();
+
+/* ВХОДНЫЕ АНИМАЦИИ ПРИ ЗАГРУЗКЕ: хедер/футер и панель просто появляются */
+requestAnimationFrame(() => {
+  setTimeout(() => {
+    document.body.classList.add('page-ready');
+    // пересчитать размеры контейнера карты, т.к. родителю задали высоту
+    map.invalidateSize(true);
+  }, 40);
+});
+
+
+/* ========= Плавный «переезд» футера при смене макета (FLIP) ========= */
+(function animateFooterFLIP(){
+  const footer = document.getElementById('footer');
+  if (!footer) return;
+
+  // что именно двигаем — два блока внутри футера
+  const items = Array.from(footer.querySelectorAll('.footer-text, .footer-logos'));
+
+  const measure = () => new Map(items.map(el => [el, el.getBoundingClientRect()]));
+
+  function play(first, last){
+    items.forEach(el => {
+      const f = first.get(el), l = last.get(el);
+      const dx = f.left - l.left;
+      const dy = f.top  - l.top;
+      if (Math.abs(dx) > 0.5 || Math.abs(dy) > 0.5){
+        el.style.transition = 'none';
+        el.style.transform  = `translate(${dx}px, ${dy}px)`;
+        el.style.willChange = 'transform, opacity';
+        el.style.opacity    = '0.94';
+      }
+    });
+
+    requestAnimationFrame(() => {
+      items.forEach(el => {
+        el.style.transition = 'transform 420ms cubic-bezier(.22,.61,.36,1), opacity 320ms ease';
+        el.style.transform  = 'translate(0,0)';
+        el.style.opacity    = '1';
+        el.addEventListener('transitionend', () => {
+          el.style.transition = '';
+          el.style.transform  = '';
+          el.style.willChange = '';
+          el.style.opacity    = '';
+        }, { once:true });
+      });
+    });
+  }
+
+  function updateClasses({ noAnim } = {}){
+    const wantCompact = window.innerWidth <= 760;
+    const wantTiny    = window.innerWidth <= 420;
+
+    const hasCompact = footer.classList.contains('compact');
+    const hasTiny    = footer.classList.contains('tiny');
+
+    const changed = (wantCompact !== hasCompact) || (wantTiny !== hasTiny);
+    if (!changed) return;
+
+    if (noAnim){
+      footer.classList.toggle('compact', wantCompact);
+      footer.classList.toggle('tiny',    wantTiny);
+      return;
+    }
+
+    // FLIP: измерили, применили классы, измерили, сыграли анимацию
+    const first = measure();
+    footer.classList.toggle('compact', wantCompact);
+    footer.classList.toggle('tiny',    wantTiny);
+    const last  = measure();
+    play(first, last);
+  }
+
+  // первичная установка без анимации
+  updateClasses({ noAnim: true });
+
+  // анимируем только на переходах через пороги ширины
+  let raf = null;
+  window.addEventListener('resize', () => {
+    if (raf) return;
+    raf = requestAnimationFrame(() => { raf = null; updateClasses({ noAnim: false }); });
+  });
+})();
+
+
+/* ========= Клик по логотипу: «майнкрафт» 5s (скриншот + пикселизация) ========= */
+(function setupMinecraftOnly(){
+  const logo = document.querySelector('#header .brand-logo');
+  const app  = document.getElementById('appRoot');
+  if (!logo || !app) return;
+
+  const FADE_IN  = 1000;  // 1s
+  const HOLD     = 3000;  // 3s
+  const FADE_OUT = 1000;  // 1s
+
+  async function makeScreenshot() {
+    // маленький scale => крупные «квадраты» и быстрее рендер
+    const scale = 0.15;
+    return html2canvas(app, {
+      backgroundColor: null,
+      useCORS: true,
+      scale
+    });
+  }
+
+  function blockAllEvents(el){
+    const stop = e => { e.stopPropagation(); e.preventDefault(); };
+    const types = ['click','mousedown','mouseup','mousemove','touchstart','touchmove','touchend','pointerdown','pointerup','pointermove','wheel','contextmenu','keydown'];
+    types.forEach(t => el.addEventListener(t, stop, { passive:false, capture:true }));
+    return () => types.forEach(t => el.removeEventListener(t, stop, { capture:true }));
+  }
+
+  async function runPixelate(){
+    // «нажим» логотипа
+    logo.classList.add('pressed');
+    setTimeout(() => logo.classList.remove('pressed'), 150);
+
+    let canvas;
+    try {
+      canvas = await makeScreenshot();
+    } catch (e) {
+      console.error('html2canvas failed:', e);
+      return; // если скрин не получился — выходим без блокировок
+    }
+
+    // создаём оверлей-картинку
+    const wrap = document.createElement('div');
+    wrap.className = 'fx-pixel-overlay';
+    wrap.tabIndex = 0;
+
+    const img = document.createElement('img');
+    img.className = 'fx-pixel-overlay__img';
+    img.alt = '';
+    img.src = canvas.toDataURL('image/png'); // рендерим скрин в картинку
+    wrap.appendChild(img);
+
+    document.body.appendChild(wrap);
+
+    // блокируем ввод + прячем «живую» страницу от фокуса
+    const unblock = blockAllEvents(wrap);
+    app.setAttribute('aria-hidden','true');
+    app.setAttribute('inert','');
+
+    // плавно показать
+    requestAnimationFrame(() => wrap.classList.add('visible'));
+
+    // подержать и плавно убрать
+    setTimeout(() => {
+      wrap.classList.remove('visible');
+      setTimeout(() => {
+        unblock();
+        wrap.remove();
+        app.removeAttribute('inert');
+        app.removeAttribute('aria-hidden');
+      }, FADE_OUT);
+    }, FADE_IN + HOLD);
+  }
+
+  // запуск по клику и по клавиатуре
+  logo.addEventListener('click', runPixelate);
+  logo.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); runPixelate(); }
+  });
+})();
