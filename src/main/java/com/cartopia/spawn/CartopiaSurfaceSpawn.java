@@ -10,6 +10,10 @@ import net.minecraft.world.level.block.state.BlockState;
 import net.minecraftforge.event.entity.player.PlayerEvent;
 import net.minecraftforge.eventbus.api.SubscribeEvent;
 import net.minecraftforge.fml.common.Mod;
+import net.minecraft.tags.FluidTags;
+
+import java.util.Objects;
+
 
 @Mod.EventBusSubscriber(modid = CartopiaMod.MODID, bus = Mod.EventBusSubscriber.Bus.FORGE)
 public final class CartopiaSurfaceSpawn {
@@ -69,11 +73,15 @@ public final class CartopiaSurfaceSpawn {
         if (target == null) return;
 
         int py = Mth.floor(player.getY());
-        boolean sameSpot = py == target.getY()
-                && Mth.floor(player.getX()) == target.getX()
-                && Mth.floor(player.getZ()) == target.getZ();
+        boolean xzSame = (Mth.floor(player.getX()) == target.getX())
+                && (Mth.floor(player.getZ()) == target.getZ());
 
-        if (!sameSpot || Math.abs(py - target.getY()) >= TELEPORT_THRESHOLD || !isSafeStand(level, new BlockPos(x, py, z))) {
+        boolean needTeleport =
+                (Math.abs(py - target.getY()) >= TELEPORT_THRESHOLD)  // сильно различается высота
+                || !xzSame                                            // различается X/Z
+                || !isSafeStand(level, new BlockPos(x, py, z));       // текущее место небезопасно
+
+        if (needTeleport) {
             player.teleportTo(level, target.getX() + 0.5, target.getY(), target.getZ() + 0.5, player.getYRot(), player.getXRot());
         }
     }
@@ -85,8 +93,7 @@ public final class CartopiaSurfaceSpawn {
 
     /** Внешний API: переставить всех игроков этого уровня (мира) сразу после генерации. */
     public static void adjustAllPlayersAsync(ServerLevel level) {
-        final MinecraftServer srv = level.getServer();
-        if (srv == null) return;
+        final MinecraftServer srv = Objects.requireNonNull(level.getServer(), "ServerLevel.getServer() returned null");
         srv.execute(() -> {
             for (ServerPlayer p : srv.getPlayerList().getPlayers()) {
                 if (p.serverLevel() == level) {
@@ -114,12 +121,17 @@ public final class CartopiaSurfaceSpawn {
     private static BlockPos findNearestTopSafe(ServerLevel level, int x, int z, int radius) {
         // r=0..R, проходим периметр квадрата r, чтобы брать ближайшее
         for (int r = 0; r <= radius; r++) {
-            // верх/низ
+            // верхняя грань
             for (int dx = -r; dx <= r; dx++) {
-                BlockPos p1 = findTopSafe(level, x + dx, z - r);
-                if (p1 != null) return p1;
-                BlockPos p2 = findTopSafe(level, x + dx, z + r);
-                if (p2 != null) return p2;
+                BlockPos p = findTopSafe(level, x + dx, z - r);
+                if (p != null) return p;
+            }
+            // нижняя грань — только если r > 0 (иначе это та же линия)
+            if (r > 0) {
+                for (int dx = -r; dx <= r; dx++) {
+                    BlockPos p = findTopSafe(level, x + dx, z + r);
+                    if (p != null) return p;
+                }
             }
             // лево/право
             for (int dz = -r + 1; dz <= r - 1; dz++) {
@@ -138,8 +150,20 @@ public final class CartopiaSurfaceSpawn {
         BlockPos head  = feet.above();
 
         BlockState stBelow = level.getBlockState(below);
-        if (!isSolid(stBelow, level, below)) return false;
 
+        // 1) Обычный случай: под ногами твёрдый блок
+        boolean supportOk = isSolid(stBelow, level, below);
+
+        // 2) Водная поверхность: под ногами вода, а на два блока ниже — твёрдый блок
+        if (!supportOk && isWater(stBelow)) {
+            BlockPos base = below.below();
+            BlockState stBase = level.getBlockState(base);
+            supportOk = isSolid(stBase, level, base);
+        }
+
+        if (!supportOk) return false;
+
+        // Требуем «дышать» и не застрять: ноги и голова — без коллизии и без жидкости (т.е. воздух)
         BlockState stFeet = level.getBlockState(feet);
         BlockState stHead = level.getBlockState(head);
         return isEmpty(stFeet, level, feet) && isEmpty(stHead, level, head);
@@ -151,5 +175,9 @@ public final class CartopiaSurfaceSpawn {
 
     private static boolean isEmpty(BlockState st, ServerLevel level, BlockPos pos) {
         return st.getFluidState().isEmpty() && st.getCollisionShape(level, pos).isEmpty();
+    }
+
+    private static boolean isWater(BlockState st) {
+        return st.getFluidState().is(FluidTags.WATER);
     }
 }

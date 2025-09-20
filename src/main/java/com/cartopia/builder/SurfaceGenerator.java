@@ -30,7 +30,6 @@ import java.net.http.HttpResponse;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
-import com.google.gson.JsonParser;
 
 public class SurfaceGenerator {
 
@@ -265,6 +264,9 @@ public class SurfaceGenerator {
         staircase(terrainY, minX, maxX, minZ, maxZ);
         blurHeight(terrainY, minX, maxX, minZ, maxZ, HEIGHT_BLUR_ITERS);
 
+        // СТРИЖЕМ мелкие бугорки/ямки (окно 5×5 => radius=2)
+        despeckleHeights(terrainY, minX, maxX, minZ, maxZ, 2);
+
         // ---------- БАЗОВАЯ ПОВЕРХНОСТЬ ----------
         Map<Long, String> surface = new HashMap<>(terrainY.size());
         for (int x=minX; x<=maxX; x++) for (int z=minZ; z<=maxZ; z++) surface.put(key(x,z), defaultBlock);
@@ -272,6 +274,12 @@ public class SurfaceGenerator {
         // --- маски источников воды
         Set<Long> waterFromOLM = new HashSet<>();
         Set<Long> waterProtected = new HashSet<>(); // OSM и морской уровень — запрещено менять и учитывать в сглаживании
+
+        // Клетки суши, пришедшие из OSM, которые менять нельзя
+        Set<Long> lockedOSM = new HashSet<>();
+
+        // Все клетки, покрашенные именно из OLM (и вода, и суша)
+        Set<Long> olmAll = new HashSet<>();
 
         // Море/вода по уровню (если задан): это «подложка»
         if (seaLevelMeters != Double.NEGATIVE_INFINITY) {
@@ -288,7 +296,7 @@ public class SurfaceGenerator {
         // ---------- OLM (landcover): локальный файл ИЛИ онлайн по WMS/шаблону ----------
         File lcFile = (landcoverFileOrNull != null && landcoverFileOrNull.exists() && landcoverFileOrNull.length() > 0)
                 ? landcoverFileOrNull
-                : null;
+                : downloadOLMIfConfigured(coordsJson, south, west, north, east);
 
 
         if (lcFile != null && lcFile.exists() && lcFile.length() > 0) {
@@ -320,11 +328,13 @@ public class SurfaceGenerator {
                         long k = key(x,z);
                         if ("water".equals(block)) {
                             surface.put(k, "water");              // вода из OLM
+                            olmAll.add(k);                         // помечаем как OLM
                             if (!waterProtected.contains(k)) {
-                                waterFromOLM.add(k);              // разрешим сглаживать только её
+                                waterFromOLM.add(k);              // это именно OLM-вода (разрешим её менять)
                             }
                         } else if (!"water".equals(surface.get(k))) {
-                            surface.put(k, block);
+                            surface.put(k, block);                 // суша из OLM
+                            olmAll.add(k);                         // помечаем как OLM
                         }
                     }
                 }
@@ -366,20 +376,24 @@ public class SurfaceGenerator {
                 }
 
                 // Прочие зоны: не затираем воду
+                String bestMat = null;
+                double bestArea = Double.POSITIVE_INFINITY;
+
                 for (ZonePoly zp : zones) {
                     if ("water".equals(zp.material) || zp.isHole) continue;
                     if (!rectsOverlap(cell.minLat, cell.maxLat, cell.minLon, cell.maxLon, zp.minLat, zp.maxLat, zp.minLon, zp.maxLon)) continue;
                     if (rectIntersectsPolygon(cell, zp.lats, zp.lons)) {
-                        if (!"water".equals(surface.get(k))) {
-                            String mat = zp.material;
-                            // особый кейс: landuse=residential → берём доминирующее окружение (как раньше)
-                            if ("landuse=residential".equals(zp.tagKV)) {
-                                mat = dominantAround(surface, x, z, minX, maxX, minZ, maxZ, 12);
-                            }
-                            surface.put(k, mat);
+                        double area = (zp.maxLat - zp.minLat) * (zp.maxLon - zp.minLon);
+                        if (area < bestArea) {
+                            bestArea = area;
+                            bestMat  = zp.material;
                         }
-                        break;
                     }
+                }
+
+                if (bestMat != null && !"water".equals(surface.get(k))) {
+                    surface.put(k, bestMat);
+                    lockedOSM.add(k); // лочим OSM-сушу, чтобы сглаживание её не трогало
                 }
             }
         }
@@ -396,10 +410,28 @@ public class SurfaceGenerator {
             if (t.has("surfaceBlurIncludeWater")) surfaceBlurIncludeWater = t.get("surfaceBlurIncludeWater").getAsBoolean();
         }
 
+        // --- Скругление границ всех OLM-зон (и воды, и суши), OSM/моря не трогаем
+        int olmFeatherRadius    = 5;  // толщина «пера»: 2–3 блока
+        int olmFeatherIters     = 10;  // сколько проходов
+        int olmFeatherMinVotes  = 2;  // минимум голосов из 8 соседей
+
+        if (coordsJson.has("tuning") && coordsJson.get("tuning").isJsonObject()) {
+            JsonObject t = coordsJson.getAsJsonObject("tuning");
+            if (t.has("olmFeatherRadius"))   olmFeatherRadius   = Math.max(1, t.get("olmFeatherRadius").getAsInt());
+            if (t.has("olmFeatherIters"))    olmFeatherIters    = Math.max(1, t.get("olmFeatherIters").getAsInt());
+            if (t.has("olmFeatherMinVotes")) olmFeatherMinVotes = Math.max(1, t.get("olmFeatherMinVotes").getAsInt());
+        }
+
+        featherOlmZones(surface, minX, maxX, minZ, maxZ,
+                olmFeatherRadius, olmFeatherIters, olmFeatherMinVotes,
+                olmAll, waterFromOLM,          // кто из OLM и какая вода – тоже из OLM
+                waterProtected, lockedOSM);    // защищённая вода/OSM — вне игры
+
         blurSurface(surface, minX, maxX, minZ, maxZ,
-                    surfaceBlurIters, surfaceBlurMinMajority,
-                    /*includeWater=*/true,
-                    waterProtected, waterFromOLM);
+            surfaceBlurIters, surfaceBlurMinMajority,
+            /*includeWater=*/surfaceBlurIncludeWater,
+            waterProtected, waterFromOLM,
+            lockedOSM);
 
         // Маска воды
         Set<Long> waterMask = new HashSet<>();
@@ -743,10 +775,14 @@ public class SurfaceGenerator {
     }
 
     // ===== Поверхность: сглаживание только для воды из OLM; вода из OSM/моря — неизменяема и не учитывается =====
+    // Поверхность: сглаживаем только фон (OLM/дефолт), но НЕ трогаем
+    // 1) воду (sea+OSM) и 2) сушу, пришедшую из OSM (lockedOSM)
+    // Также lockedOSM и защищённая вода НЕ участвуют в голосовании.
     private static void blurSurface(Map<Long,String> srf,
                                     int minX, int maxX, int minZ, int maxZ,
                                     int iters, int minMajority, boolean includeWater,
-                                    Set<Long> protectedWater, Set<Long> olmWater) {
+                                    Set<Long> protectedWater, Set<Long> olmWater,
+                                    Set<Long> lockedOSM) {
         Map<Long,String> cur = new HashMap<>(srf);
         Map<Long,String> next = new HashMap<>(srf.size());
 
@@ -755,55 +791,42 @@ public class SurfaceGenerator {
             for (int x=minX; x<=maxX; x++) for (int z=minZ; z<=maxZ; z++) {
                 long k = key(x,z);
                 String curVal = cur.get(k);
+                if (curVal == null) { next.put(k, curVal); continue; }
 
-                // 1) Воду из OSM/моря не трогаем вообще
-                if ("water".equals(curVal) && protectedWater.contains(k)) {
-                    next.put(k, "water");
+                // Воду (sea/OSM) и лоченую OSM-сушу не меняем
+                if (protectedWater.contains(k) || lockedOSM.contains(k)) {
+                    next.put(k, curVal);
                     continue;
                 }
 
-                // 2) Собираем голоса соседей (вода из OSM/моря не участвует в голосовании)
+                // Считаем голоса соседей
                 long[] nks = new long[] {
                     key(x+1,z), key(x-1,z),
                     key(x,z+1), key(x,z-1),
                     key(x+1,z+1), key(x-1,z-1),
                     key(x+1,z-1), key(x-1,z+1)
                 };
-
                 Map<String,Integer> cnt = new HashMap<>();
                 for (long nk : nks) {
                     String t = cur.get(nk);
                     if (t == null) continue;
 
-                    if ("water".equals(t)) {
-                        // не учитываем защищённую воду (OSM/море)
-                        if (protectedWater.contains(nk)) continue;
-                        // если вообще воду учитывать не хотим
-                        if (!includeWater) continue;
-                    }
+                    // соседи: не учитываем воду и лоченую OSM-сушу
+                    if (protectedWater.contains(nk) || lockedOSM.contains(nk)) continue;
+                    if ("water".equals(t) && !includeWater) continue;
+
                     cnt.merge(t, 1, Integer::sum);
                 }
 
-                if (cnt.isEmpty()) {
-                    next.put(k, curVal);
-                    continue;
-                }
+                if (cnt.isEmpty()) { next.put(k, curVal); continue; }
 
                 Map.Entry<String,Integer> best = cnt.entrySet().stream()
                         .max(Map.Entry.comparingByValue()).get();
 
-                // 3) Решение о замене
-                // - защищённую воду уже отфильтровали
-                // - если победитель "water", то она может прийти лишь от соседей-OLM (т.к. OSM/море не учитывались)
+                // Меняем только фон (не вода) при явном большинстве
                 if (!best.getKey().equals(curVal) && best.getValue() >= minMajority) {
-                    // Разрешаем менять:
-                    //  - любые неводные клетки
-                    //  - воду из OLM (k ∈ olmWater)
-                    if (!"water".equals(curVal) || olmWater.contains(k)) {
-                        next.put(k, best.getKey());
-                    } else {
-                        next.put(k, curVal);
-                    }
+                    if (!"water".equals(curVal)) next.put(k, best.getKey());
+                    else next.put(k, curVal); // вода остаётся водой
                 } else {
                     next.put(k, curVal);
                 }
@@ -813,10 +836,98 @@ public class SurfaceGenerator {
         srf.clear(); srf.putAll(cur);
     }
 
-    private static String mostCommon(List<String> arr) {
-        Map<String,Integer> c = new HashMap<>();
-        for (String s: arr) c.merge(s,1,Integer::sum);
-        return c.entrySet().stream().max(Map.Entry.comparingByValue()).get().getKey();
+    /**
+     * Скругляет границы тайловых зон OLM в кольце шириной radius.
+     * Меняем ТОЛЬКО те клетки, что пришли из OLM (и воду, и сушу).
+     * Клетки из OSM и «морская» вода (waterProtected) не меняются и не голосуют.
+     */
+    private static void featherOlmZones(Map<Long,String> srf,
+                                        int minX, int maxX, int minZ, int maxZ,
+                                        int radius, int iters, int minVotes,
+                                        Set<Long> olmAll, Set<Long> olmWater,
+                                        Set<Long> protectedWater, Set<Long> lockedOSM) {
+
+        // 1) Находим «границы» между разными материалами ВНУТРИ OLM
+        HashSet<Long> ring = new HashSet<>();
+        for (long k : olmAll) {
+            if (lockedOSM.contains(k)) continue;                         // на всякий
+            if (protectedWater.contains(k) && !olmWater.contains(k)) continue; // чужая вода (не OLM) — не трогаем
+
+            int x = (int)(k >> 32);
+            int z = (int)k;
+            String m0 = srf.get(k);
+            if (m0 == null) continue;
+
+            boolean isEdge = false;
+            for (int dx=-1; dx<=1 && !isEdge; dx++) {
+                for (int dz=-1; dz<=1 && !isEdge; dz++) {
+                    if (dx==0 && dz==0) continue;
+                    long nk = key(x+dx, z+dz);
+                    if (!olmAll.contains(nk)) continue;                  // интересует только OLM↔OLM
+                    String m1 = srf.get(nk);
+                    if (m1 != null && !m1.equals(m0)) isEdge = true;
+                }
+            }
+            if (!isEdge) continue;
+
+            // расширяем в «кольцо» шириной radius, но всё равно только по OLM-клеткам
+            for (int dx=-radius; dx<=radius; dx++) {
+                for (int dz=-radius; dz<=radius; dz++) {
+                    int nx = x + dx, nz = z + dz;
+                    if (nx<minX || nx>maxX || nz<minZ || nz>maxZ) continue;
+                    long nk = key(nx, nz);
+                    if (!olmAll.contains(nk)) continue;                          // меняем только OLM
+                    if (lockedOSM.contains(nk)) continue;                        // OSM — нельзя
+                    if (protectedWater.contains(nk) && !olmWater.contains(nk)) continue; // «моря/OSM-вода» — нельзя
+                    ring.add(nk);
+                }
+            }
+        }
+
+        // 2) Несколько итераций мягкого majority-голосования внутри кольца
+        Map<Long,String> cur = new HashMap<>(srf);
+        for (int it=0; it<iters; it++) {
+            Map<Long,String> next = new HashMap<>(cur);
+            for (long k : ring) {
+                if (lockedOSM.contains(k)) continue;
+                if (protectedWater.contains(k) && !olmWater.contains(k)) continue;
+
+                String curVal = cur.get(k);
+                if (curVal == null) continue;
+
+                int x = (int)(k >> 32), z = (int)k;
+
+                Map<String,Integer> votes = new HashMap<>();
+                for (int dx=-1; dx<=1; dx++) {
+                    for (int dz=-1; dz<=1; dz++) {
+                        if (dx==0 && dz==0) continue;
+                        int nx = x+dx, nz = z+dz;
+                        if (nx<minX || nx>maxX || nz<minZ || nz>maxZ) continue;
+
+                        long nk = key(nx, nz);
+                        if (!olmAll.contains(nk)) continue;                        // голосуют только OLM-соседи
+                        if (lockedOSM.contains(nk)) continue;
+                        if (protectedWater.contains(nk) && !olmWater.contains(nk)) continue;
+
+                        String mv = cur.get(nk);
+                        if (mv != null) votes.merge(mv, 1, Integer::sum);
+                    }
+                }
+
+                if (votes.isEmpty()) continue;
+
+                Map.Entry<String,Integer> best = votes.entrySet()
+                        .stream().max(Map.Entry.comparingByValue()).get();
+
+                if (!best.getKey().equals(curVal) && best.getValue() >= minVotes) {
+                    next.put(k, best.getKey()); // позволяем переходы и в воду, и из воды — но только для OLM
+                }
+            }
+            cur = next;
+        }
+
+        srf.clear();
+        srf.putAll(cur);
     }
 
     private static void limitSlope(Map<Long,Integer> h, int minX, int maxX, int minZ, int maxZ, int maxDiff) {
@@ -893,6 +1004,64 @@ public class SurfaceGenerator {
         h.clear(); h.putAll(cur);
     }
 
+    // === Удаляем бугорки/ямки меньше 5×5 ===
+    private static void despeckleHeights(Map<Long,Integer> h, int minX, int maxX, int minZ, int maxZ, int radius) {
+        Map<Long,Integer> tmp = grayscaleOpen(h, minX, maxX, minZ, maxZ, radius);   // убирает маленькие "пики"
+        tmp = grayscaleClose(tmp, minX, maxX, minZ, maxZ, radius);                  // засыпает маленькие "ямки"
+        h.clear(); h.putAll(tmp);
+        fixSingleCellSpikes(h, minX, maxX, minZ, maxZ);                              // точечные 1×1
+    }
+
+    private static Map<Long,Integer> grayscaleOpen(Map<Long,Integer> src, int minX, int maxX, int minZ, int maxZ, int r) {
+        return grayscaleDilate(grayscaleErode(src, minX, maxX, minZ, maxZ, r), minX, maxX, minZ, maxZ, r);
+    }
+    private static Map<Long,Integer> grayscaleClose(Map<Long,Integer> src, int minX, int maxX, int minZ, int maxZ, int r) {
+        return grayscaleErode(grayscaleDilate(src, minX, maxX, minZ, maxZ, r), minX, maxX, minZ, maxZ, r);
+    }
+    private static Map<Long,Integer> grayscaleErode(Map<Long,Integer> src, int minX, int maxX, int minZ, int maxZ, int r) {
+        Map<Long,Integer> out = new HashMap<>(src.size());
+        for (int x=minX; x<=maxX; x++) for (int z=minZ; z<=maxZ; z++) {
+            int m = Integer.MAX_VALUE;
+            int center = src.get(key(x,z));
+            for (int dx=-r; dx<=r; dx++) for (int dz=-r; dz<=r; dz++) {
+                int nx=x+dx, nz=z+dz; if (nx<minX||nx>maxX||nz<minZ||nz>maxZ) continue;
+                int v = src.getOrDefault(key(nx,nz), center);
+                if (v<m) m=v;
+            }
+            out.put(key(x,z), m);
+        }
+        return out;
+    }
+    private static Map<Long,Integer> grayscaleDilate(Map<Long,Integer> src, int minX, int maxX, int minZ, int maxZ, int r) {
+        Map<Long,Integer> out = new HashMap<>(src.size());
+        for (int x=minX; x<=maxX; x++) for (int z=minZ; z<=maxZ; z++) {
+            int M = Integer.MIN_VALUE;
+            int center = src.get(key(x,z));
+            for (int dx=-r; dx<=r; dx++) for (int dz=-r; dz<=r; dz++) {
+                int nx=x+dx, nz=z+dz; if (nx<minX||nx>maxX||nz<minZ||nz>maxZ) continue;
+                int v = src.getOrDefault(key(nx,nz), center);
+                if (v>M) M=v;
+            }
+            out.put(key(x,z), M);
+        }
+        return out;
+    }
+    private static void fixSingleCellSpikes(Map<Long,Integer> h, int minX, int maxX, int minZ, int maxZ) {
+        for (int x=minX; x<=maxX; x++) for (int z=minZ; z<=maxZ; z++) {
+            long k = key(x,z);
+            int y = h.get(k);
+            int n1 = h.getOrDefault(key(x+1,z), y);
+            int n2 = h.getOrDefault(key(x-1,z), y);
+            int n3 = h.getOrDefault(key(x,z+1), y);
+            int n4 = h.getOrDefault(key(x,z-1), y);
+            if (Math.abs(n1-n2)<=1 && Math.abs(n1-n3)<=1 && Math.abs(n1-n4)<=1) {
+                int avg = Math.round((n1+n2+n3+n4)/4f);
+                if (Math.abs(y-avg) <= 2) h.put(k, avg);
+            }
+        }
+    }
+
+    @SuppressWarnings("unused")
     private static String dominantAround(Map<Long,String> srf, int x, int z, int minX, int maxX, int minZ, int maxZ, int radius) {
         Map<String,Integer> cnt = new HashMap<>();
         for (int dx=-radius; dx<=radius; dx++) {
@@ -987,15 +1156,10 @@ public class SurfaceGenerator {
         final double[] lats, lons;
         final String material;
         final boolean isHole; // для inner-колец воды
+        @SuppressWarnings("unused")
         final String tagKV;   // исходный тег key=value для спец-логики (например, residential)
         final double minLat, maxLat, minLon, maxLon;
 
-        ZonePoly(double[] lats, double[] lons, String material) {
-            this(lats, lons, material, false, null);
-        }
-        ZonePoly(double[] lats, double[] lons, String material, boolean isHole) {
-            this(lats, lons, material, isHole, null);
-        }
         ZonePoly(double[] lats, double[] lons, String material, boolean isHole, String tagKV) {
             this.lats = lats; this.lons = lons; this.material = material; this.isHole = isHole; this.tagKV = tagKV;
             double minLa=Double.POSITIVE_INFINITY, maxLa=Double.NEGATIVE_INFINITY;
@@ -1153,13 +1317,18 @@ public class SurfaceGenerator {
 
                 boolean isWaterArea = "water".equals(mat);
                 for (double[][] r : outers) {
-                    out.add(new ZonePoly(r[0], r[1], isWaterArea ? "water" : (mat!=null?mat:"moss_block"), false, tagKV));
+                    if (isWaterArea) {
+                        out.add(new ZonePoly(r[0], r[1], "water", false, tagKV));
+                    } else if (mat != null) {
+                        out.add(new ZonePoly(r[0], r[1], mat, false, tagKV));
+                    } // иначе — пропускаем
                 }
                 if (isWaterArea) {
                     for (double[][] h : inners) {
-                        out.add(new ZonePoly(h[0], h[1], "water", true, tagKV)); // дырки воды
+                        out.add(new ZonePoly(h[0], h[1], "water", true, tagKV));
                     }
                 }
+
                 continue;
             }
 
@@ -1170,7 +1339,9 @@ public class SurfaceGenerator {
                     int n = geom.size();
                     double[] la = new double[n], lo = new double[n];
                     for (int i=0;i<n;i++){ JsonObject p=geom.get(i).getAsJsonObject(); la[i]=p.get("lat").getAsDouble(); lo[i]=p.get("lon").getAsDouble(); }
-                    out.add(new ZonePoly(la, lo, mat!=null?mat:"moss_block", false, tagKV));
+                    if (mat != null) {
+                        out.add(new ZonePoly(la, lo, mat, false, tagKV));
+                    }
                     continue;
                 }
 
@@ -1208,7 +1379,9 @@ public class SurfaceGenerator {
                 int n = geom.size();
                 double[] la = new double[n], lo = new double[n];
                 for (int i=0;i<n;i++){ JsonObject p=geom.get(i).getAsJsonObject(); la[i]=p.get("lat").getAsDouble(); lo[i]=p.get("lon").getAsDouble(); }
-                out.add(new ZonePoly(la, lo, mat!=null?mat:"moss_block", false, tagKV));
+                if (mat != null) {
+                    out.add(new ZonePoly(la, lo, mat, false, tagKV));
+                }
             }
         }
         return out;

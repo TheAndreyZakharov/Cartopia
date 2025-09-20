@@ -10,14 +10,16 @@ import net.minecraftforge.eventbus.api.SubscribeEvent;
 import net.minecraftforge.fml.event.lifecycle.FMLClientSetupEvent;
 import net.minecraftforge.common.MinecraftForge;
 import net.minecraftforge.fml.javafmlmod.FMLJavaModLoadingContext;
+import net.minecraftforge.eventbus.api.IEventBus;
 
 @Mod(CartopiaMod.MODID)
 public class CartopiaMod {
     public static final String MODID = "cartopia";
 
-    public CartopiaMod() {
-        FMLJavaModLoadingContext.get().getModEventBus().addListener(this::onCommonSetup);
-        FMLJavaModLoadingContext.get().getModEventBus().addListener(this::onClientSetup);
+    public CartopiaMod(FMLJavaModLoadingContext context) { // получаем контекст через параметр конструктора
+        IEventBus modBus = context.getModEventBus();
+        modBus.addListener(this::onCommonSetup);
+        modBus.addListener(this::onClientSetup);
         MinecraftForge.EVENT_BUS.register(this);
     }
 
