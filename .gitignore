@@ -19,6 +19,9 @@ npm-debug.log*
 # OS files
 .DS_Store
 
+# Генерация мира
+area-packs/
+
 HydroLAKES_polys_v10_shp/
 HydroRIVERS_v10_shp
 archive/
