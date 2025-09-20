@@ -1,5 +1,6 @@
 package com.cartopia.builder;
 
+import com.cartopia.spawn.CartopiaSurfaceSpawn;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
@@ -957,6 +958,7 @@ public class SurfaceGenerator {
                 }
                 if (chatIdx < chatMilestones.length && pct >= chatMilestones[chatIdx]) {
                     broadcast(level, "Прогресс генерации: " + chatMilestones[chatIdx] + "%");
+                    CartopiaSurfaceSpawn.adjustAllPlayersAsync(level);
                     chatIdx++;
                 }
             }

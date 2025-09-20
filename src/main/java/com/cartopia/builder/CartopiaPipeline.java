@@ -1,4 +1,5 @@
 package com.cartopia.builder;
+import com.cartopia.spawn.CartopiaSurfaceSpawn;
 
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
@@ -45,6 +46,10 @@ public class CartopiaPipeline {
             SurfaceGenerator surface = new SurfaceGenerator(level, coords, demTifFile, landcoverTifFileOrNull);
             surface.generate();
             broadcast(level, "Поверхность готова.");
+
+            // Сразу поднимаем всех игроков этого мира на безопасную поверхность
+            broadcast(level, "Переставляю игроков на поверхность…");
+            CartopiaSurfaceSpawn.adjustAllPlayersAsync(level);
 
             broadcast(level, "Сохраняю мир…");
             level.save(null, true, false);

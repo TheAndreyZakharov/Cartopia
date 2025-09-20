@@ -78,6 +78,24 @@ public final class CartopiaSurfaceSpawn {
         }
     }
 
+    /** Внешний API: переставить игрока на безопасную поверхность, ассинхронно на треде сервера. */
+    public static void adjustPlayerAsync(ServerPlayer p) {
+        scheduleAdjust(p, 0);
+    }
+
+    /** Внешний API: переставить всех игроков этого уровня (мира) сразу после генерации. */
+    public static void adjustAllPlayersAsync(ServerLevel level) {
+        final MinecraftServer srv = level.getServer();
+        if (srv == null) return;
+        srv.execute(() -> {
+            for (ServerPlayer p : srv.getPlayerList().getPlayers()) {
+                if (p.serverLevel() == level) {
+                    scheduleAdjust(p, 0);
+                }
+            }
+        });
+    }
+
     /** Ищем сверху вниз первую безопасную точку стояния на колонке (x,z). */
     private static BlockPos findTopSafe(ServerLevel level, int x, int z) {
         int top = level.getMaxBuildHeight() - 2;  // -2 чтобы хватило места для головы
