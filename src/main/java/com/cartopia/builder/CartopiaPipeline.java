@@ -43,9 +43,22 @@ public class CartopiaPipeline {
 
         broadcast(level, "Старт генерации поверхности (DEM + покраска) …");
         try {
+            // Рельеф
             SurfaceGenerator surface = new SurfaceGenerator(level, coords, demTifFile, landcoverTifFileOrNull);
             surface.generate();
             broadcast(level, "Поверхность готова.");
+
+            // Дороги
+            broadcast(level, "Старт генерации дорог…");
+            RoadGenerator roads = new RoadGenerator(level, coords);
+            roads.generate();
+            broadcast(level, "Дороги готовы.");
+
+            // Рельсы
+            broadcast(level, "Старт генерации рельсов…");
+            RailGenerator rails = new RailGenerator(level, coords);
+            rails.generate();
+            broadcast(level, "Рельсы готовы.");
 
             // Сразу поднимаем всех игроков этого мира на безопасную поверхность
             broadcast(level, "Переставляю игроков на поверхность…");

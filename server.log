@@ -1,0 +1,11 @@
+🌐 Сервер запущен: http://localhost:4567
+ℹ️  Откройте Minecraft через ./start.sh, зайдите в одиночный мир.
+ℹ️  Затем через страницу управления отправьте /save-coords (Node сам дождётся /health).
+💾 coords.json записан: /Users/andrey/Documents/projects/Cartopia/area-packs/area_20250921_170625_lat60.03548_lon30.32100/coords.json
+⬇️ GMRT DEM URL: https://www.gmrt.org/services/GridServer?minlatitude=60.030985761669214&maxlatitude=60.03996887341913&minlongitude=30.312006867703605&maxlongitude=30.329992383737103&format=geotiff&layer=topo
+✅ DEM успешно скачан!
+⬇️ OLM COG clip via gdal_translate…
+✅ OLM landcover сохранён: /Users/andrey/Documents/projects/Cartopia/area-packs/area_20250921_170625_lat60.03548_lon30.32100/olm_landcover.tif (1082 байт)
+⏳ Ждём готовности мода на 127.0.0.1:4568/health …
+🚀 Послал /build в мод. Пакет: /Users/andrey/Documents/projects/Cartopia/area-packs/area_20250921_170625_lat60.03548_lon30.32100
+🧹 удалил старый пакет: /Users/andrey/Documents/projects/Cartopia/area-packs/area_20250921_151117_lat60.03535_lon30.32048

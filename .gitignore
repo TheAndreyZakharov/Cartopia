@@ -1,27 +1,13 @@
-# VSCode
-.vscode/
-
 # Gradle
 .gradle/
 build/
 run/
 
-# Minecraft Forge / Dev env
-logs/
-out/
-*.log
-*.pid
-
 # Node.js
 node_modules/
-npm-debug.log*
 
 # OS files
 .DS_Store
 
 # Генерация мира
 area-packs/
-
-HydroLAKES_polys_v10_shp/
-HydroRIVERS_v10_shp
-archive/
