@@ -54,6 +54,12 @@ public class CartopiaPipeline {
             roads.generate();
             broadcast(level, "Дороги готовы.");
 
+            // Мосты/эстакады (без тоннелей)
+            broadcast(level, "Старт генерации мостов/эстакад…");
+            BridgeGenerator bridges = new BridgeGenerator(level, coords);
+            bridges.generate();
+            broadcast(level, "Мосты/эстакады готовы.");
+
             // Рельсы
             broadcast(level, "Старт генерации рельсов…");
             RailGenerator rails = new RailGenerator(level, coords);

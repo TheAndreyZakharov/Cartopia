@@ -206,7 +206,7 @@ public class RailGenerator {
     private Integer findSurfaceBaseY(int x, int z, Integer hintY) {
         final int worldMin = level.getMinBuildHeight();
 
-        int yTop = findTopNonAirNear(x, z, hintY);
+        int yTop = findTerrainFromBelow(x, z, hintY);
         if (yTop == Integer.MIN_VALUE) return null;
 
         BlockPos topPos = new BlockPos(x, yTop, z);
@@ -234,6 +234,40 @@ public class RailGenerator {
         return b == Blocks.RAIL || b == Blocks.POWERED_RAIL || b == Blocks.DETECTOR_RAIL || b == Blocks.ACTIVATOR_RAIL;
     }
 
+    /** 
+     * Вершина рельефа, игнорируя тонкие навесы сверху.
+     * Берём первый сверху не-air блок, под которым в пределах 1..3 блоков вниз есть ещё не-air.
+     * (Так мы не зацепимся за плиту моста, повисшую в воздухе над дорогой/землёй/водой.)
+     */
+    private int findTerrainFromBelow(int x, int z, Integer hintY) {
+        final int worldMin = level.getMinBuildHeight();
+        final int worldMax = level.getMaxBuildHeight() - 1;
+
+        int start = (hintY != null) ? Math.max(worldMin, hintY - 32) : worldMin;
+        for (int y = start; y <= worldMax; y++) {
+            BlockState st = level.getBlockState(new BlockPos(x, y, z));
+            if (st.isAir()) continue;
+
+            // не цепляемся за уже построенные рельсы
+            if (isRailLike(st)) continue;
+
+            // база метро (-62) — не считаем рельефом
+            if (st.getBlock() == Blocks.COBBLESTONE && y <= -62) continue;
+
+            return y;
+        }
+        // fallback: полный проход снизу (если hint промахнулся)
+        for (int y = worldMin; y <= worldMax; y++) {
+            BlockState st = level.getBlockState(new BlockPos(x, y, z));
+            if (st.isAir()) continue;
+            if (isRailLike(st)) continue;
+            if (st.getBlock() == Blocks.COBBLESTONE && y <= -62) continue;
+            return y;
+        }
+        return Integer.MIN_VALUE;
+    }
+
+    @SuppressWarnings("unused")
     /** быстрый поиск верхнего не-air по колонке, с локальной подсказкой по высоте */
     private int findTopNonAirNear(int x, int z, Integer hintY) {
         final int worldMin = level.getMinBuildHeight();
@@ -268,13 +302,6 @@ public class RailGenerator {
     private static boolean isBridgeOrTunnel(JsonObject tags) {
         if (truthy(optString(tags, "bridge"))) return true;
         if (truthy(optString(tags, "tunnel"))) return true;
-        try {
-            String ls = optString(tags, "layer");
-            if (ls != null && !ls.isBlank()) {
-                int layer = Integer.parseInt(ls.trim());
-                if (layer != 0) return true;
-            }
-        } catch (Exception ignore) {}
         return false;
     }
 
