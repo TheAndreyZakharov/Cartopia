@@ -439,7 +439,9 @@ public class SurfaceGenerator {
             if ("water".equals(e.getValue())) waterMask.add(e.getKey());
 
         broadcast(level, String.format("Размещение блоков (%d клеток)…", totalCells));
-        placeBlocks(surface, terrainY, waterMask, minX, maxX, minZ, maxZ, totalCells);
+        // Сформируем «идеальные» уровни воды (поверх DEM), чтобы не было гор из воды
+        Map<Long, Integer> waterSurfaceY = computeWaterSurfaceY(surface, terrainY, minX, maxX, minZ, maxZ);
+        placeBlocks(surface, terrainY, waterMask, waterSurfaceY, minX, maxX, minZ, maxZ, totalCells);
         broadcast(level, "Размещение блоков завершено.");
     }
 
@@ -1080,7 +1082,8 @@ public class SurfaceGenerator {
     }
 
     private void placeBlocks(Map<Long,String> surface, Map<Long,Integer> terrain,
-                             Set<Long> waterMask, int minX, int maxX, int minZ, int maxZ, int totalCells) {
+                            Set<Long> waterMask, Map<Long,Integer> waterSurfaceY,
+                            int minX, int maxX, int minZ, int maxZ, int totalCells) {
         int done = 0;
         int nextConsole = 5;
         int[] chatMilestones = {25, 50, 75, 100};
@@ -1098,20 +1101,24 @@ public class SurfaceGenerator {
                 String mat = surface.getOrDefault(key(x, z), "moss_block");
 
                 if ("water".equals(mat) || waterMask.contains(key(x, z))) {
-                    // опора и вода
-                    int yLapis = yTop - 2;
-                    int yWater = yTop - 1;
+                    // вода: используем переопределённую «поверхность воды», а не рельеф DEM
+                    int yWaterSurface = (waterSurfaceY != null && waterSurfaceY.containsKey(key(x,z)))
+                            ? waterSurfaceY.get(key(x,z))
+                            : (yTop - 1); // fallback: как было
 
-                    // ниже опоры — чистим
+                    int yLapis = yWaterSurface - 1;   // подстилка
+                    int yAirTop = yWaterSurface + 1;  // воздух над водой
+
+                    // ниже подстилки чистим
                     clearColumnBelow(x, z, worldMin, yLapis - 1);
 
-                    // опора + вода + воздух сверху
-                    setBlock(x, yLapis, z, "minecraft:lapis_block");
-                    setBlock(x, yWater, z, "minecraft:water");
-                    setBlock(x, yTop,   z, "minecraft:air");
+                    // подстилка + вода + воздух сверху
+                    setBlock(x, yLapis,    z, "minecraft:lapis_block");
+                    setBlock(x, yWaterSurface, z, "minecraft:water");
+                    setBlock(x, yAirTop,   z, "minecraft:air");
 
-                    // выше — чистим воздухом до потолка
-                    clearColumnAbove(x, yTop + 1, z, worldMax);
+                    // выше — чистим до потолка
+                    clearColumnAbove(x, yAirTop + 1, z, worldMax);
                 } else {
                     // суша: материал на вершине
                     setBlock(x, yTop, z, "minecraft:" + mat);
@@ -1500,5 +1507,158 @@ public class SurfaceGenerator {
     private static boolean onSegment(double ax, double ay, double bx, double by, double px, double py) {
         return px >= Math.min(ax,bx)-EPS && px <= Math.max(ax,bx)+EPS &&
                py >= Math.min(ay,by)-EPS && py <= Math.max(ay,by)+EPS;
+    }
+
+    /** Формирует желаемую высоту поверхности воды по компонентам:
+     *  - у берегов вода на (высоте берега - 1);
+     *  - к центру стягиваем плавно к единому минимуму по берегам;
+     *  - применяем только если ширина компоненты >= 30 блоков (R >= 15);
+     *  - если ВСЯ область — вода (нет суши) — кладём всё на один уровень (sea level).
+     */
+    private Map<Long, Integer> computeWaterSurfaceY(Map<Long,String> surface,
+                                                    Map<Long,Integer> terrainY,
+                                                    int minX, int maxX, int minZ, int maxZ) {
+        final int worldMin = level.getMinBuildHeight();
+        final int worldMax = level.getMaxBuildHeight() - 1;
+
+        // 1) Маски воды/суши
+        HashSet<Long> water = new HashSet<>();
+        boolean hasLand = false;
+        for (int x=minX; x<=maxX; x++) for (int z=minZ; z<=maxZ; z++) {
+            long k = key(x,z);
+            if ("water".equals(surface.get(k))) water.add(k);
+            else hasLand = true;
+        }
+
+        Map<Long,Integer> out = new HashMap<>();
+        if (water.isEmpty()) return out;
+
+        // 2) Если только вода — один уровень на всё
+        if (!hasLand) {
+            int flat = 62;
+            try { flat = level.getSeaLevel(); } catch (Throwable ignore) {}
+            flat = Math.max(worldMin + 3, Math.min(worldMax - 3, flat));
+            for (long k : water) out.put(k, flat);
+            return out;
+        }
+
+        // 3) Компоненты воды
+        HashSet<Long> visited = new HashSet<>();
+        int[][] dirs = new int[][]{{1,0},{-1,0},{0,1},{0,-1}};
+
+        for (int sx=minX; sx<=maxX; sx++) {
+            for (int sz=minZ; sz<=maxZ; sz++) {
+                long sk = key(sx,sz);
+                if (!water.contains(sk) || visited.contains(sk)) continue;
+
+                // Собираем компоненту
+                ArrayDeque<long[]> q = new ArrayDeque<>();
+                ArrayList<long[]> compCells = new ArrayList<>();
+                q.add(new long[]{sx,sz});
+                visited.add(sk);
+
+                while (!q.isEmpty()) {
+                    long[] cur = q.poll();
+                    int x = (int)cur[0], z = (int)cur[1];
+                    compCells.add(cur);
+                    for (int[] d : dirs) {
+                        int nx = x + d[0], nz = z + d[1];
+                        if (nx<minX||nx>maxX||nz<minZ||nz>maxZ) continue;
+                        long nk = key(nx,nz);
+                        if (!water.contains(nk) || visited.contains(nk)) continue;
+                        visited.add(nk);
+                        q.add(new long[]{nx,nz});
+                    }
+                }
+
+                // Берега этой компоненты
+                ArrayDeque<long[]> seeds = new ArrayDeque<>();
+                Map<Long,Integer> seedHeight = new HashMap<>(); // высота воды у берега (берег-1)
+                int minSeed = Integer.MAX_VALUE;
+                int maxR = 0;
+
+                for (long[] cell : compCells) {
+                    int x = (int)cell[0], z = (int)cell[1];
+                    long k = key(x,z);
+
+                    boolean isShore = false;
+                    int shoreH = Integer.MIN_VALUE;
+
+                    for (int[] d : dirs) {
+                        int nx = x + d[0], nz = z + d[1];
+                        if (nx<minX||nx>maxX||nz<minZ||nz>maxZ) continue;
+                        long nk = key(nx,nz);
+                        if (!water.contains(nk)) {
+                            isShore = true;
+                            int hLand = terrainY.getOrDefault(nk, terrainY.getOrDefault(k, worldMin+3));
+                            shoreH = Math.max(shoreH, hLand);
+                        }
+                    }
+                    if (isShore) {
+                        int hWaterAtShore = Math.max(worldMin+3, Math.min(worldMax-3, shoreH - 1));
+                        seeds.add(new long[]{x,z});
+                        seedHeight.put(k, hWaterAtShore);
+                        if (hWaterAtShore < minSeed) minSeed = hWaterAtShore;
+                    }
+                }
+
+                if (seeds.isEmpty()) {
+                    // компонент воды без видимых берегов внутри bbox — оставляем как есть
+                    continue;
+                }
+
+                // BFS из всех берегов: расстояния и высота ближайшего берега
+                Map<Long,Integer> dist = new HashMap<>();
+                Map<Long,Integer> nearestH = new HashMap<>();
+                for (long[] s : seeds) {
+                    int x = (int)s[0], z = (int)s[1];
+                    long k = key(x,z);
+                    dist.put(k, 0);
+                    nearestH.put(k, seedHeight.get(k));
+                }
+
+                ArrayDeque<long[]> qq = new ArrayDeque<>(seeds);
+                while (!qq.isEmpty()) {
+                    long[] cur = qq.poll();
+                    int x = (int)cur[0], z = (int)cur[1];
+                    long k = key(x,z);
+                    int cd = dist.get(k);
+                    int ch = nearestH.get(k);
+                    if (cd > maxR) maxR = cd;
+
+                    for (int[] d : dirs) {
+                        int nx = x + d[0], nz = z + d[1];
+                        if (nx<minX||nx>maxX||nz<minZ||nz>maxZ) continue;
+                        long nk = key(nx,nz);
+                        if (!water.contains(nk)) continue;
+                        if (dist.containsKey(nk)) continue;
+                        dist.put(nk, cd + 1);
+                        nearestH.put(nk, ch); // ближайший берег и его высота
+                        qq.add(new long[]{nx,nz});
+                    }
+                }
+
+                // Проверка «ширины»: R >= 15 ⇒ ширина ~>= 30
+                if (maxR < 15) {
+                    // узко — не преобразуем
+                    continue;
+                }
+
+                int R = Math.max(1, maxR);
+                int Wmin = minSeed; // единый минимум ближе к центру
+
+                // Назначаем высоты воды по формуле
+                for (Map.Entry<Long,Integer> e : dist.entrySet()) {
+                    long k = e.getKey();
+                    int d = e.getValue();
+                    int hs = nearestH.get(k);
+                    double t = 1.0 - (d / (double)R);
+                    int ySurf = (int)Math.round(Wmin + (hs - Wmin) * Math.max(0.0, Math.min(1.0, t)));
+                    ySurf = Math.max(worldMin+3, Math.min(worldMax-3, ySurf));
+                    out.put(k, ySurf);
+                }
+            }
+        }
+        return out;
     }
 }

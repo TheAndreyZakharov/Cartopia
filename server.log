@@ -1,28 +1,11 @@
 🌐 Сервер запущен: http://localhost:4567
 ℹ️  Откройте Minecraft через ./start.sh, зайдите в одиночный мир.
 ℹ️  Затем через страницу управления отправьте /save-coords (Node сам дождётся /health).
-💾 coords.json записан: /Users/andrey/Documents/projects/Cartopia/area-packs/area_20250924_145851_lat55.64051_lon37.68619/coords.json
-⬇️ GMRT DEM URL: https://www.gmrt.org/services/GridServer?minlatitude=55.638268291877175&maxlatitude=55.642759847752124&minlongitude=37.682208049460655&maxlongitude=37.69016639073334&format=geotiff&layer=topo
+💾 coords.json записан: /Users/andrey/Documents/projects/Cartopia/area-packs/area_20250924_202922_lat59.95181_lon30.34951/coords.json
+⬇️ GMRT DEM URL: https://www.gmrt.org/services/GridServer?minlatitude=59.949568216401964&maxlatitude=59.95405977227691&minlongitude=30.3450221246918&maxlongitude=30.35399217328258&format=geotiff&layer=topo
 ✅ DEM успешно скачан!
 ⬇️ OLM COG clip via gdal_translate…
-✅ OLM landcover сохранён: /Users/andrey/Documents/projects/Cartopia/area-packs/area_20250924_145851_lat55.64051_lon37.68619/olm_landcover.tif (612 байт)
+✅ OLM landcover сохранён: /Users/andrey/Documents/projects/Cartopia/area-packs/area_20250924_202922_lat59.95181_lon30.34951/olm_landcover.tif (596 байт)
 ⏳ Ждём готовности мода на 127.0.0.1:4568/health …
-🚀 Послал /build в мод. Пакет: /Users/andrey/Documents/projects/Cartopia/area-packs/area_20250924_145851_lat55.64051_lon37.68619
-🧹 удалил старый пакет: /Users/andrey/Documents/projects/Cartopia/area-packs/area_20250923_193205_lat60.05980_lon30.34053
-💾 coords.json записан: /Users/andrey/Documents/projects/Cartopia/area-packs/area_20250924_150452_lat55.64407_lon37.69312/coords.json
-⬇️ GMRT DEM URL: https://www.gmrt.org/services/GridServer?minlatitude=55.641828396805074&maxlatitude=55.646319952680024&minlongitude=37.689137970749464&maxlongitude=37.69709703539295&format=geotiff&layer=topo
-✅ DEM успешно скачан!
-⬇️ OLM COG clip via gdal_translate…
-⚠️ Не удалось вырезать OLM COG: gdal_translate failed: ERROR 11: CURL error: SSL certificate problem: certificate has expired
-
-⏳ Ждём готовности мода на 127.0.0.1:4568/health …
-🚀 Послал /build в мод. Пакет: /Users/andrey/Documents/projects/Cartopia/area-packs/area_20250924_150452_lat55.64407_lon37.69312
-🧹 удалил старый пакет: /Users/andrey/Documents/projects/Cartopia/area-packs/area_20250923_193901_lat60.05980_lon30.34053
-💾 coords.json записан: /Users/andrey/Documents/projects/Cartopia/area-packs/area_20250924_151703_lat59.95202_lon30.33089/coords.json
-⬇️ GMRT DEM URL: https://www.gmrt.org/services/GridServer?minlatitude=59.944835950655325&maxlatitude=59.95920892945518&minlongitude=30.316536848909422&maxlongitude=30.345241184924305&format=geotiff&layer=topo
-✅ DEM успешно скачан!
-⬇️ OLM COG clip via gdal_translate…
-✅ OLM landcover сохранён: /Users/andrey/Documents/projects/Cartopia/area-packs/area_20250924_151703_lat59.95202_lon30.33089/olm_landcover.tif (1233 байт)
-⏳ Ждём готовности мода на 127.0.0.1:4568/health …
-🚀 Послал /build в мод. Пакет: /Users/andrey/Documents/projects/Cartopia/area-packs/area_20250924_151703_lat59.95202_lon30.33089
-🧹 удалил старый пакет: /Users/andrey/Documents/projects/Cartopia/area-packs/area_20250923_194317_lat59.94666_lon30.33061
+🚀 Послал /build в мод. Пакет: /Users/andrey/Documents/projects/Cartopia/area-packs/area_20250924_202922_lat59.95181_lon30.34951
+🧹 удалил старый пакет: /Users/andrey/Documents/projects/Cartopia/area-packs/area_20250924_165845_lat59.94870_lon30.32426

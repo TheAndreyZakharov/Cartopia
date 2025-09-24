@@ -308,7 +308,9 @@ public class BridgeGenerator {
         final int worldMax = level.getMaxBuildHeight() - 1;
 
         int half = Math.max(0, width / 2);
-        int idx = 0; // индекс вдоль центр-линии для периодичности опор
+        int idx = 0;
+        Integer yHint = null;
+        int prevDeckY = Integer.MIN_VALUE; // <— НОВОЕ: предыдущая высота полотна для лесенки
 
         for (int i = 1; i < pts.size(); i++) {
             int x1 = pts.get(i - 1)[0], z1 = pts.get(i - 1)[1];
@@ -317,24 +319,25 @@ public class BridgeGenerator {
 
             List<int[]> seg = bresenhamLine(x1, z1, x2, z2);
 
-            Integer yHint = null;
             for (int pi = 0; pi < seg.size(); pi++) {
                 int x = seg.get(pi)[0], z = seg.get(pi)[1];
 
+                // высоту берём по центру сечения
+                int ySurfCenter = findTopNonAirNearIgnoringBridge(x, z, yHint);
+                if (ySurfCenter == Integer.MIN_VALUE) { idx++; continue; }
+
+                int targetDeckY = clampInt(ySurfCenter + offset, worldMin, worldMax);
+                int yDeck = stepClamp(prevDeckY, targetDeckY, 1); // <— НОВОЕ: лесенка
+                int effectiveOffset = yDeck - ySurfCenter;        // может быть < offset, когда «догоняем»
+
+                // рисуем поперечник на одном уровне yDeck
                 for (int w = -half; w <= half; w++) {
                     int xx = horizontalMajor ? x : x + w;
                     int zz = horizontalMajor ? z + w : z;
                     if (xx < minX || xx > maxX || zz < minZ || zz > maxZ) continue;
 
-                    int ySurf = findTopNonAirNearIgnoringBridge(xx, zz, yHint);
-                    if (ySurf == Integer.MIN_VALUE) continue;
-
-                    int yDeck = Math.max(worldMin, Math.min(worldMax, ySurf + offset));
-
-                    // полотно
                     setBridgeBlock(xx, yDeck, zz, deckBlock);
 
-                    // бордюр СНАРУЖИ (±(half+1)) + стенка
                     if (w == -half || w == half) {
                         int wOut = (w < 0) ? -half - 1 : half + 1;
                         int ox = horizontalMajor ? x : x + wOut;
@@ -344,13 +347,14 @@ public class BridgeGenerator {
                             if (yDeck + 1 <= worldMax) setBridgeBlock(ox, yDeck + 1, oz, wallBlock);
                         }
                     }
-
-                    yHint = ySurf;
                 }
 
-                // после прорисовки поперечного сечения — пробуем поставить опоры
+                // опоры с учётом ФАКТИЧЕСКОГО оффсета (а не желаемого)
                 placeSupportPairIfNeeded(idx, SUPPORT_PERIOD, x, z, horizontalMajor, half,
-                                        offset, minX, maxX, minZ, maxZ, yHint, supportBlock);
+                        effectiveOffset, minX, maxX, minZ, maxZ, ySurfCenter, supportBlock);
+
+                yHint = ySurfCenter;
+                prevDeckY = yDeck; // обновили предыдущий уровень
                 idx++;
             }
         }
@@ -367,6 +371,8 @@ public class BridgeGenerator {
         int half = Math.max(0, width / 2);
         int totalLen = approxPathLengthBlocks(pts);
         int idx = 0;
+        Integer yHint = null;
+        int prevDeckY = Integer.MIN_VALUE; // <— НОВОЕ
 
         for (int si = 1; si < pts.size(); si++) {
             int x1 = pts.get(si - 1)[0], z1 = pts.get(si - 1)[1];
@@ -374,7 +380,6 @@ public class BridgeGenerator {
             boolean horizontalMajor = Math.abs(x2 - x1) >= Math.abs(z2 - z1);
 
             List<int[]> seg = bresenhamLine(x1, z1, x2, z2);
-            Integer yHint = null;
 
             for (int pi = 0; pi < seg.size(); pi++) {
                 if (si > 1 && pi == 0) continue;
@@ -382,20 +387,20 @@ public class BridgeGenerator {
                 int x = seg.get(pi)[0], z = seg.get(pi)[1];
                 int localOffset = rampOffsetForIndex(idx, totalLen, mainOffset, rampSteps);
 
+                int ySurfCenter = findTopNonAirNearIgnoringBridge(x, z, yHint);
+                if (ySurfCenter == Integer.MIN_VALUE) { idx++; continue; }
+
+                int targetDeckY = clampInt(ySurfCenter + localOffset, worldMin, worldMax);
+                int yDeck = stepClamp(prevDeckY, targetDeckY, 1); // <— НОВОЕ
+                int effectiveOffset = yDeck - ySurfCenter;
+
                 for (int w = -half; w <= half; w++) {
                     int xx = horizontalMajor ? x : x + w;
                     int zz = horizontalMajor ? z + w : z;
                     if (xx < minX || xx > maxX || zz < minZ || zz > maxZ) continue;
 
-                    int ySurf = findTopNonAirNearIgnoringBridge(xx, zz, yHint);
-                    if (ySurf == Integer.MIN_VALUE) continue;
-
-                    int yDeck = Math.max(worldMin, Math.min(worldMax, ySurf + localOffset));
-
-                    // полотно
                     setBridgeBlock(xx, yDeck, zz, deckBlock);
 
-                    // бордюр СНАРУЖИ (±(half+1)) + стенка
                     if (w == -half || w == half) {
                         int wOut = (w < 0) ? -half - 1 : half + 1;
                         int ox = horizontalMajor ? x : x + wOut;
@@ -405,17 +410,18 @@ public class BridgeGenerator {
                             if (yDeck + 1 <= worldMax) setBridgeBlock(ox, yDeck + 1, oz, wallBlock);
                         }
                     }
-
-                    yHint = ySurf;
                 }
 
-                // опоры по периодичности
                 placeSupportPairIfNeeded(idx, SUPPORT_PERIOD, x, z, horizontalMajor, half,
-                                        localOffset, minX, maxX, minZ, maxZ, yHint, supportBlock);
+                        effectiveOffset, minX, maxX, minZ, maxZ, ySurfCenter, supportBlock);
+
+                yHint = ySurfCenter;
+                prevDeckY = yDeck;
                 idx++;
             }
         }
     }
+
 
     private void paintRailsFollowRelief(List<int[]> pts, int offset,
                                         int minX, int maxX, int minZ, int maxZ,
@@ -424,7 +430,9 @@ public class BridgeGenerator {
         final int worldMin = level.getMinBuildHeight();
         final int worldMax = level.getMaxBuildHeight() - 1;
 
-        int idx = 0; // индекс вдоль центр-линии для периодичности опор
+        int idx = 0;
+        Integer yHint = null;
+        int prevRailY = Integer.MIN_VALUE; // <— НОВОЕ
 
         for (int i = 1; i < pts.size(); i++) {
             int x1 = pts.get(i - 1)[0], z1 = pts.get(i - 1)[1];
@@ -434,7 +442,6 @@ public class BridgeGenerator {
             int[][] sides = horizontalMajor ? new int[][]{{0, 1}, {0, -1}} : new int[][]{{1, 0}, {-1, 0}};
 
             List<int[]> seg = bresenhamLine(x1, z1, x2, z2);
-            Integer yHint = null;
 
             for (int[] p : seg) {
                 int x = p[0], z = p[1];
@@ -443,12 +450,14 @@ public class BridgeGenerator {
                 int ySurf = findTopNonAirNearIgnoringBridge(x, z, yHint);
                 if (ySurf == Integer.MIN_VALUE) { idx++; continue; }
 
-                int yBase = Math.max(worldMin, Math.min(worldMax, ySurf + offset));
-                if (yBase == worldMax && yBase - 1 >= worldMin) yBase--;
+                // для рельс нужно место под rail на yBase+1
+                int targetBaseY = clampInt(ySurf + offset, worldMin, worldMax - 1);
+                int yBase = stepClamp(prevRailY, targetBaseY, 1); // <— НОВОЕ
+                int effectiveOffset = yBase - ySurf;
 
                 // путь
                 setBridgeBlock(x, yBase, z, cobble);
-                if (yBase + 1 <= worldMax) setBridgeBlock(x, yBase + 1, z, railBlock);
+                setBridgeBlock(x, yBase + 1, z, railBlock);
 
                 // бортики слева/справа
                 for (int[] s : sides) {
@@ -458,15 +467,17 @@ public class BridgeGenerator {
                     if (yBase + 1 <= worldMax) setBridgeBlock(sx, yBase + 1, sz, wallBlock);
                 }
 
-                yHint = ySurf;
-
-                // опоры (для ЖД — от края полотна шириной 1: half = 0)
+                // опоры (half=0 для ЖД)
                 placeSupportPairIfNeeded(idx, SUPPORT_PERIOD, x, z, horizontalMajor, 0,
-                                        offset, minX, maxX, minZ, maxZ, yHint, supportBlock);
+                        effectiveOffset, minX, maxX, minZ, maxZ, ySurf, supportBlock);
+
+                yHint = ySurf;
+                prevRailY = yBase;
                 idx++;
             }
         }
     }
+
 
     /** Рельсы на мосту со ступенями (только для больших мостов). */
     private void paintRailsWithRamps(List<int[]> pts, int mainOffset, int rampSteps,
@@ -478,6 +489,8 @@ public class BridgeGenerator {
 
         int totalLen = approxPathLengthBlocks(pts);
         int idx = 0;
+        Integer yHint = null;
+        int prevRailY = Integer.MIN_VALUE; // <— НОВОЕ
 
         for (int si = 1; si < pts.size(); si++) {
             int x1 = pts.get(si - 1)[0], z1 = pts.get(si - 1)[1];
@@ -487,7 +500,6 @@ public class BridgeGenerator {
             int[][] sides = horizontalMajor ? new int[][]{{0, 1}, {0, -1}} : new int[][]{{1, 0}, {-1, 0}};
 
             List<int[]> seg = bresenhamLine(x1, z1, x2, z2);
-            Integer yHint = null;
 
             for (int pi = 0; pi < seg.size(); pi++) {
                 if (si > 1 && pi == 0) continue;
@@ -499,14 +511,13 @@ public class BridgeGenerator {
 
                 int ySurf = findTopNonAirNearIgnoringBridge(x, z, yHint);
                 if (ySurf != Integer.MIN_VALUE) {
-                    int yBase = Math.max(worldMin, Math.min(worldMax, ySurf + localOffset));
-                    if (yBase == worldMax && yBase - 1 >= worldMin) yBase--;
+                    int targetBaseY = clampInt(ySurf + localOffset, worldMin, worldMax - 1);
+                    int yBase = stepClamp(prevRailY, targetBaseY, 1); // <— НОВОЕ
+                    int effectiveOffset = yBase - ySurf;
 
-                    // путь
                     setBridgeBlock(x, yBase, z, cobble);
-                    if (yBase + 1 <= worldMax) setBridgeBlock(x, yBase + 1, z, railBlock);
+                    setBridgeBlock(x, yBase + 1, z, railBlock);
 
-                    // бортики
                     for (int[] s : sides) {
                         int sx = x + s[0], sz = z + s[1];
                         if (sx < minX || sx > maxX || sz < minZ || sz > maxZ) continue;
@@ -514,16 +525,17 @@ public class BridgeGenerator {
                         if (yBase + 1 <= worldMax) setBridgeBlock(sx, yBase + 1, sz, wallBlock);
                     }
 
-                    yHint = ySurf;
-
-                    // опоры по периодичности (half = 0 для ЖД полотна)
                     placeSupportPairIfNeeded(idx, SUPPORT_PERIOD, x, z, horizontalMajor, 0,
-                                            localOffset, minX, maxX, minZ, maxZ, yHint, supportBlock);
+                            effectiveOffset, minX, maxX, minZ, maxZ, ySurf, supportBlock);
+
+                    yHint = ySurf;
+                    prevRailY = yBase;
                 }
                 idx++;
             }
         }
     }
+
     
     // ====== ПОМОЩНИКИ ДЛИНЫ / OFFSET ======
 
@@ -674,5 +686,17 @@ public class BridgeGenerator {
         }
         pts.add(new int[]{x1, z1});
         return pts;
+    }
+
+    // --- helpers для лесенки ---
+    private static int clampInt(int v, int lo, int hi) {
+        return Math.max(lo, Math.min(hi, v));
+    }
+    /** Ограничиваем изменение высоты: не более чем на ±maxStep от prevY. */
+    private static int stepClamp(int prevY, int targetY, int maxStep) {
+        if (prevY == Integer.MIN_VALUE) return targetY; // первый шаг — без ограничений
+        if (targetY > prevY + maxStep) return prevY + maxStep;
+        if (targetY < prevY - maxStep) return prevY - maxStep;
+        return targetY;
     }
 }
