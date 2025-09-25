@@ -438,10 +438,21 @@ public class SurfaceGenerator {
         for (Map.Entry<Long,String> e : surface.entrySet())
             if ("water".equals(e.getValue())) waterMask.add(e.getKey());
 
+        // === НОВОЕ: клетки обрывов/укреплений из OSM
+        Set<Long> cliffCapCells = extractCliffCellsFromOSM(
+                coordsJson,
+                centerLat, centerLng, east, west, north, south,
+                sizeMeters, centerX, centerZ,
+                minX, maxX, minZ, maxZ
+        );
+
         broadcast(level, String.format("Размещение блоков (%d клеток)…", totalCells));
-        // Сформируем «идеальные» уровни воды (поверх DEM), чтобы не было гор из воды
+
+        // уровни воды
         Map<Long, Integer> waterSurfaceY = computeWaterSurfaceY(surface, terrainY, minX, maxX, minZ, maxZ);
-        placeBlocks(surface, terrainY, waterMask, waterSurfaceY, minX, maxX, minZ, maxZ, totalCells);
+
+        // ВЫЗОВ placeBlocks с новым параметром
+        placeBlocks(surface, terrainY, waterMask, waterSurfaceY, cliffCapCells, minX, maxX, minZ, maxZ, totalCells);
         broadcast(level, "Размещение блоков завершено.");
     }
 
@@ -1083,6 +1094,7 @@ public class SurfaceGenerator {
 
     private void placeBlocks(Map<Long,String> surface, Map<Long,Integer> terrain,
                             Set<Long> waterMask, Map<Long,Integer> waterSurfaceY,
+                            Set<Long> cliffCapCells,
                             int minX, int maxX, int minZ, int maxZ, int totalCells) {
         int done = 0;
         int nextConsole = 5;
@@ -1094,35 +1106,40 @@ public class SurfaceGenerator {
 
         for (int x = minX; x <= maxX; x++) {
             for (int z = minZ; z <= maxZ; z++) {
-                int yTop = terrain.getOrDefault(key(x, z), Y_BASE); // верх рельефа
+                int yTop = terrain.getOrDefault(key(x, z), Y_BASE);
                 if (yTop <= worldMin + 2) yTop = worldMin + 3;
                 if (yTop >= worldMax - 2) yTop = worldMax - 3;
 
                 String mat = surface.getOrDefault(key(x, z), "moss_block");
 
                 if ("water".equals(mat) || waterMask.contains(key(x, z))) {
-                    // вода: используем переопределённую «поверхность воды», а не рельеф DEM
+                    // (как было) — вода
                     int yWaterSurface = (waterSurfaceY != null && waterSurfaceY.containsKey(key(x,z)))
                             ? waterSurfaceY.get(key(x,z))
-                            : (yTop - 1); // fallback: как было
+                            : (yTop - 1);
 
-                    int yLapis = yWaterSurface - 1;   // подстилка
-                    int yAirTop = yWaterSurface + 1;  // воздух над водой
+                    int yLapis = yWaterSurface - 1;
+                    int yAirTop = yWaterSurface + 1;
 
-                    // ниже подстилки чистим
                     clearColumnBelow(x, z, worldMin, yLapis - 1);
-
-                    // подстилка + вода + воздух сверху
-                    setBlock(x, yLapis,    z, "minecraft:lapis_block");
-                    setBlock(x, yWaterSurface, z, "minecraft:water");
-                    setBlock(x, yAirTop,   z, "minecraft:air");
-
-                    // выше — чистим до потолка
+                    setBlock(x, yLapis,         z, "minecraft:lapis_block");
+                    setBlock(x, yWaterSurface,  z, "minecraft:water");
+                    setBlock(x, yAirTop,        z, "minecraft:air");
                     clearColumnAbove(x, yAirTop + 1, z, worldMax);
                 } else {
-                    // суша: материал на вершине
+                    // суша
                     setBlock(x, yTop, z, "minecraft:" + mat);
-                    clearColumnAbove(x, yTop + 1, z, worldMax);
+
+                    boolean isCliff = (cliffCapCells != null && cliffCapCells.contains(key(x, z)));
+                    if (isCliff) {
+                        // кладём «шапку» из потрескавшегося кирпича на 1 блок выше рельефа
+                        setBlock(x, yTop + 1, z, "minecraft:cracked_stone_bricks");
+                        // чистим выше, начиная со следующего, чтобы «шапку» не снести
+                        clearColumnAbove(x, yTop + 2, z, worldMax);
+                    } else {
+                        clearColumnAbove(x, yTop + 1, z, worldMax);
+                    }
+
                     clearColumnBelow(x, z, worldMin, yTop - 1);
                 }
 
@@ -1661,4 +1678,114 @@ public class SurfaceGenerator {
         }
         return out;
     }
+
+    // === Cliff helpers ===
+    private static boolean isCliffLike(JsonObject tags) {
+        if (tags == null) return false;
+        String nat = optString(tags, "natural");
+        String mm  = optString(tags, "man_made");
+        String barr= optString(tags, "barrier");
+        String emb = optString(tags, "embankment");
+
+        if ("cliff".equals(nat)) return true;
+        if ("earth_bank".equals(nat)) return true;
+        if ("embankment".equals(mm)) return true;
+        if ("yes".equals(emb)) return true;
+        if ("retaining_wall".equals(barr)) return true;
+        if ("retaining_wall".equals(mm)) return true;
+
+        return false;
+    }
+
+    /** Рисуем линию на сетке (Брезенхэм) и собираем клетки в out. */
+    private static void drawLineCells(int x1, int z1, int x2, int z2,
+                                    int minX, int maxX, int minZ, int maxZ,
+                                    Set<Long> out) {
+        int dx = Math.abs(x2 - x1), sx = x1 < x2 ? 1 : -1;
+        int dz = Math.abs(z2 - z1), sz = z1 < z2 ? 1 : -1;
+        int err = (dx > dz ? dx : -dz) / 2;
+        int x = x1, z = z1;
+        while (true) {
+            if (x >= minX && x <= maxX && z >= minZ && z <= maxZ) {
+                out.add(key(x, z));
+            }
+            if (x == x2 && z == z2) break;
+            int e2 = err;
+            if (e2 > -dx) { err -= dz; x += sx; }
+            if (e2 <  dz) { err += dx; z += sz; }
+        }
+    }
+
+    /** Собираем клетки для cliff/embankment/retaining_wall из OSM. */
+    private static Set<Long> extractCliffCellsFromOSM(
+            JsonObject root,
+            double centerLat, double centerLng,
+            double east, double west, double north, double south,
+            int sizeMeters, int centerX, int centerZ,
+            int minX, int maxX, int minZ, int maxZ) {
+
+        Set<Long> out = new HashSet<>();
+        if (root == null || !root.has("features")) return out;
+        JsonObject features = root.getAsJsonObject("features");
+        if (features == null || !features.has("elements")) return out;
+        JsonArray elements = features.getAsJsonArray("elements");
+        if (elements == null) return out;
+
+        for (JsonElement el : elements) {
+            if (!el.isJsonObject()) continue;
+            JsonObject e = el.getAsJsonObject();
+            String type = optString(e, "type");
+            JsonObject tags = e.has("tags") && e.get("tags").isJsonObject() ? e.getAsJsonObject("tags") : null;
+            if (!isCliffLike(tags)) continue;
+
+            // WAY c geometry[]
+            if ("way".equals(type) && e.has("geometry") && e.get("geometry").isJsonArray()) {
+                JsonArray geom = e.getAsJsonArray("geometry");
+                if (geom.size() < 2) continue;
+                JsonObject p0 = geom.get(0).getAsJsonObject();
+                int[] prev = latlngToBlock(
+                        p0.get("lat").getAsDouble(), p0.get("lon").getAsDouble(),
+                        centerLat, centerLng, east, west, north, south,
+                        sizeMeters, centerX, centerZ);
+                for (int i = 1; i < geom.size(); i++) {
+                    JsonObject pi = geom.get(i).getAsJsonObject();
+                    int[] cur = latlngToBlock(
+                            pi.get("lat").getAsDouble(), pi.get("lon").getAsDouble(),
+                            centerLat, centerLng, east, west, north, south,
+                            sizeMeters, centerX, centerZ);
+                    drawLineCells(prev[0], prev[1], cur[0], cur[1], minX, maxX, minZ, maxZ, out);
+                    prev = cur;
+                }
+            }
+
+            // RELATION с members[].geometry[] (редко, но поддержим)
+            if ("relation".equals(type) && e.has("members") && e.get("members").isJsonArray()) {
+                for (JsonElement memEl : e.getAsJsonArray("members")) {
+                    JsonObject mem = memEl.getAsJsonObject();
+                    if (!"way".equals(optString(mem, "type"))) continue;
+                    if (!mem.has("geometry") || !mem.get("geometry").isJsonArray()) continue;
+                    JsonArray geom = mem.getAsJsonArray("geometry");
+                    if (geom.size() < 2) continue;
+
+                    JsonObject p0 = geom.get(0).getAsJsonObject();
+                    int[] prev = latlngToBlock(
+                            p0.get("lat").getAsDouble(), p0.get("lon").getAsDouble(),
+                            centerLat, centerLng, east, west, north, south,
+                            sizeMeters, centerX, centerZ);
+                    for (int i = 1; i < geom.size(); i++) {
+                        JsonObject pi = geom.get(i).getAsJsonObject();
+                        int[] cur = latlngToBlock(
+                                pi.get("lat").getAsDouble(), pi.get("lon").getAsDouble(),
+                                centerLat, centerLng, east, west, north, south,
+                                sizeMeters, centerX, centerZ);
+                        drawLineCells(prev[0], prev[1], cur[0], cur[1], minX, maxX, minZ, maxZ, out);
+                        prev = cur;
+                    }
+                }
+            }
+        }
+        return out;
+    }
+
+
 }

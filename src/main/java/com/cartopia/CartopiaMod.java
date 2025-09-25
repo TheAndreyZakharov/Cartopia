@@ -31,7 +31,6 @@ public class CartopiaMod {
 
     private void onCommonSetup(final FMLCommonSetupEvent e) {
         // Ничего не запускаем здесь, чтобы не плодить сервер до старта мира.
-        // Если хочется — можно оставить пустым.
     }
 
     private void onClientSetup(final FMLClientSetupEvent event) {
