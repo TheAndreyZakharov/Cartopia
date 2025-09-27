@@ -48,23 +48,15 @@ public class CartopiaPipeline {
             surface.generate();
             broadcast(level, "Поверхность готова.");
 
+            // Сразу поднимаем всех игроков этого мира на безопасную поверхность
+            broadcast(level, "Переставляю игроков на поверхность…");
+            CartopiaSurfaceSpawn.adjustAllPlayersAsync(level);
+
             // Дороги
             broadcast(level, "Старт генерации дорог…");
             RoadGenerator roads = new RoadGenerator(level, coords);
             roads.generate();
             broadcast(level, "Дороги готовы.");
-
-            // Мосты/эстакады (без тоннелей)
-            broadcast(level, "Старт генерации мостов/эстакад…");
-            BridgeGenerator bridges = new BridgeGenerator(level, coords);
-            bridges.generate();
-            broadcast(level, "Мосты/эстакады готовы.");
-
-            // Туннели
-            broadcast(level, "Старт генерации мостов/эстакад…");
-            BridgeGenerator tunnels = new BridgeGenerator(level, coords);
-            tunnels.generate();
-            broadcast(level, "Мосты/эстакады готовы.");
 
             // Рельсы
             broadcast(level, "Старт генерации рельсов…");
@@ -72,9 +64,17 @@ public class CartopiaPipeline {
             rails.generate();
             broadcast(level, "Рельсы готовы.");
 
-            // Сразу поднимаем всех игроков этого мира на безопасную поверхность
-            broadcast(level, "Переставляю игроков на поверхность…");
-            CartopiaSurfaceSpawn.adjustAllPlayersAsync(level);
+            // Мосты/эстакады (без тоннелей)
+            broadcast(level, "Старт генерации мостов/эстакад…");
+            BridgeGenerator bridges = new BridgeGenerator(level, coords);
+            bridges.generate();
+            broadcast(level, "Мосты/эстакады готовы.");
+
+            // Тоннели и подземные переходы (дороги и ЖД по логике «как мост, но вниз»)
+            broadcast(level, "Старт генерации тоннелей/подземных переходов…");
+            TunnelGenerator tunnels = new TunnelGenerator(level, coords);
+            tunnels.generate();
+            broadcast(level, "Тоннели/подземные переходы готовы.");
 
             broadcast(level, "Сохраняю мир…");
             level.save(null, true, false);

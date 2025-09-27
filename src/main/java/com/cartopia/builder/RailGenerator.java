@@ -10,7 +10,6 @@ import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.Blocks;
-import net.minecraft.world.level.block.state.BlockState;
 import net.minecraftforge.registries.ForgeRegistries;
 
 import java.util.*;
@@ -106,14 +105,17 @@ public class RailGenerator {
             String type = optString(tags, "railway");
             boolean isSubway = "subway".equals(type);
 
-            if (!isSubway && isBridgeOrTunnel(tags)) {
-                // для surface-рельсов не поддерживаем мосты/тоннели — пропускаем такие ways
+            // Если это мост/тоннель — здесь не строим (их рисуют Bridge/TunnelGenerator по их правилам)
+            if (!isSubway && (isElevatedLike(tags) || isUndergroundLike(tags))) {
                 processed++;
                 continue;
             }
 
             // Идём по сегментам
+            Integer prevRailBaseY = null;
+            Integer yHintTop = null;
             int prevX = Integer.MIN_VALUE, prevZ = Integer.MIN_VALUE;
+
             for (int i=0; i<geom.size(); i++) {
                 JsonObject p = geom.get(i).getAsJsonObject();
                 double lat = p.get("lat").getAsDouble();
@@ -125,10 +127,14 @@ public class RailGenerator {
                     if (isSubway) {
                         paintSubwaySegment(prevX, z1(prevZ), x, z, minX, maxX, minZ, maxZ, cobble, rail);
                     } else {
-                        paintSurfaceRailSegment(prevX, z1(prevZ), x, z, minX, maxX, minZ, maxZ, cobble, rail);
+                        // обычные surface-рельсы, сглаживаем, чтобы не «ныряли» в порталы тоннелей
+                        prevRailBaseY = paintSurfaceRailSegment(prevX, z1(prevZ), x, z,
+                                minX, maxX, minZ, maxZ, cobble, rail, prevRailBaseY, yHintTop);
                     }
                 }
 
+                // обновляем hint приблизительно на поверхность рядом с конечной точкой отрезка
+                yHintTop = findTopNonAirNearSkippingRails(x, z, yHintTop);
                 prevX = x; prevZ = z;
             }
 
@@ -142,32 +148,40 @@ public class RailGenerator {
         broadcast(level, "Рельсы готовы.");
     }
 
-    // --- обычные (surface) рельсы: базовый Y = высота рельефа; cobble на базе, rail на базе+1 ---
-    private void paintSurfaceRailSegment(int x1, int z1, int x2, int z2,
-                                         int minX, int maxX, int minZ, int maxZ,
-                                         Block cobble, Block railBlock) {
+    // --- обычные (surface) рельсы: базовый Y = верхний не-air блок колонки; сглаживание по ±1 ---
+    private Integer paintSurfaceRailSegment(int x1, int z1, int x2, int z2,
+                                            int minX, int maxX, int minZ, int maxZ,
+                                            Block cobble, Block railBlock,
+                                            Integer prevRailBaseY, Integer yHintTop) {
         List<int[]> line = bresenhamLine(x1, z1, x2, z2);
-        Integer yHint = null;
+        final int worldMin = level.getMinBuildHeight();
         final int worldMax = level.getMaxBuildHeight() - 1;
 
         for (int[] pt : line) {
             int x = pt[0], z = pt[1];
             if (x < minX || x > maxX || z < minZ || z > maxZ) continue;
 
-            Integer yBase = findSurfaceBaseY(x, z, yHint);
-            if (yBase == null) continue;
+            // <<< КЛЮЧЕВОЕ: берем ровно Y рельефа из SurfaceGenerator
+            int yBase = terrainYFromCoordsOrWorld(x, z, yHintTop);
+            if (yBase < worldMin || yBase + 1 > worldMax) continue;
 
-            // база: заменяем верхний блок рельефа на булыжник
+            level.setBlock(new BlockPos(x, yBase,     z), cobble.defaultBlockState(), 3);
+            level.setBlock(new BlockPos(x, yBase + 1, z), railBlock.defaultBlockState(), 3);
+
+            yHintTop = yBase;        // можно так, чисто для ускорения фоллбэка
+            prevRailBaseY = yBase;   // не влияет на высоту, но пусть возвращается
+
             BlockPos basePos = new BlockPos(x, yBase, z);
-            level.setBlock(basePos, cobble.defaultBlockState(), 3);
+            BlockPos railPos = basePos.above();
 
-            // рельса строго над базой
-            if (yBase + 1 <= worldMax) {
-                level.setBlock(new BlockPos(x, yBase + 1, z), railBlock.defaultBlockState(), 3);
+            if (level.getBlockState(basePos).getBlock() != cobble) {
+                level.setBlock(basePos, cobble.defaultBlockState(), 3);
             }
-
-            yHint = yBase;
+            if (!isRailBlock(level.getBlockState(railPos).getBlock())) {
+                level.setBlock(railPos, railBlock.defaultBlockState(), 3);
+            }
         }
+        return prevRailBaseY;
     }
 
     // --- метро на фиксированных глубинах (-62/-61), как в Python ---
@@ -201,91 +215,6 @@ public class RailGenerator {
         level.setBlock(new BlockPos(x, yRail, z), rail.defaultBlockState(), 3);
     }
 
-    // ===== высотные утилиты =====
-
-    private Integer findSurfaceBaseY(int x, int z, Integer hintY) {
-        final int worldMin = level.getMinBuildHeight();
-
-        int yTop = findTerrainFromBelow(x, z, hintY);
-        if (yTop == Integer.MIN_VALUE) return null;
-
-        BlockPos topPos = new BlockPos(x, yTop, z);
-        BlockState top = level.getBlockState(topPos);
-
-        // Вода сверху — не строим мосты
-        // Если сверху вода — считаем это валидной базой: заменим воду на булыжник.
-        if (top.getBlock() == Blocks.WATER) {
-            return yTop; // cobble пойдёт сюда, rail — на yTop+1
-        }
-
-        if (isRailLike(top) || top.getBlock() == Blocks.SNOW) {
-            if (yTop - 1 < worldMin) return null;
-            // Даже если на базе вода — разрешаем перекрывать её.
-            return yTop - 1;
-        }
-
-        // Обычный случай: база = верхний не-air, но убедимся, что это не вода
-        if (top.getBlock() == Blocks.WATER) return null;
-        return yTop;
-    }
-
-    private boolean isRailLike(BlockState st) {
-        Block b = st.getBlock();
-        return b == Blocks.RAIL || b == Blocks.POWERED_RAIL || b == Blocks.DETECTOR_RAIL || b == Blocks.ACTIVATOR_RAIL;
-    }
-
-    /** 
-     * Вершина рельефа, игнорируя тонкие навесы сверху.
-     * Берём первый сверху не-air блок, под которым в пределах 1..3 блоков вниз есть ещё не-air.
-     * (Так мы не зацепимся за плиту моста, повисшую в воздухе над дорогой/землёй/водой.)
-     */
-    private int findTerrainFromBelow(int x, int z, Integer hintY) {
-        final int worldMin = level.getMinBuildHeight();
-        final int worldMax = level.getMaxBuildHeight() - 1;
-
-        int start = (hintY != null) ? Math.max(worldMin, hintY - 32) : worldMin;
-        for (int y = start; y <= worldMax; y++) {
-            BlockState st = level.getBlockState(new BlockPos(x, y, z));
-            if (st.isAir()) continue;
-
-            // не цепляемся за уже построенные рельсы
-            if (isRailLike(st)) continue;
-
-            // база метро (-62) — не считаем рельефом
-            if (st.getBlock() == Blocks.COBBLESTONE && y <= -62) continue;
-
-            return y;
-        }
-        // fallback: полный проход снизу (если hint промахнулся)
-        for (int y = worldMin; y <= worldMax; y++) {
-            BlockState st = level.getBlockState(new BlockPos(x, y, z));
-            if (st.isAir()) continue;
-            if (isRailLike(st)) continue;
-            if (st.getBlock() == Blocks.COBBLESTONE && y <= -62) continue;
-            return y;
-        }
-        return Integer.MIN_VALUE;
-    }
-
-    @SuppressWarnings("unused")
-    /** быстрый поиск верхнего не-air по колонке, с локальной подсказкой по высоте */
-    private int findTopNonAirNear(int x, int z, Integer hintY) {
-        final int worldMin = level.getMinBuildHeight();
-        final int worldMax = level.getMaxBuildHeight() - 1;
-
-        if (hintY != null) {
-            int from = Math.min(worldMax, hintY + 16);
-            int to   = Math.max(worldMin, hintY - 16);
-            for (int y = from; y >= to; y--) {
-                if (!level.getBlockState(new BlockPos(x, y, z)).isAir()) return y;
-            }
-        }
-        for (int y = worldMax; y >= worldMin; y--) {
-            if (!level.getBlockState(new BlockPos(x, y, z)).isAir()) return y;
-        }
-        return Integer.MIN_VALUE;
-    }
-
     // ===== прочие утилиты =====
 
     private static Block resolveBlock(String id) {
@@ -299,16 +228,18 @@ public class RailGenerator {
         return r.equals("rail") || r.equals("tram") || r.equals("light_rail") || r.equals("subway");
     }
 
-    private static boolean isBridgeOrTunnel(JsonObject tags) {
-        if (truthy(optString(tags, "bridge"))) return true;
-        if (truthy(optString(tags, "tunnel"))) return true;
-        return false;
-    }
-
-    private static boolean truthy(String v) {
+    private static boolean isBridge(JsonObject tags) {
+        String v = optString(tags, "bridge");
         if (v == null) return false;
         v = v.trim().toLowerCase(Locale.ROOT);
-        return v.equals("yes") || v.equals("true") || v.equals("1");
+        return !(v.equals("no") || v.equals("false") || v.equals("0"));
+    }
+
+    private static boolean isTunnel(JsonObject tags) {
+        String v = optString(tags, "tunnel");
+        if (v == null) return false;
+        v = v.trim().toLowerCase(Locale.ROOT);
+        return !(v.equals("no") || v.equals("false") || v.equals("0"));
     }
 
     private static String optString(JsonObject o, String k) {
@@ -357,4 +288,77 @@ public class RailGenerator {
 
     // маленький хелпер, чтобы не путаться в сигнатурах
     private static int z1(int z) { return z; }
+
+    private static boolean isUndergroundLike(JsonObject tags) {
+        // tunnel=*, layer<0, level<0, location=underground/below_ground
+        if (isTunnel(tags)) return true;
+        String layer = optString(tags, "layer");
+        if (layer != null && layer.matches(".*-\\d+.*")) return true;
+        String level = optString(tags, "level");
+        if (level != null && level.matches(".*-\\d+.*")) return true;
+        String loc = optString(tags, "location");
+        if (loc != null) {
+            String l = loc.trim().toLowerCase(Locale.ROOT);
+            if (l.contains("underground") || l.contains("below_ground")) return true;
+        }
+        return false;
+    }
+
+    private static boolean isElevatedLike(JsonObject tags) {
+        // bridge-like без явного bridge: layer>0, level>0, bridge:structure=*, location=overground
+        if (isBridge(tags)) return true;
+        String layer = optString(tags, "layer");
+        if (layer != null && layer.matches(".*\\b[1-9]\\d*.*")) return true;
+        String level = optString(tags, "level");
+        if (level != null && level.matches(".*\\b[1-9]\\d*.*")) return true;
+        if (optString(tags, "bridge:structure") != null) return true;
+        String loc = optString(tags, "location");
+        if (loc != null && loc.trim().toLowerCase(Locale.ROOT).contains("overground")) return true;
+        return false;
+    }
+
+    private int terrainYFromCoordsOrWorld(int x, int z, Integer hintY) {
+        try {
+            if (coords != null && coords.has("terrainGrid")) {
+                JsonObject g = coords.getAsJsonObject("terrainGrid");
+                int minX = g.get("minX").getAsInt();
+                int minZ = g.get("minZ").getAsInt();
+                int w    = g.get("width").getAsInt();
+                int h    = g.get("height").getAsInt();
+                int ix = x - minX, iz = z - minZ;
+                if (ix >= 0 && ix < w && iz >= 0 && iz < h) {
+                    JsonArray data = g.getAsJsonArray("data");
+                    int idx = iz * w + ix;
+                    return data.get(idx).getAsInt();
+                }
+            }
+        } catch (Throwable ignore) {}
+        // fallback (на всякий) — как раньше
+        return findTopNonAirNearSkippingRails(x, z, hintY);
+    }
+
+    private static boolean isRailBlock(Block b) {
+        return b == Blocks.RAIL || b == Blocks.POWERED_RAIL || b == Blocks.DETECTOR_RAIL || b == Blocks.ACTIVATOR_RAIL;
+    }
+
+    /** Верхний не-air, но рельсы считаем как воздух (чтобы база не «лезла» на рельс). */
+    private int findTopNonAirNearSkippingRails(int x, int z, Integer hintY) {
+        final int worldMin = level.getMinBuildHeight();
+        final int worldMax = level.getMaxBuildHeight() - 1;
+
+        if (hintY != null) {
+            int from = Math.min(worldMax, hintY + 16);
+            int to   = Math.max(worldMin, hintY - 16);
+            for (int y = from; y >= to; y--) {
+                Block b = level.getBlockState(new BlockPos(x, y, z)).getBlock();
+                if (!level.getBlockState(new BlockPos(x, y, z)).isAir() && !isRailBlock(b)) return y;
+            }
+        }
+        for (int y = worldMax; y >= worldMin; y--) {
+            Block b = level.getBlockState(new BlockPos(x, y, z)).getBlock();
+            if (!level.getBlockState(new BlockPos(x, y, z)).isAir() && !isRailBlock(b)) return y;
+        }
+        return Integer.MIN_VALUE;
+    }
+
 }
