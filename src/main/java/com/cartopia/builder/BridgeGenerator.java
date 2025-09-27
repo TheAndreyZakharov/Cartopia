@@ -10,6 +10,9 @@ import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.Blocks;
+import net.minecraft.world.level.block.SlabBlock;
+import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.level.block.state.properties.SlabType;
 import net.minecraftforge.registries.ForgeRegistries;
 
 import java.util.*;
@@ -91,6 +94,10 @@ public class BridgeGenerator {
     private static final int RAMP_STEPS     = 7;   // число «ступеней» у въездов
     private static final int LAYER_STEP     = 7;   // шаг высоты между layer'ами
     private static final int SUPPORT_PERIOD = 50; // опоры каждые 50 блоков
+
+    // === фонари на мостах ===
+    private static final int LAMP_PERIOD = 15;      // шаг по длине моста (меняйте тут)
+    private static final int LAMP_COLUMN_WALLS = 4; // высота колонны из стен
 
     // ==== публичный запуск ====
     public void generate() {
@@ -345,6 +352,13 @@ public class BridgeGenerator {
                         if (!(ox < minX || ox > maxX || oz < minZ || oz > maxZ)) {
                             setBridgeBlock(ox, yDeck, oz, curbBlock);
                             if (yDeck + 1 <= worldMax) setBridgeBlock(ox, yDeck + 1, oz, wallBlock);
+
+                            // фонарь каждые LAMP_PERIOD блоков, «в сторону дороги»:
+                            // слева к центру = +1, справа = -1 по поперечной оси
+                            if (idx % LAMP_PERIOD == 0) {
+                                int toward = (w < 0) ? +1 : -1;
+                                placeBridgeLamp(ox, oz, yDeck, horizontalMajor, toward, minX, maxX, minZ, maxZ);
+                            }
                         }
                     }
                 }
@@ -408,6 +422,13 @@ public class BridgeGenerator {
                         if (!(ox < minX || ox > maxX || oz < minZ || oz > maxZ)) {
                             setBridgeBlock(ox, yDeck, oz, curbBlock);
                             if (yDeck + 1 <= worldMax) setBridgeBlock(ox, yDeck + 1, oz, wallBlock);
+
+                            // фонарь каждые LAMP_PERIOD блоков, «в сторону дороги»:
+                            // слева к центру = +1, справа = -1 по поперечной оси
+                            if (idx % LAMP_PERIOD == 0) {
+                                int toward = (w < 0) ? +1 : -1;
+                                placeBridgeLamp(ox, oz, yDeck, horizontalMajor, toward, minX, maxX, minZ, maxZ);
+                            }
                         }
                     }
                 }
@@ -467,6 +488,15 @@ public class BridgeGenerator {
                     if (yBase + 1 <= worldMax) setBridgeBlock(sx, yBase + 1, sz, wallBlock);
                 }
 
+                if (idx % LAMP_PERIOD == 0) {
+                    // sides — это {0,±1} или {±1,0}; к центру — это минус вектор side
+                    for (int[] s : sides) {
+                        int sx = x + s[0], sz = z + s[1];
+                        int toward = horizontalMajor ? -s[1] : -s[0];
+                        placeBridgeLamp(sx, sz, yBase, horizontalMajor, toward, minX, maxX, minZ, maxZ);
+                    }
+                }
+
                 // опоры (half=0 для ЖД)
                 placeSupportPairIfNeeded(idx, SUPPORT_PERIOD, x, z, horizontalMajor, 0,
                         effectiveOffset, minX, maxX, minZ, maxZ, ySurf, supportBlock);
@@ -523,6 +553,15 @@ public class BridgeGenerator {
                         if (sx < minX || sx > maxX || sz < minZ || sz > maxZ) continue;
                         setBridgeBlock(sx, yBase,     sz, curbBlock);
                         if (yBase + 1 <= worldMax) setBridgeBlock(sx, yBase + 1, sz, wallBlock);
+                    }
+
+                    if (idx % LAMP_PERIOD == 0) {
+                        // sides — это {0,±1} или {±1,0}; к центру — это минус вектор side
+                        for (int[] s : sides) {
+                            int sx = x + s[0], sz = z + s[1];
+                            int toward = horizontalMajor ? -s[1] : -s[0];
+                            placeBridgeLamp(sx, sz, yBase, horizontalMajor, toward, minX, maxX, minZ, maxZ);
+                        }
                     }
 
                     placeSupportPairIfNeeded(idx, SUPPORT_PERIOD, x, z, horizontalMajor, 0,
@@ -699,4 +738,57 @@ public class BridgeGenerator {
         if (targetY < prevY - maxStep) return prevY - maxStep;
         return targetY;
     }
+
+    /** Поставить фонарь на краю полотна (на заборчике), с выносом к центру дороги. */
+    private void placeBridgeLamp(int edgeX, int edgeZ, int deckY,
+                                boolean horizontalMajor, int towardCenterSign,
+                                int minX, int maxX, int minZ, int maxZ) {
+        if (edgeX < minX || edgeX > maxX || edgeZ < minZ || edgeZ > maxZ) return;
+
+        final int worldMin = level.getMinBuildHeight();
+        final int worldMax = level.getMaxBuildHeight() - 1;
+
+        // база колонны: забор стоит на (deckY+1), колонну начинаем на +1 над ним
+        int y0 = deckY + 2;
+        int yTop = y0 + LAMP_COLUMN_WALLS - 1;
+        if (y0 > worldMax) return;
+        yTop = Math.min(yTop, worldMax);
+
+        // 1) Колонна из андезитовых стен
+        Block andesiteWall = Blocks.ANDESITE_WALL;
+        for (int y = y0; y <= yTop; y++) {
+            setBridgeBlock(edgeX, y, edgeZ, andesiteWall);
+        }
+
+        // 2) Три полублока smooth_stone_slab на уровне ВЕРХА колонны (нижняя половина блока)
+        int ySlab = yTop + 1; // полублок в нижней половине этого уровня
+        if (ySlab > worldMax) return;
+
+        // вектор «к центру полотна» (перпендикуляр к направлению сегмента)
+        int sx = horizontalMajor ? 0 : towardCenterSign;
+        int sz = horizontalMajor ? towardCenterSign : 0;
+
+        placeBottomSlab(edgeX,            ySlab, edgeZ,            Blocks.SMOOTH_STONE_SLAB);
+        placeBottomSlab(edgeX + sx,       ySlab, edgeZ + sz,       Blocks.SMOOTH_STONE_SLAB);
+        placeBottomSlab(edgeX + 2 * sx,   ySlab, edgeZ + 2 * sz,   Blocks.SMOOTH_STONE_SLAB);
+
+        // 3) Светокамень под КРАЙНИМ полублоком (вниз на 1 блок)
+        int gx = edgeX + 2 * sx;
+        int gz = edgeZ + 2 * sz;
+        int gy = ySlab - 1; // вплотную под нижним полублоком
+        if (gy >= worldMin && gy <= worldMax && gx >= minX && gx <= maxX && gz >= minZ && gz <= maxZ) {
+            setBridgeBlock(gx, gy, gz, Blocks.GLOWSTONE);
+        }
+    }
+
+    /** Поставить полублок в нижней половине блока и пометить как «наш». */
+    private void placeBottomSlab(int x, int y, int z, Block slabBlock) {
+        BlockState st = slabBlock.defaultBlockState();
+        if (st.hasProperty(SlabBlock.TYPE)) {
+            st = st.setValue(SlabBlock.TYPE, SlabType.BOTTOM);
+        }
+        level.setBlock(new BlockPos(x, y, z), st, 3);
+        placedByBridge.add(BlockPos.asLong(x, y, z));
+    }
+
 }
