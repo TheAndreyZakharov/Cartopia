@@ -10,6 +10,9 @@ import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.Blocks;
+import net.minecraft.world.level.block.SlabBlock;
+import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.level.block.state.properties.SlabType;
 import net.minecraftforge.registries.ForgeRegistries;
 
 import java.util.*;
@@ -18,6 +21,11 @@ public class RailGenerator {
 
     private final ServerLevel level;
     private final JsonObject coords;
+
+    private static final int RAIL_LAMP_PERIOD = 100;
+    private static final int RAIL_LAMP_COLUMN_WALLS = 5;
+
+    private static final class Counter { int v = 0; }
 
     public RailGenerator(ServerLevel level, JsonObject coords) {
         this.level = level;
@@ -116,6 +124,8 @@ public class RailGenerator {
             Integer yHintTop = null;
             int prevX = Integer.MIN_VALUE, prevZ = Integer.MIN_VALUE;
 
+            Counter lamp = new Counter();
+
             for (int i=0; i<geom.size(); i++) {
                 JsonObject p = geom.get(i).getAsJsonObject();
                 double lat = p.get("lat").getAsDouble();
@@ -129,7 +139,7 @@ public class RailGenerator {
                     } else {
                         // обычные surface-рельсы, сглаживаем, чтобы не «ныряли» в порталы тоннелей
                         prevRailBaseY = paintSurfaceRailSegment(prevX, z1(prevZ), x, z,
-                                minX, maxX, minZ, maxZ, cobble, rail, prevRailBaseY, yHintTop);
+                                minX, maxX, minZ, maxZ, cobble, rail, prevRailBaseY, yHintTop, lamp);
                     }
                 }
 
@@ -147,15 +157,23 @@ public class RailGenerator {
 
         broadcast(level, "Рельсы готовы.");
     }
-
+    
     // --- обычные (surface) рельсы: базовый Y = верхний не-air блок колонки; сглаживание по ±1 ---
     private Integer paintSurfaceRailSegment(int x1, int z1, int x2, int z2,
                                             int minX, int maxX, int minZ, int maxZ,
                                             Block cobble, Block railBlock,
-                                            Integer prevRailBaseY, Integer yHintTop) {
+                                            Integer prevRailBaseY, Integer yHintTop
+                                            , Counter lamp) {
         List<int[]> line = bresenhamLine(x1, z1, x2, z2);
         final int worldMin = level.getMinBuildHeight();
         final int worldMax = level.getMaxBuildHeight() - 1;
+
+        boolean horizontalMajor = Math.abs(x2 - x1) >= Math.abs(z2 - z1);
+        int dirX = Integer.signum(x2 - x1);
+        int dirZ = Integer.signum(z2 - z1);
+        // смещение на 1 блок влево от направления движения
+        final int offX = horizontalMajor ? 0      : -dirZ; // при движении по +Z «влево» = -X
+        final int offZ = horizontalMajor ? dirX   : 0;     // при движении по +X «влево» = +Z
 
         for (int[] pt : line) {
             int x = pt[0], z = pt[1];
@@ -180,6 +198,14 @@ public class RailGenerator {
             if (!isRailBlock(level.getBlockState(railPos).getBlock())) {
                 level.setBlock(railPos, railBlock.defaultBlockState(), 3);
             }
+
+            if (lamp.v % RAIL_LAMP_PERIOD == 0) {
+                int lx = x + offX;
+                int lz = z + offZ;
+                int toward = horizontalMajor ? -offZ : -offX; // направление от края к центру пути
+                placeRailLamp(lx, lz, yBase, horizontalMajor, toward, minX, maxX, minZ, maxZ);
+            }
+            lamp.v++;
         }
         return prevRailBaseY;
     }
@@ -359,6 +385,61 @@ public class RailGenerator {
             if (!level.getBlockState(new BlockPos(x, y, z)).isAir() && !isRailBlock(b)) return y;
         }
         return Integer.MIN_VALUE;
+    }
+
+    // НЕ СТАВИТЬ ФОНАРИ на дорожный серый бетон
+    private static boolean isGrayConcrete(Block b) {
+        ResourceLocation key = ForgeRegistries.BLOCKS.getKey(b);
+        return key != null && "minecraft:gray_concrete".equals(key.toString());
+    }
+
+    private void placeRailLamp(int edgeX, int edgeZ, int yBase,
+                            boolean horizontalMajor, int towardCenterSign,
+                            int minX, int maxX, int minZ, int maxZ) {
+        if (edgeX < minX || edgeX > maxX || edgeZ < minZ || edgeZ > maxZ) return;
+
+        final int worldMin = level.getMinBuildHeight();
+        final int worldMax = level.getMaxBuildHeight() - 1;
+
+        // Берём фактический рельеф в точке установки и ставим колонну "на поверхность" (ySurf+1)
+        int ySurfEdge = findTopNonAirNearSkippingRails(edgeX, edgeZ, null);
+        if (ySurfEdge == Integer.MIN_VALUE) return;
+
+        // НЕ ставим фонарь, если верхний не-air блок — серый бетон дороги
+        Block under = level.getBlockState(new BlockPos(edgeX, ySurfEdge, edgeZ)).getBlock();
+        if (isGrayConcrete(under)) return;
+
+        int y0   = ySurfEdge + 1;                                   // база колонны на уровне «как рельсы»
+        int yTop = Math.min(y0 + RAIL_LAMP_COLUMN_WALLS - 1, worldMax);
+
+        // 1) Колонна из стен
+        for (int y = y0; y <= yTop; y++) {
+            level.setBlock(new BlockPos(edgeX, y, edgeZ), Blocks.ANDESITE_WALL.defaultBlockState(), 3);
+        }
+
+        // 2) ДВА нижних полублока, направленных к центру пути
+        int ySlab = yTop + 1;
+        if (ySlab > worldMax) return;
+
+        int sx = horizontalMajor ? 0 : towardCenterSign;
+        int sz = horizontalMajor ? towardCenterSign : 0;
+
+        placeBottomSlab(edgeX,          ySlab, edgeZ,          Blocks.SMOOTH_STONE_SLAB);
+        placeBottomSlab(edgeX + sx,     ySlab, edgeZ + sz,     Blocks.SMOOTH_STONE_SLAB);
+
+        // 3) Светокамень под КРАЙНИМ (вторым) полублоком
+        int gx = edgeX + sx, gz = edgeZ + sz, gy = ySlab - 1;
+        if (gy >= worldMin && gy <= worldMax && gx >= minX && gx <= maxX && gz >= minZ && gz <= maxZ) {
+            level.setBlock(new BlockPos(gx, gy, gz), Blocks.GLOWSTONE.defaultBlockState(), 3);
+        }
+    }
+
+    private void placeBottomSlab(int x, int y, int z, Block slabBlock) {
+        BlockState st = slabBlock.defaultBlockState();
+        if (st.hasProperty(SlabBlock.TYPE)) {
+            st = st.setValue(SlabBlock.TYPE, SlabType.BOTTOM);
+        }
+        level.setBlock(new BlockPos(x, y, z), st, 3);
     }
 
 }
