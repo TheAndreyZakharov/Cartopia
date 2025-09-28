@@ -64,6 +64,24 @@ public class CartopiaPipeline {
             rails.generate();
             broadcast(level, "Рельсы готовы.");
 
+
+            // Переходы
+            // Автобусы разметка
+            // Жд переезды разметка
+
+            
+            // Дорожные фонари
+            broadcast(level, "Старт расстановки дорожных фонарей…");
+            RoadLampGenerator roadLamps = new RoadLampGenerator(level, coords);
+            roadLamps.generate();
+            broadcast(level, "Дорожные фонари готовы.");
+
+            // Фонари вдоль рельсов
+            broadcast(level, "Старт расстановки фонарей вдоль рельсов…");
+            RailLampGenerator railLamps = new RailLampGenerator(level, coords);
+            railLamps.generate();
+            broadcast(level, "Фонари вдоль рельсов готовы.");
+
             // Мосты/эстакады (без тоннелей)
             broadcast(level, "Старт генерации мостов/эстакад…");
             BridgeGenerator bridges = new BridgeGenerator(level, coords);

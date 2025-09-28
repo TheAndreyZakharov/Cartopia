@@ -5,21 +5,29 @@ import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import net.minecraft.core.BlockPos;
 import net.minecraft.network.chat.Component;
-import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.Blocks;
+import net.minecraft.world.level.block.SlabBlock;
+import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.level.block.state.properties.SlabType;
+import net.minecraft.resources.ResourceLocation;
 import net.minecraftforge.registries.ForgeRegistries;
 
 import java.util.*;
 
-public class RailGenerator {
+public class RailLampGenerator {
 
     private final ServerLevel level;
     private final JsonObject coords;
 
-    public RailGenerator(ServerLevel level, JsonObject coords) {
+    private static final int RAIL_LAMP_PERIOD = 100;  // 1-в-1 как у тебя
+    private static final int RAIL_LAMP_COLUMN_WALLS = 5;
+
+    private static final class Counter { int v = 0; }
+
+    public RailLampGenerator(ServerLevel level, JsonObject coords) {
         this.level = level;
         this.coords = coords;
     }
@@ -36,14 +44,14 @@ public class RailGenerator {
     }
 
     public void generate() {
-        broadcast(level, "🚆 Генерация железных дорог…");
+        broadcast(level, "💡 Расставляю фонари вдоль железных дорог…");
 
         if (coords == null || !coords.has("features")) {
-            broadcast(level, "В coords нет features — пропускаю RailGenerator.");
+            broadcast(level, "В coords нет features — пропускаю RailLampGenerator.");
             return;
         }
 
-        // Геопривязка и границы области генерации (в блоках)
+        // Геопривязка и границы
         JsonObject center = coords.getAsJsonObject("center");
         JsonObject bbox   = coords.getAsJsonObject("bbox");
 
@@ -72,12 +80,9 @@ public class RailGenerator {
 
         JsonArray elements = coords.getAsJsonObject("features").getAsJsonArray("elements");
         if (elements == null || elements.size() == 0) {
-            broadcast(level, "OSM elements пуст — пропускаю рельсы.");
+            broadcast(level, "OSM elements пуст — пропускаю фонари на рельсах.");
             return;
         }
-
-        Block cobble = resolveBlock("minecraft:cobblestone");
-        Block rail   = resolveBlock("minecraft:rail");
 
         int totalRails = 0;
         for (JsonElement el : elements) {
@@ -105,16 +110,21 @@ public class RailGenerator {
             String type = optString(tags, "railway");
             boolean isSubway = "subway".equals(type);
 
-            // Если это мост/тоннель — здесь не строим (их рисуют Bridge/TunnelGenerator по их правилам)
+            // Фонари только для surface-рельс (не метро и не мосты/тоннели)
             if (!isSubway && (isElevatedLike(tags) || isUndergroundLike(tags))) {
+                processed++;
+                continue;
+            }
+            if (isSubway) {
+                // для метро фонари в этом генераторе не ставим (как и было)
                 processed++;
                 continue;
             }
 
             // Идём по сегментам
-            Integer prevRailBaseY = null;
             Integer yHintTop = null;
             int prevX = Integer.MIN_VALUE, prevZ = Integer.MIN_VALUE;
+            Counter lamp = new Counter();
 
             for (int i=0; i<geom.size(); i++) {
                 JsonObject p = geom.get(i).getAsJsonObject();
@@ -124,13 +134,8 @@ public class RailGenerator {
                 int x = xz[0], z = xz[1];
 
                 if (prevX != Integer.MIN_VALUE) {
-                    if (isSubway) {
-                        paintSubwaySegment(prevX, z1(prevZ), x, z, minX, maxX, minZ, maxZ, cobble, rail);
-                    } else {
-                        // обычные surface-рельсы, сглаживаем, чтобы не «ныряли» в порталы тоннелей
-                        prevRailBaseY = paintSurfaceRailSegment(prevX, z1(prevZ), x, z,
-                                minX, maxX, minZ, maxZ, cobble, rail, prevRailBaseY, yHintTop);
-                    }
+                    placeLampsAlongSurfaceRailSegment(prevX, prevZ, x, z,
+                            minX, maxX, minZ, maxZ, yHintTop, lamp);
                 }
 
                 // обновляем hint приблизительно на поверхность рядом с конечной точкой отрезка
@@ -141,86 +146,115 @@ public class RailGenerator {
             processed++;
             if (totalRails > 0 && processed % Math.max(1, totalRails/10) == 0) {
                 int pct = (int)Math.round(100.0 * processed / Math.max(1,totalRails));
-                broadcast(level, "Рельсы: ~" + pct + "%");
+                broadcast(level, "Фонари на рельсах: ~" + pct + "%");
             }
         }
 
-        broadcast(level, "Рельсы готовы.");
+        broadcast(level, "Фонари вдоль железных дорог готовы.");
     }
-    
-    // --- обычные (surface) рельсы: базовый Y = верхний не-air блок колонки; сглаживание по ±1 ---
-    private Integer paintSurfaceRailSegment(int x1, int z1, int x2, int z2,
-                                            int minX, int maxX, int minZ, int maxZ,
-                                            Block cobble, Block railBlock,
-                                            Integer prevRailBaseY, Integer yHintTop) {
+
+    // === ЛОГИКА ДЛЯ ЛИНИЙ ===
+
+    private void placeLampsAlongSurfaceRailSegment(int x1, int z1, int x2, int z2,
+                                                   int minX, int maxX, int minZ, int maxZ,
+                                                   Integer yHintTop,
+                                                   Counter lamp) {
         List<int[]> line = bresenhamLine(x1, z1, x2, z2);
         final int worldMin = level.getMinBuildHeight();
         final int worldMax = level.getMaxBuildHeight() - 1;
+
+        boolean horizontalMajor = Math.abs(x2 - x1) >= Math.abs(z2 - z1);
+        int dirX = Integer.signum(x2 - x1);
+        int dirZ = Integer.signum(z2 - z1);
+        // смещение на 1 блок влево от направления движения (как было)
+        final int offX = horizontalMajor ? 0      : -dirZ;
+        final int offZ = horizontalMajor ? dirX   : 0;
 
         for (int[] pt : line) {
             int x = pt[0], z = pt[1];
             if (x < minX || x > maxX || z < minZ || z > maxZ) continue;
 
-            // <<< КЛЮЧЕВОЕ: берем ровно Y рельефа из SurfaceGenerator
+            // берем реальный y рельефа (как в генераторе путей)
             int yBase = terrainYFromCoordsOrWorld(x, z, yHintTop);
-            if (yBase < worldMin || yBase + 1 > worldMax) continue;
-
-            level.setBlock(new BlockPos(x, yBase,     z), cobble.defaultBlockState(), 3);
-            level.setBlock(new BlockPos(x, yBase + 1, z), railBlock.defaultBlockState(), 3);
-
-            yHintTop = yBase;        // можно так, чисто для ускорения фоллбэка
-            prevRailBaseY = yBase;   // не влияет на высоту, но пусть возвращается
-
-            BlockPos basePos = new BlockPos(x, yBase, z);
-            BlockPos railPos = basePos.above();
-
-            if (level.getBlockState(basePos).getBlock() != cobble) {
-                level.setBlock(basePos, cobble.defaultBlockState(), 3);
+            if (yBase < worldMin || yBase + 1 > worldMax) {
+                lamp.v++;
+                continue;
             }
-            if (!isRailBlock(level.getBlockState(railPos).getBlock())) {
-                level.setBlock(railPos, railBlock.defaultBlockState(), 3);
-            }
-        }
-        return prevRailBaseY;
-    }
 
-    // --- метро на фиксированных глубинах (-62/-61), как в Python ---
-    private void paintSubwaySegment(int x1, int z1, int x2, int z2,
-                                    int minX, int maxX, int minZ, int maxZ,
-                                    Block cobble, Block rail) {
-        int dx = x2 - x1;
-        int dz = z2 - z1;
-        int dist = Math.max(Math.abs(dx), Math.abs(dz));
-        if (dist == 0) {
-            placeSubwayPoint(x1, z1, minX, maxX, minZ, maxZ, cobble, rail);
-            return;
-        }
-        for (int i=0; i<=dist; i++) {
-            int x = (int)Math.round(x1 + dx * (i / (double)dist));
-            int z = (int)Math.round(z1 + dz * (i / (double)dist));
-            placeSubwayPoint(x, z, minX, maxX, minZ, maxZ, cobble, rail);
+            if (lamp.v % RAIL_LAMP_PERIOD == 0) {
+                int lx = x + offX;
+                int lz = z + offZ;
+                int toward = horizontalMajor ? -offZ : -offX; // направление от края к центру пути
+                placeRailLamp(lx, lz, yBase, horizontalMajor, toward, minX, maxX, minZ, maxZ);
+            }
+            lamp.v++;
+
+            yHintTop = yBase;
         }
     }
 
-    private void placeSubwayPoint(int x, int z, int minX, int maxX, int minZ, int maxZ, Block cobble, Block rail) {
-        if (x < minX || x > maxX || z < minZ || z > maxZ) return;
+    // === ПОСТАНОВКА ФОНАРЯ (1-в-1 как в твоём RailGenerator) ===
 
-        int yBase = -62, yRail = -61;
+    // НЕ СТАВИТЬ ФОНАРИ на дорожный серый/белый/жёлтый бетон
+    private static boolean isGrayConcrete(Block b) {
+        ResourceLocation key = ForgeRegistries.BLOCKS.getKey(b);
+        if (key == null) return false;
+        String id = key.toString();
+        return "minecraft:gray_concrete".equals(id)
+            || "minecraft:white_concrete".equals(id)
+            || "minecraft:yellow_concrete".equals(id);
+    }
+
+    private void placeRailLamp(int edgeX, int edgeZ, int yBase,
+                               boolean horizontalMajor, int towardCenterSign,
+                               int minX, int maxX, int minZ, int maxZ) {
+        if (edgeX < minX || edgeX > maxX || edgeZ < minZ || edgeZ > maxZ) return;
+
         final int worldMin = level.getMinBuildHeight();
         final int worldMax = level.getMaxBuildHeight() - 1;
 
-        if (yBase < worldMin + 1 || yRail > worldMax) return;
+        // Берём фактический рельеф в точке установки и ставим колонну "на поверхность" (ySurf+1)
+        int ySurfEdge = findTopNonAirNearSkippingRails(edgeX, edgeZ, null);
+        if (ySurfEdge == Integer.MIN_VALUE) return;
 
-        level.setBlock(new BlockPos(x, yBase, z), cobble.defaultBlockState(), 3);
-        level.setBlock(new BlockPos(x, yRail, z), rail.defaultBlockState(), 3);
+        // НЕ ставим фонарь, если верхний не-air блок — серый/белый/жёлтый бетон дороги
+        Block under = level.getBlockState(new BlockPos(edgeX, ySurfEdge, edgeZ)).getBlock();
+        if (isGrayConcrete(under)) return;
+
+        int y0   = ySurfEdge + 1;                                   // база колонны на уровне «как рельсы»
+        int yTop = Math.min(y0 + RAIL_LAMP_COLUMN_WALLS - 1, worldMax);
+
+        // 1) Колонна из стен
+        for (int y = y0; y <= yTop; y++) {
+            level.setBlock(new BlockPos(edgeX, y, edgeZ), Blocks.ANDESITE_WALL.defaultBlockState(), 3);
+        }
+
+        // 2) ДВА нижних полублока, направленных к центру пути
+        int ySlab = yTop + 1;
+        if (ySlab > worldMax) return;
+
+        int sx = horizontalMajor ? 0 : towardCenterSign;
+        int sz = horizontalMajor ? towardCenterSign : 0;
+
+        placeBottomSlab(edgeX,          ySlab, edgeZ,          Blocks.SMOOTH_STONE_SLAB);
+        placeBottomSlab(edgeX + sx,     ySlab, edgeZ + sz,     Blocks.SMOOTH_STONE_SLAB);
+
+        // 3) Светокамень под КРАЙНИМ (вторым) полублоком
+        int gx = edgeX + sx, gz = edgeZ + sz, gy = ySlab - 1;
+        if (gy >= worldMin && gy <= worldMax && gx >= minX && gx <= maxX && gz >= minZ && gz <= maxZ) {
+            level.setBlock(new BlockPos(gx, gy, gz), Blocks.GLOWSTONE.defaultBlockState(), 3);
+        }
     }
 
-    // ===== прочие утилиты =====
-
-    private static Block resolveBlock(String id) {
-        Block b = ForgeRegistries.BLOCKS.getValue(ResourceLocation.tryParse(id));
-        return (b != null ? b : Blocks.STONE);
+    private void placeBottomSlab(int x, int y, int z, Block slabBlock) {
+        BlockState st = slabBlock.defaultBlockState();
+        if (st.hasProperty(SlabBlock.TYPE)) {
+            st = st.setValue(SlabBlock.TYPE, SlabType.BOTTOM);
+        }
+        level.setBlock(new BlockPos(x, y, z), st, 3);
     }
+
+    // === УТИЛИТЫ / ФИЛЬТРЫ (скопировано из RailGenerator, чтобы было 1-в-1) ===
 
     private static boolean isRailCandidate(JsonObject tags) {
         String r = optString(tags, "railway");
@@ -285,9 +319,6 @@ public class RailGenerator {
         pts.add(new int[]{x1, z1});
         return pts;
     }
-
-    // маленький хелпер, чтобы не путаться в сигнатурах
-    private static int z1(int z) { return z; }
 
     private static boolean isUndergroundLike(JsonObject tags) {
         // tunnel=*, layer<0, level<0, location=underground/below_ground
