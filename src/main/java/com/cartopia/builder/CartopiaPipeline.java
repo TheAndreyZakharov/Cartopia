@@ -43,57 +43,145 @@ public class CartopiaPipeline {
 
         broadcast(level, "Старт генерации поверхности (DEM + покраска) …");
         try {
+
+
+
+            // ===== РЕЛЬЕФ И ЕГО РАСКРАСКА, ДОРОГИ, ЖД =====
             // Рельеф
             SurfaceGenerator surface = new SurfaceGenerator(level, coords, demTifFile, landcoverTifFileOrNull);
             surface.generate();
             broadcast(level, "Поверхность готова.");
-
             // Сразу поднимаем всех игроков этого мира на безопасную поверхность
             broadcast(level, "Переставляю игроков на поверхность…");
             CartopiaSurfaceSpawn.adjustAllPlayersAsync(level);
-
             // Дороги
             broadcast(level, "Старт генерации дорог…");
             RoadGenerator roads = new RoadGenerator(level, coords);
             roads.generate();
             broadcast(level, "Дороги готовы.");
-
             // Рельсы
             broadcast(level, "Старт генерации рельсов…");
             RailGenerator rails = new RailGenerator(level, coords);
             rails.generate();
             broadcast(level, "Рельсы готовы.");
+// Пирсы, причалы, швартовые
 
 
-            // Переходы
-            // Автобусы разметка
-            // Жд переезды разметка
 
-            
+
+
+            // ===== РАЗМЕТКА =====
+// Переходы
+// Остановки общественного транспорта
+// Жд переезды
+// Вертолетные площадки
+// Парковки авто
+
+
+
+
+
+            // ===== ОСВЕЩЕНИЕ =====
             // Дорожные фонари
             broadcast(level, "Старт расстановки дорожных фонарей…");
             RoadLampGenerator roadLamps = new RoadLampGenerator(level, coords);
             roadLamps.generate();
             broadcast(level, "Дорожные фонари готовы.");
-
             // Фонари вдоль рельсов
             broadcast(level, "Старт расстановки фонарей вдоль рельсов…");
             RailLampGenerator railLamps = new RailLampGenerator(level, coords);
             railLamps.generate();
             broadcast(level, "Фонари вдоль рельсов готовы.");
+// Фонари в зонах аэропортов, портов и тд
+// Фонари на парковках
 
+
+
+
+
+            // ===== ЗДАНИЯ =====
+// Здания
+            /*
+            BuildingGenerator.java
+            broadcast(level, "Старт генерации зданий…");
+            BuildingGenerator buildings = new BuildingGenerator(level, coords);
+            buildings.generate();
+            broadcast(level, "Здания готовы.");
+            */
+// Башни - Товерс - Трубы и тд
+// Бункеры
+// Общественные туалеты
+// Радиотелескопы
+// Оптические телескопы
+
+
+
+
+
+            // ===== МОСТЫ / ТУННЕЛИ =====
             // Мосты/эстакады (без тоннелей)
             broadcast(level, "Старт генерации мостов/эстакад…");
             BridgeGenerator bridges = new BridgeGenerator(level, coords);
             bridges.generate();
             broadcast(level, "Мосты/эстакады готовы.");
-
             // Тоннели и подземные переходы (дороги и ЖД по логике «как мост, но вниз»)
             broadcast(level, "Старт генерации тоннелей/подземных переходов…");
             TunnelGenerator tunnels = new TunnelGenerator(level, coords);
             tunnels.generate();
             broadcast(level, "Тоннели/подземные переходы готовы.");
 
+
+
+
+
+            // ===== ИНФРАСТРУКТУРА =====
+// Заборы, ограждения
+// Надземные трубы
+// Остановки общественного транспорта
+// Светофоры
+// Скамейки
+// Урны, Места мусорных баков
+// Информационнын стенды, гиды
+// Места отдыха
+// Просто навесы отдельные
+// Спорт площадки
+// Кладбища
+// Заправки
+// Велопарковки
+// Поля с посевами - по цветам
+// Ветряки
+// Маяки
+// Фонтаны
+// Источники воды, колодцы, с питьевой водой
+// Пожарные гидранты
+// Памятники
+// Высоковольтные линии, ЛЭП и тд + провода
+// Солнечные батареи
+// Открытые ископаемые в шахтах
+// Места строек отдельно оформить - заборы, башенные краны
+// Драг лифты - поверхностные подъёмники
+// ? Фуникулёры ? 
+// ? Рекламные щиты, сденды ? 
+// ? Антенны большие ? 
+
+
+
+
+
+            // ===== РАСТИТЕЛЬНОСТЬ ======
+// Всё засадить соответствующими типами деревьев, травы и тд
+
+
+
+
+
+            // + Время, Погода; Оживление города
+
+
+
+
+
+            // ===== СОХРАНЕНИЕ =====
             broadcast(level, "Сохраняю мир…");
             level.save(null, true, false);
             broadcast(level, "Generation finished.");
