@@ -182,10 +182,20 @@ public class RailLampGenerator {
             }
 
             if (lamp.v % RAIL_LAMP_PERIOD == 0) {
-                int lx = x + offX;
-                int lz = z + offZ;
-                int toward = horizontalMajor ? -offZ : -offX; // направление от края к центру пути
-                placeRailLamp(lx, lz, yBase, horizontalMajor, toward, minX, maxX, minZ, maxZ);
+                // сначала слева
+                int lxL = x + offX, lzL = z + offZ;
+                int towardL = horizontalMajor ? -offZ : -offX;
+
+                boolean placed = tryPlaceRailLampAt(lxL, lzL, yHintTop, horizontalMajor, towardL,
+                                                    minX, maxX, minZ, maxZ);
+
+                if (!placed) {
+                    // если слева нельзя — пробуем справа (симметрично)
+                    int lxR = x - offX, lzR = z - offZ;
+                    int towardR = -towardL;
+                    tryPlaceRailLampAt(lxR, lzR, yHintTop, horizontalMajor, towardR,
+                                    minX, maxX, minZ, maxZ);
+                }
             }
             lamp.v++;
 
@@ -205,6 +215,16 @@ public class RailLampGenerator {
             || "minecraft:yellow_concrete".equals(id);
     }
 
+    private static boolean isLampComponent(Block b) {
+        ResourceLocation key = ForgeRegistries.BLOCKS.getKey(b);
+        if (key == null) return false;
+        String id = key.toString();
+        return "minecraft:andesite_wall".equals(id)
+            || "minecraft:smooth_stone_slab".equals(id)
+            || "minecraft:glowstone".equals(id);
+    }
+
+    @SuppressWarnings("unused")
     private void placeRailLamp(int edgeX, int edgeZ, int yBase,
                                boolean horizontalMajor, int towardCenterSign,
                                int minX, int maxX, int minZ, int maxZ) {
@@ -373,6 +393,7 @@ public class RailLampGenerator {
     }
 
     /** Верхний не-air, но рельсы считаем как воздух (чтобы база не «лезла» на рельс). */
+    /** Верхний не-air, но рельсы и детали фонаря считаем как воздух. */
     private int findTopNonAirNearSkippingRails(int x, int z, Integer hintY) {
         final int worldMin = level.getMinBuildHeight();
         final int worldMax = level.getMaxBuildHeight() - 1;
@@ -381,14 +402,148 @@ public class RailLampGenerator {
             int from = Math.min(worldMax, hintY + 16);
             int to   = Math.max(worldMin, hintY - 16);
             for (int y = from; y >= to; y--) {
-                Block b = level.getBlockState(new BlockPos(x, y, z)).getBlock();
-                if (!level.getBlockState(new BlockPos(x, y, z)).isAir() && !isRailBlock(b)) return y;
+                BlockPos pos = new BlockPos(x, y, z);
+                Block b = level.getBlockState(pos).getBlock();
+                if (isRailBlock(b) || isLampComponent(b)) continue; // эти — «как воздух»
+                if (!level.getBlockState(pos).isAir()) return y;
             }
         }
         for (int y = worldMax; y >= worldMin; y--) {
-            Block b = level.getBlockState(new BlockPos(x, y, z)).getBlock();
-            if (!level.getBlockState(new BlockPos(x, y, z)).isAir() && !isRailBlock(b)) return y;
+            BlockPos pos = new BlockPos(x, y, z);
+            Block b = level.getBlockState(pos).getBlock();
+            if (isRailBlock(b) || isLampComponent(b)) continue;
+            if (!level.getBlockState(pos).isAir()) return y;
         }
         return Integer.MIN_VALUE;
     }
+
+    /** Пытается поставить фонарь в точке; возвращает true, если получилось. */
+    private boolean tryPlaceRailLampAt(int edgeX, int edgeZ, Integer hintY,
+                                    boolean horizontalMajor, int towardCenterSign,
+                                    int minX, int maxX, int minZ, int maxZ) {
+        if (edgeX < minX || edgeX > maxX || edgeZ < minZ || edgeZ > maxZ) return false;
+
+        final int worldMin = level.getMinBuildHeight();
+        final int worldMax = level.getMaxBuildHeight() - 1;
+
+        // Верхний не-air в мире (рельсы и детали фонаря считаем "воздухом" только для поиска поверхности)
+        int ySurfEdge = findTopNonAirNearSkippingRails(edgeX, edgeZ, hintY);
+        if (ySurfEdge == Integer.MIN_VALUE) return false;
+
+        // === Жёсткая привязка к рельефу по terrainGrid ===
+        Integer gridY = terrainGroundYFromGrid(edgeX, edgeZ);
+        if (gridY == null) return false;           // нет данных о рельефе — пропуск
+        if (isWaterCell(edgeX, edgeZ)) return false; // вода — запрещено
+        if (ySurfEdge != gridY) return false;      // верхний блок мира не совпал с высотой рельефа — пропуск
+
+        // Нельзя ставить на дорожные серый/белый/жёлтый бетоны
+        Block under = level.getBlockState(new BlockPos(edgeX, gridY, edgeZ)).getBlock();
+        if (isGrayConcrete(under)) return false;
+
+        // База колонны строго на groundY+1
+        int y0 = gridY + 1;
+        if (y0 > worldMax) return false;
+
+        // Геометрия фонаря
+        int yTop  = Math.min(y0 + RAIL_LAMP_COLUMN_WALLS - 1, worldMax);
+        int ySlab = yTop + 1;
+        if (ySlab > worldMax) return false;
+
+        int sx = horizontalMajor ? 0 : towardCenterSign;
+        int sz = horizontalMajor ? towardCenterSign : 0;
+
+        // Glowstone под вторым слэбом
+        int gx = edgeX + sx;
+        int gz = edgeZ + sz;
+        int gy = ySlab - 1;
+
+        // === "Сухой прогон": ничего не ставим, если где-то не воздух ===
+
+        // Колонна целиком
+        for (int y = y0; y <= yTop; y++) {
+            if (!level.getBlockState(new BlockPos(edgeX, y, edgeZ)).isAir()) return false;
+        }
+        // Две плиты
+        if (!level.getBlockState(new BlockPos(edgeX,      ySlab, edgeZ     )).isAir()) return false;
+        if (!level.getBlockState(new BlockPos(edgeX + sx, ySlab, edgeZ + sz)).isAir()) return false;
+        // Glowstone (если внутри мира/границ)
+        if (gy >= worldMin && gy <= worldMax && gx >= minX && gx <= maxX && gz >= minZ && gz <= maxZ) {
+            if (!level.getBlockState(new BlockPos(gx, gy, gz)).isAir()) return false;
+        }
+
+        // === Постановка (все проверки пройдены) ===
+        for (int y = y0; y <= yTop; y++) {
+            level.setBlock(new BlockPos(edgeX, y, edgeZ), Blocks.ANDESITE_WALL.defaultBlockState(), 3);
+        }
+
+        placeBottomSlab(edgeX,      ySlab, edgeZ,      Blocks.SMOOTH_STONE_SLAB);
+        placeBottomSlab(edgeX + sx, ySlab, edgeZ + sz, Blocks.SMOOTH_STONE_SLAB);
+
+        if (gy >= worldMin && gy <= worldMax && gx >= minX && gx <= maxX && gz >= minZ && gz <= maxZ) {
+            level.setBlock(new BlockPos(gx, gy, gz), Blocks.GLOWSTONE.defaultBlockState(), 3);
+        }
+
+        return true;
+    }
+
+    // Вернёт высоту рельефа groundY из coords. Поддерживает v1 (data[]) и v2 (grids.groundY[]).
+    private Integer terrainGroundYFromGrid(int x, int z) {
+        try {
+            if (coords == null || !coords.has("terrainGrid")) return null;
+            JsonObject tg = coords.getAsJsonObject("terrainGrid");
+            if (tg == null) return null;
+
+            int minX = tg.get("minX").getAsInt();
+            int minZ = tg.get("minZ").getAsInt();
+            int width = tg.get("width").getAsInt();
+            int idx = (z - minZ) * width + (x - minX);
+            if (idx < 0) return null;
+
+            // v2: terrainGrid.grids.groundY[]
+            if (tg.has("grids") && tg.get("grids").isJsonObject()) {
+                JsonObject grids = tg.getAsJsonObject("grids");
+                if (!grids.has("groundY")) return null;
+                JsonArray groundY = grids.getAsJsonArray("groundY");
+                if (idx >= groundY.size()) return null;
+                return groundY.get(idx).getAsInt();
+            }
+
+            // v1: terrainGrid.data[]
+            if (tg.has("data") && tg.get("data").isJsonArray()) {
+                JsonArray data = tg.getAsJsonArray("data");
+                if (idx >= data.size()) return null;
+                return data.get(idx).getAsInt();
+            }
+        } catch (Throwable ignore) {}
+        return null;
+    }
+
+    // true если клетка — вода (по финальному terrain-grid: waterY != null или topBlock == "minecraft:water")
+    private boolean isWaterCell(int x, int z) {
+        try {
+            if (coords == null || !coords.has("terrainGrid")) return false;
+            JsonObject tg = coords.getAsJsonObject("terrainGrid");
+            int minX = tg.get("minX").getAsInt();
+            int minZ = tg.get("minZ").getAsInt();
+            int width = tg.get("width").getAsInt();
+            int idx = (z - minZ) * width + (x - minX);
+            if (idx < 0) return false;
+
+            if (tg.has("grids") && tg.get("grids").isJsonObject()) {
+                JsonObject grids = tg.getAsJsonObject("grids");
+                if (grids.has("waterY")) {
+                    JsonArray waterY = grids.getAsJsonArray("waterY");
+                    if (idx >= waterY.size()) return false;
+                    return !waterY.get(idx).isJsonNull();
+                }
+                if (grids.has("topBlock")) {
+                    JsonArray tb = grids.getAsJsonArray("topBlock");
+                    if (idx >= tb.size()) return false;
+                    return "minecraft:water".equals(tb.get(idx).getAsString());
+                }
+            }
+        } catch (Throwable ignore) {}
+        return false;
+    }
+
 }

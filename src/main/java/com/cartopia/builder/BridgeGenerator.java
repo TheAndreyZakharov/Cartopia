@@ -22,9 +22,16 @@ public class BridgeGenerator {
     private final ServerLevel level;
     private final JsonObject coords;
 
-    // Все позиции блоков, поставленных ЭТИМ генератором моста в текущем запуске.
-    // Любой поиск «высоты рельефа» будет их ПРОПУСКАТЬ (считать как воздух).
-    private final Set<Long> placedByBridge = new HashSet<>();
+    // === вместо "каждый блок" → диапазон высот по колонке (x,z) ===
+    private static final class YRange {
+        int min = Integer.MAX_VALUE;
+        int max = Integer.MIN_VALUE;
+        void add(int y) { if (y < min) min = y; if (y > max) max = y; }
+        boolean valid() { return min != Integer.MAX_VALUE; }
+    }
+    /** Какие высоты заняты нашим мостом в колонке (x,z) */
+    private final Map<Long, YRange> placedColumnRanges = new HashMap<>();
+    private final BlockPos.MutableBlockPos mpos = new BlockPos.MutableBlockPos();
 
     public BridgeGenerator(ServerLevel level, JsonObject coords) {
         this.level = level;
@@ -78,7 +85,7 @@ public class BridgeGenerator {
     private static final Set<String> ROAD_BLOCK_IDS = new HashSet<>();
     static {
         for (RoadStyle s : ROAD_MATERIALS.values()) {
-            ROAD_BLOCK_IDS.add(s.blockId); // например minecraft:gray_concrete, minecraft:stone, minecraft:cobblestone, minecraft:rail ...
+            ROAD_BLOCK_IDS.add(s.blockId);
         }
     }
 
@@ -141,6 +148,12 @@ public class BridgeGenerator {
             return;
         }
 
+        generateAreaBridges(
+                elements,
+                centerLat, centerLng, east, west, north, south,
+                sizeMeters, centerX, centerZ,
+                minX, maxX, minZ, maxZ
+        );
 
         Block cobble = resolveBlock("minecraft:cobblestone");
         Block rail   = resolveBlock("minecraft:rail");
@@ -245,7 +258,6 @@ public class BridgeGenerator {
 
     // ====== ОТБОР ======
 
-    //  парсим layer как число
     private static Integer optInt(JsonObject o, String k) {
         try {
             if (o.has(k) && !o.get(k).isJsonNull()) {
@@ -256,23 +268,20 @@ public class BridgeGenerator {
         return null;
     }
 
-    // единая проверка «мостоподобности»
     private static boolean isBridgeLike(JsonObject tags) {
-        if (truthyOrText(tags, "tunnel")) return false;            // тоннели исключаем
-        if (truthyOrText(tags, "bridge")) return true;             // bridge=yes/viaduct/… — ок
-        if (truthyOrText(tags, "bridge:structure")) return true;   // встречается без bridge=*
+        if (truthyOrText(tags, "tunnel")) return false;
+        if (truthyOrText(tags, "bridge")) return true;
+        if (truthyOrText(tags, "bridge:structure")) return true;
         Integer layer = optInt(tags, "layer");
-        return layer != null && layer > 0;                         // layer>0 — считаем «над землей»
+        return layer != null && layer > 0;
     }
 
     /** Главный оффсет: если указан layer — используем layer*7; иначе: короткий=1, длинный=7. */
     private int computeMainOffset(JsonObject tags, int lengthBlocks) {
         Integer L = optInt(tags, "layer");
         if (L != null) {
-            // Явный layer: разводим слои на L*7
             return Math.max(0, L * LAYER_STEP);
         }
-        // layer не указан — старое поведение: короткий/длинный мост
         return (lengthBlocks <= SHORT_MAX_LEN) ? SHORT_OFFSET : DEFAULT_OFFSET;
     }
 
@@ -317,7 +326,7 @@ public class BridgeGenerator {
         int half = Math.max(0, width / 2);
         int idx = 0;
         Integer yHint = null;
-        int prevDeckY = Integer.MIN_VALUE; // <— НОВОЕ: предыдущая высота полотна для лесенки
+        int prevDeckY = Integer.MIN_VALUE;
 
         for (int i = 1; i < pts.size(); i++) {
             int x1 = pts.get(i - 1)[0], z1 = pts.get(i - 1)[1];
@@ -329,83 +338,11 @@ public class BridgeGenerator {
             for (int pi = 0; pi < seg.size(); pi++) {
                 int x = seg.get(pi)[0], z = seg.get(pi)[1];
 
-                // высоту берём по центру сечения
                 int ySurfCenter = findTopNonAirNearIgnoringBridge(x, z, yHint);
                 if (ySurfCenter == Integer.MIN_VALUE) { idx++; continue; }
 
                 int targetDeckY = clampInt(ySurfCenter + offset, worldMin, worldMax);
-                int yDeck = stepClamp(prevDeckY, targetDeckY, 1); // <— НОВОЕ: лесенка
-                int effectiveOffset = yDeck - ySurfCenter;        // может быть < offset, когда «догоняем»
-
-                // рисуем поперечник на одном уровне yDeck
-                for (int w = -half; w <= half; w++) {
-                    int xx = horizontalMajor ? x : x + w;
-                    int zz = horizontalMajor ? z + w : z;
-                    if (xx < minX || xx > maxX || zz < minZ || zz > maxZ) continue;
-
-                    setBridgeBlock(xx, yDeck, zz, deckBlock);
-
-                    if (w == -half || w == half) {
-                        int wOut = (w < 0) ? -half - 1 : half + 1;
-                        int ox = horizontalMajor ? x : x + wOut;
-                        int oz = horizontalMajor ? z + wOut : z;
-                        if (!(ox < minX || ox > maxX || oz < minZ || oz > maxZ)) {
-                            setBridgeBlock(ox, yDeck, oz, curbBlock);
-                            if (yDeck + 1 <= worldMax) setBridgeBlock(ox, yDeck + 1, oz, wallBlock);
-
-                            // фонарь каждые LAMP_PERIOD блоков, «в сторону дороги»:
-                            // слева к центру = +1, справа = -1 по поперечной оси
-                            if (idx % LAMP_PERIOD == 0) {
-                                int toward = (w < 0) ? +1 : -1;
-                                placeBridgeLamp(ox, oz, yDeck, horizontalMajor, toward, minX, maxX, minZ, maxZ);
-                            }
-                        }
-                    }
-                }
-
-                // опоры с учётом ФАКТИЧЕСКОГО оффсета (а не желаемого)
-                placeSupportPairIfNeeded(idx, SUPPORT_PERIOD, x, z, horizontalMajor, half,
-                        effectiveOffset, minX, maxX, minZ, maxZ, ySurfCenter, supportBlock);
-
-                yHint = ySurfCenter;
-                prevDeckY = yDeck; // обновили предыдущий уровень
-                idx++;
-            }
-        }
-    }
-
-    /** Полотно моста с 7-ступенчатыми заездами на концах (только для больших мостов). */
-    private void paintBridgeDeckWithRamps(List<int[]> pts, int width, Block deckBlock,
-                                        int mainOffset, int rampSteps,
-                                        int minX, int maxX, int minZ, int maxZ,
-                                        Block curbBlock, Block wallBlock, Block supportBlock) {
-        final int worldMin = level.getMinBuildHeight();
-        final int worldMax = level.getMaxBuildHeight() - 1;
-
-        int half = Math.max(0, width / 2);
-        int totalLen = approxPathLengthBlocks(pts);
-        int idx = 0;
-        Integer yHint = null;
-        int prevDeckY = Integer.MIN_VALUE; // <— НОВОЕ
-
-        for (int si = 1; si < pts.size(); si++) {
-            int x1 = pts.get(si - 1)[0], z1 = pts.get(si - 1)[1];
-            int x2 = pts.get(si)[0],     z2 = pts.get(si)[1];
-            boolean horizontalMajor = Math.abs(x2 - x1) >= Math.abs(z2 - z1);
-
-            List<int[]> seg = bresenhamLine(x1, z1, x2, z2);
-
-            for (int pi = 0; pi < seg.size(); pi++) {
-                if (si > 1 && pi == 0) continue;
-
-                int x = seg.get(pi)[0], z = seg.get(pi)[1];
-                int localOffset = rampOffsetForIndex(idx, totalLen, mainOffset, rampSteps);
-
-                int ySurfCenter = findTopNonAirNearIgnoringBridge(x, z, yHint);
-                if (ySurfCenter == Integer.MIN_VALUE) { idx++; continue; }
-
-                int targetDeckY = clampInt(ySurfCenter + localOffset, worldMin, worldMax);
-                int yDeck = stepClamp(prevDeckY, targetDeckY, 1); // <— НОВОЕ
+                int yDeck = stepClamp(prevDeckY, targetDeckY, 1);
                 int effectiveOffset = yDeck - ySurfCenter;
 
                 for (int w = -half; w <= half; w++) {
@@ -423,8 +360,6 @@ public class BridgeGenerator {
                             setBridgeBlock(ox, yDeck, oz, curbBlock);
                             if (yDeck + 1 <= worldMax) setBridgeBlock(ox, yDeck + 1, oz, wallBlock);
 
-                            // фонарь каждые LAMP_PERIOD блоков, «в сторону дороги»:
-                            // слева к центру = +1, справа = -1 по поперечной оси
                             if (idx % LAMP_PERIOD == 0) {
                                 int toward = (w < 0) ? +1 : -1;
                                 placeBridgeLamp(ox, oz, yDeck, horizontalMajor, toward, minX, maxX, minZ, maxZ);
@@ -443,6 +378,72 @@ public class BridgeGenerator {
         }
     }
 
+    /** Полотно моста с 7-ступенчатыми заездами на концах (только для больших мостов). */
+    private void paintBridgeDeckWithRamps(List<int[]> pts, int width, Block deckBlock,
+                                        int mainOffset, int rampSteps,
+                                        int minX, int maxX, int minZ, int maxZ,
+                                        Block curbBlock, Block wallBlock, Block supportBlock) {
+        final int worldMin = level.getMinBuildHeight();
+        final int worldMax = level.getMaxBuildHeight() - 1;
+
+        int half = Math.max(0, width / 2);
+        int totalLen = approxPathLengthBlocks(pts);
+        int idx = 0;
+        Integer yHint = null;
+        int prevDeckY = Integer.MIN_VALUE;
+
+        for (int si = 1; si < pts.size(); si++) {
+            int x1 = pts.get(si - 1)[0], z1 = pts.get(si - 1)[1];
+            int x2 = pts.get(si)[0],     z2 = pts.get(si)[1];
+            boolean horizontalMajor = Math.abs(x2 - x1) >= Math.abs(z2 - z1);
+
+            List<int[]> seg = bresenhamLine(x1, z1, x2, z2);
+
+            for (int pi = 0; pi < seg.size(); pi++) {
+                if (si > 1 && pi == 0) continue;
+
+                int x = seg.get(pi)[0], z = seg.get(pi)[1];
+                int localOffset = rampOffsetForIndex(idx, totalLen, mainOffset, rampSteps);
+
+                int ySurfCenter = findTopNonAirNearIgnoringBridge(x, z, yHint);
+                if (ySurfCenter == Integer.MIN_VALUE) { idx++; continue; }
+
+                int targetDeckY = clampInt(ySurfCenter + localOffset, worldMin, worldMax);
+                int yDeck = stepClamp(prevDeckY, targetDeckY, 1);
+                int effectiveOffset = yDeck - ySurfCenter;
+
+                for (int w = -half; w <= half; w++) {
+                    int xx = horizontalMajor ? x : x + w;
+                    int zz = horizontalMajor ? z + w : z;
+                    if (xx < minX || xx > maxX || zz < minZ || zz > maxZ) continue;
+
+                    setBridgeBlock(xx, yDeck, zz, deckBlock);
+
+                    if (w == -half || w == half) {
+                        int wOut = (w < 0) ? -half - 1 : half + 1;
+                        int ox = horizontalMajor ? x : x + wOut;
+                        int oz = horizontalMajor ? z + wOut : z;
+                        if (!(ox < minX || ox > maxX || oz < minZ || oz > maxZ)) {
+                            setBridgeBlock(ox, yDeck, oz, curbBlock);
+                            if (yDeck + 1 <= worldMax) setBridgeBlock(ox, yDeck + 1, oz, wallBlock);
+
+                            if (idx % LAMP_PERIOD == 0) {
+                                int toward = (w < 0) ? +1 : -1;
+                                placeBridgeLamp(ox, oz, yDeck, horizontalMajor, toward, minX, maxX, minZ, maxZ);
+                            }
+                        }
+                    }
+                }
+
+                placeSupportPairIfNeeded(idx, SUPPORT_PERIOD, x, z, horizontalMajor, half,
+                        effectiveOffset, minX, maxX, minZ, maxZ, ySurfCenter, supportBlock);
+
+                yHint = ySurfCenter;
+                prevDeckY = yDeck;
+                idx++;
+            }
+        }
+    }
 
     private void paintRailsFollowRelief(List<int[]> pts, int offset,
                                         int minX, int maxX, int minZ, int maxZ,
@@ -453,7 +454,7 @@ public class BridgeGenerator {
 
         int idx = 0;
         Integer yHint = null;
-        int prevRailY = Integer.MIN_VALUE; // <— НОВОЕ
+        int prevRailY = Integer.MIN_VALUE;
 
         for (int i = 1; i < pts.size(); i++) {
             int x1 = pts.get(i - 1)[0], z1 = pts.get(i - 1)[1];
@@ -471,16 +472,13 @@ public class BridgeGenerator {
                 int ySurf = findTopNonAirNearIgnoringBridge(x, z, yHint);
                 if (ySurf == Integer.MIN_VALUE) { idx++; continue; }
 
-                // для рельс нужно место под rail на yBase+1
                 int targetBaseY = clampInt(ySurf + offset, worldMin, worldMax - 1);
-                int yBase = stepClamp(prevRailY, targetBaseY, 1); // <— НОВОЕ
+                int yBase = stepClamp(prevRailY, targetBaseY, 1);
                 int effectiveOffset = yBase - ySurf;
 
-                // путь
                 setBridgeBlock(x, yBase, z, cobble);
                 setBridgeBlock(x, yBase + 1, z, railBlock);
 
-                // бортики слева/справа
                 for (int[] s : sides) {
                     int sx = x + s[0], sz = z + s[1];
                     if (sx < minX || sx > maxX || sz < minZ || sz > maxZ) continue;
@@ -489,7 +487,6 @@ public class BridgeGenerator {
                 }
 
                 if (idx % LAMP_PERIOD == 0) {
-                    // sides — это {0,±1} или {±1,0}; к центру — это минус вектор side
                     for (int[] s : sides) {
                         int sx = x + s[0], sz = z + s[1];
                         int toward = horizontalMajor ? -s[1] : -s[0];
@@ -497,7 +494,6 @@ public class BridgeGenerator {
                     }
                 }
 
-                // опоры (half=0 для ЖД)
                 placeSupportPairIfNeeded(idx, SUPPORT_PERIOD, x, z, horizontalMajor, 0,
                         effectiveOffset, minX, maxX, minZ, maxZ, ySurf, supportBlock);
 
@@ -507,7 +503,6 @@ public class BridgeGenerator {
             }
         }
     }
-
 
     /** Рельсы на мосту со ступенями (только для больших мостов). */
     private void paintRailsWithRamps(List<int[]> pts, int mainOffset, int rampSteps,
@@ -520,7 +515,7 @@ public class BridgeGenerator {
         int totalLen = approxPathLengthBlocks(pts);
         int idx = 0;
         Integer yHint = null;
-        int prevRailY = Integer.MIN_VALUE; // <— НОВОЕ
+        int prevRailY = Integer.MIN_VALUE;
 
         for (int si = 1; si < pts.size(); si++) {
             int x1 = pts.get(si - 1)[0], z1 = pts.get(si - 1)[1];
@@ -542,7 +537,7 @@ public class BridgeGenerator {
                 int ySurf = findTopNonAirNearIgnoringBridge(x, z, yHint);
                 if (ySurf != Integer.MIN_VALUE) {
                     int targetBaseY = clampInt(ySurf + localOffset, worldMin, worldMax - 1);
-                    int yBase = stepClamp(prevRailY, targetBaseY, 1); // <— НОВОЕ
+                    int yBase = stepClamp(prevRailY, targetBaseY, 1);
                     int effectiveOffset = yBase - ySurf;
 
                     setBridgeBlock(x, yBase, z, cobble);
@@ -556,7 +551,6 @@ public class BridgeGenerator {
                     }
 
                     if (idx % LAMP_PERIOD == 0) {
-                        // sides — это {0,±1} или {±1,0}; к центру — это минус вектор side
                         for (int[] s : sides) {
                             int sx = x + s[0], sz = z + s[1];
                             int toward = horizontalMajor ? -s[1] : -s[0];
@@ -575,7 +569,204 @@ public class BridgeGenerator {
         }
     }
 
-    
+
+    // ====== AREA BRIDGES (multipolygon / closed way) ======
+
+    /** Главный проход по area-мостам: relation multipolygon и/или замкнутые ways с man_made=bridge. */
+    private void generateAreaBridges(JsonArray elements,
+                                    double centerLat, double centerLng,
+                                    double east, double west, double north, double south,
+                                    int sizeMeters, int centerX, int centerZ,
+                                    int minX, int maxX, int minZ, int maxZ) {
+        int made = 0;
+
+        // Материал настила зоны — как у дорог по умолчанию
+        Block deckBlock = resolveBlock("minecraft:gray_concrete");
+        final int offset = SHORT_OFFSET; // строго «короткий» мост: +1 к рельефу
+
+        for (JsonElement el : elements) {
+            JsonObject e = el.getAsJsonObject();
+            JsonObject tags = (e.has("tags") && e.get("tags").isJsonObject()) ? e.getAsJsonObject("tags") : null;
+            if (tags == null) continue;
+
+            if (truthyOrText(tags, "tunnel")) continue; // туннели не заливаем
+
+            boolean bridgeTagged = "bridge".equals(optString(tags, "man_made")) || truthyOrText(tags, "bridge");
+            if (!bridgeTagged) continue;
+
+            String etype = optString(e, "type");
+
+            // --- 2.1) Relation multipolygon
+            if ("relation".equals(etype) && "multipolygon".equals(optString(tags, "type"))) {
+                List<List<int[]>> outers = new ArrayList<>();
+                List<List<int[]>> inners = new ArrayList<>();
+
+                if (e.has("members") && e.get("members").isJsonArray()) {
+                    JsonArray members = e.getAsJsonArray("members");
+                    for (JsonElement memEl : members) {
+                        JsonObject m = memEl.getAsJsonObject();
+                        String role = optString(m, "role");
+                        if (role == null) continue;
+                        if (!m.has("geometry") || !m.get("geometry").isJsonArray()) continue;
+                        JsonArray geom = m.getAsJsonArray("geometry");
+                        if (geom.size() < 3) continue;
+
+                        List<int[]> ring = toBlockRing(geom, centerLat, centerLng, east, west, north, south,
+                                                    sizeMeters, centerX, centerZ);
+                        if (ring.size() < 3) continue;
+
+                        if ("outer".equals(role)) outers.add(ring);
+                        else if ("inner".equals(role)) inners.add(ring);
+                    }
+                }
+
+                if (!outers.isEmpty()) {
+                    paintAreaBridgeFill(outers, inners, deckBlock, offset, minX, maxX, minZ, maxZ);
+                    made++;
+                }
+                continue;
+            }
+
+            // --- 2.2) Замкнутый way area с man_made=bridge (area=yes или действительно замкнутый контур)
+            if ("way".equals(etype)) {
+                JsonArray geom = e.has("geometry") ? e.getAsJsonArray("geometry") : null;
+                if (geom == null || geom.size() < 3) continue;
+
+                boolean areaYes = "yes".equalsIgnoreCase(String.valueOf(optString(tags, "area")));
+                boolean closed = isClosedRing(geom);
+
+                if (areaYes || closed) {
+                    List<int[]> outer = toBlockRing(geom, centerLat, centerLng, east, west, north, south,
+                                                    sizeMeters, centerX, centerZ);
+                    if (outer.size() >= 3) {
+                        List<List<int[]>> outers = Collections.singletonList(outer);
+                        List<List<int[]>> inners = Collections.emptyList();
+                        paintAreaBridgeFill(outers, inners, deckBlock, offset, minX, maxX, minZ, maxZ);
+                        made++;
+                    }
+                }
+            }
+        }
+
+        if (made > 0) {
+            broadcast(level, "Зонные мосты: построено " + made + " шт. (+1 над рельефом).");
+        }
+    }
+
+    /** Преобразовать массив координат geometry в кольцо в блок-координатах. */
+    private List<int[]> toBlockRing(JsonArray geom,
+                                    double centerLat, double centerLng,
+                                    double east, double west, double north, double south,
+                                    int sizeMeters, int centerX, int centerZ) {
+        List<int[]> ring = new ArrayList<>(geom.size());
+        for (int i = 0; i < geom.size(); i++) {
+            JsonObject p = geom.get(i).getAsJsonObject();
+            ring.add(latlngToBlock(
+                    p.get("lat").getAsDouble(), p.get("lon").getAsDouble(),
+                    centerLat, centerLng, east, west, north, south, sizeMeters, centerX, centerZ
+            ));
+        }
+        // Если не замкнуто — замкнём визуально (для устойчивости point-in-polygon).
+        if (ring.size() >= 2) {
+            int[] f = ring.get(0);
+            int[] l = ring.get(ring.size() - 1);
+            if (f[0] != l[0] || f[1] != l[1]) {
+                ring.add(new int[]{f[0], f[1]});
+            }
+        }
+        return ring;
+    }
+
+    /** Проверка, замкнут ли way по геометрии. */
+    private boolean isClosedRing(JsonArray geom) {
+        if (geom.size() < 4) return false;
+        JsonObject f = geom.get(0).getAsJsonObject();
+        JsonObject l = geom.get(geom.size() - 1).getAsJsonObject();
+        try {
+            double lat0 = f.get("lat").getAsDouble(), lon0 = f.get("lon").getAsDouble();
+            double lat1 = l.get("lat").getAsDouble(), lon1 = l.get("lon").getAsDouble();
+            return Math.abs(lat0 - lat1) < 1e-9 && Math.abs(lon0 - lon1) < 1e-9;
+        } catch (Throwable ignore) { return false; }
+    }
+
+    /** Ray-casting test для точки (x+0.5, z+0.5) в полигоне ring. */
+    private static boolean pointInPolygon(int x, int z, List<int[]> ring) {
+        double px = x + 0.5, pz = z + 0.5;
+        boolean inside = false;
+        int n = ring.size();
+        for (int i = 0, j = n - 1; i < n; j = i++) {
+            int[] pi = ring.get(i), pj = ring.get(j);
+            double xi = pi[0], zi = pi[1];
+            double xj = pj[0], zj = pj[1];
+
+            boolean intersect = ((zi > pz) != (zj > pz)) &&
+                    (px < (xj - xi) * (pz - zi) / ((zj - zi) == 0 ? 1e-9 : (zj - zi)) + xi);
+            if (intersect) inside = !inside;
+        }
+        return inside;
+    }
+
+    /** Заливка area-моста: union(outers) \ inners, каждый блок на (ySurface + offset). */
+    private void paintAreaBridgeFill(List<List<int[]>> outers, List<List<int[]>> inners,
+                                    Block deckBlock, int offset,
+                                    int minX, int maxX, int minZ, int maxZ) {
+        final int worldMin = level.getMinBuildHeight();
+        final int worldMax = level.getMaxBuildHeight() - 1;
+
+        if (outers == null || outers.isEmpty()) return;
+
+        // Глобальный bbox по внешним контурам
+        int bx0 = Integer.MAX_VALUE, bz0 = Integer.MAX_VALUE, bx1 = Integer.MIN_VALUE, bz1 = Integer.MIN_VALUE;
+        for (List<int[]> r : outers) {
+            for (int[] p : r) {
+                if (p[0] < bx0) bx0 = p[0];
+                if (p[0] > bx1) bx1 = p[0];
+                if (p[1] < bz0) bz0 = p[1];
+                if (p[1] > bz1) bz1 = p[1];
+            }
+        }
+
+        // Ограничим рабочим боксом карты
+        bx0 = Math.max(bx0, minX); bx1 = Math.min(bx1, maxX);
+        bz0 = Math.max(bz0, minZ); bz1 = Math.min(bz1, maxZ);
+        if (bx0 > bx1 || bz0 > bz1) return;
+
+        int placed = 0;
+
+        // Простой сканлайн по integer-сетке
+        for (int x = bx0; x <= bx1; x++) {
+            Integer yHint = null; // локальная подсказка по колонке
+            for (int z = bz0; z <= bz1; z++) {
+                // Внутри хотя бы одного outer?
+                boolean inside = false;
+                for (List<int[]> outer : outers) {
+                    if (pointInPolygon(x, z, outer)) { inside = true; break; }
+                }
+                if (!inside) continue;
+
+                // И не в дырке (inner)
+                boolean inHole = false;
+                for (List<int[]> inner : inners) {
+                    if (pointInPolygon(x, z, inner)) { inHole = true; break; }
+                }
+                if (inHole) continue;
+
+                int ySurf = findTopNonAirNearIgnoringBridge(x, z, yHint);
+                if (ySurf == Integer.MIN_VALUE) continue;
+
+                int yDeck = clampInt(ySurf + offset, worldMin, worldMax);
+                setBridgeBlock(x, yDeck, z, deckBlock);
+                yHint = ySurf;
+                placed++;
+            }
+        }
+
+        if (placed > 0) {
+            broadcast(level, "Area-мост: залито " + placed + " блоков настила.");
+        }
+    }
+
+
     // ====== ПОМОЩНИКИ ДЛИНЫ / OFFSET ======
 
     private static int approxPathLengthBlocks(List<int[]> pts) {
@@ -591,18 +782,14 @@ public class BridgeGenerator {
     private static int rampOffsetForIndex(int idx, int totalLen, int mainOffset, int rampSteps) {
         if (mainOffset <= 0) return 0;
 
-        // ширина одной "ступени" по длине (в блоках)
-        final int SPAN = 2;
-
+        final int SPAN = 2; // длина ступени по оси
         final int rampHeight = Math.min(rampSteps, mainOffset);
-
         final int baseOffset = Math.max(0, mainOffset - rampHeight);
 
         int fromStart = (idx / SPAN) + 1;
         int fromEnd   = ((totalLen - 1 - idx) / SPAN) + 1;
 
         int step = Math.min(rampHeight, Math.min(fromStart, fromEnd));
-
         return baseOffset + step;
     }
 
@@ -618,13 +805,11 @@ public class BridgeGenerator {
         final int worldMin = level.getMinBuildHeight();
         final int worldMax = level.getMaxBuildHeight() - 1;
 
-        // координаты левого/правого края полотна (без внешних бортиков)
         int ex1 = horizontalMajor ? cx : cx - half;
         int ez1 = horizontalMajor ? cz - half : cz;
         int ex2 = horizontalMajor ? cx : cx + half;
         int ez2 = horizontalMajor ? cz + half : cz;
 
-        // две точки-края
         int[][] edges = new int[][] { {ex1, ez1}, {ex2, ez2} };
 
         for (int[] e : edges) {
@@ -634,22 +819,20 @@ public class BridgeGenerator {
             int ySurf = findTopNonAirNearIgnoringBridge(ex, ez, yHint);
             if (ySurf == Integer.MIN_VALUE) continue;
 
-            // если наверху рельефа стоит "дорога" — опору пропускаем
-            Block surfBlock = level.getBlockState(new BlockPos(ex, ySurf, ez)).getBlock();
+            Block surfBlock = level.getBlockState(mpos.set(ex, ySurf, ez)).getBlock();
             if (isRoadLikeBlock(surfBlock)) continue;
 
-            int yTop = ySurf + offset; // высота полотна в этой колонке
-            if (yTop <= ySurf) continue; // некуда ставить
-
+            int yTop = ySurf + offset;
+            if (yTop <= ySurf) continue;
             if (yTop > worldMax) yTop = worldMax;
 
-            // тянем колонну stone_bricks от (yTop-1) до (ySurf+1), не трогая сам рельеф
             for (int y = yTop - 1; y >= Math.max(worldMin, ySurf + 1); y--) {
                 setBridgeBlock(ex, y, ez, supportBlock);
             }
         }
     }
 
+    // === Поиск рельефа с «игнорированием моста» по колонным диапазонам ===
     private int findTopNonAirNearIgnoringBridge(int x, int z, Integer hintY) {
         final int worldMin = level.getMinBuildHeight();
         final int worldMax = level.getMaxBuildHeight() - 1;
@@ -657,23 +840,36 @@ public class BridgeGenerator {
         if (hintY != null) {
             int from = Math.min(worldMax, hintY + 16);
             int to   = Math.max(worldMin, hintY - 16);
-            for (int y = from; y >= to; y--) {
-                BlockPos pos = new BlockPos(x, y, z);
-                if (placedByBridge.contains(BlockPos.asLong(x, y, z))) continue; // считаем как воздух
-                if (!level.getBlockState(pos).isAir()) return y;
+            int y = from;
+            while (y >= to) {
+                y = skipOurColumnIfInside(x, z, y);
+                if (y < to) break;
+                if (!level.getBlockState(mpos.set(x, y, z)).isAir()) return y;
+                y--;
             }
         }
-        for (int y = worldMax; y >= worldMin; y--) {
-            BlockPos pos = new BlockPos(x, y, z);
-            if (placedByBridge.contains(BlockPos.asLong(x, y, z))) continue; // считаем как воздух
-            if (!level.getBlockState(pos).isAir()) return y;
+        int y = worldMax;
+        while (y >= worldMin) {
+            y = skipOurColumnIfInside(x, z, y);
+            if (y < worldMin) break;
+            if (!level.getBlockState(mpos.set(x, y, z)).isAir()) return y;
+            y--;
         }
         return Integer.MIN_VALUE;
     }
 
+    /** Если y попадает в наш занятый диапазон по колонке (x,z) — прыгаем сразу ниже. */
+    private int skipOurColumnIfInside(int x, int z, int y) {
+        YRange r = placedColumnRanges.get(packXZ(x, z));
+        if (r != null && r.valid() && y <= r.max && y >= r.min) {
+            return r.min - 1; // перепрыгнуть все наши блоки сразу
+        }
+        return y;
+    }
+
     private void setBridgeBlock(int x, int y, int z, Block block) {
-        level.setBlock(new BlockPos(x, y, z), block.defaultBlockState(), 3);
-        placedByBridge.add(BlockPos.asLong(x, y, z));
+        level.setBlock(mpos.set(x, y, z), block.defaultBlockState(), 3);
+        registerPlaced(x, y, z);
     }
 
     // ====== УТИЛИТЫ ======
@@ -727,13 +923,13 @@ public class BridgeGenerator {
         return pts;
     }
 
-    // --- helpers для лесенки ---
     private static int clampInt(int v, int lo, int hi) {
         return Math.max(lo, Math.min(hi, v));
     }
+
     /** Ограничиваем изменение высоты: не более чем на ±maxStep от prevY. */
     private static int stepClamp(int prevY, int targetY, int maxStep) {
-        if (prevY == Integer.MIN_VALUE) return targetY; // первый шаг — без ограничений
+        if (prevY == Integer.MIN_VALUE) return targetY;
         if (targetY > prevY + maxStep) return prevY + maxStep;
         if (targetY < prevY - maxStep) return prevY - maxStep;
         return targetY;
@@ -748,23 +944,19 @@ public class BridgeGenerator {
         final int worldMin = level.getMinBuildHeight();
         final int worldMax = level.getMaxBuildHeight() - 1;
 
-        // база колонны: забор стоит на (deckY+1), колонну начинаем на +1 над ним
         int y0 = deckY + 2;
         int yTop = y0 + LAMP_COLUMN_WALLS - 1;
         if (y0 > worldMax) return;
         yTop = Math.min(yTop, worldMax);
 
-        // 1) Колонна из андезитовых стен
         Block andesiteWall = Blocks.ANDESITE_WALL;
         for (int y = y0; y <= yTop; y++) {
             setBridgeBlock(edgeX, y, edgeZ, andesiteWall);
         }
 
-        // 2) Три полублока smooth_stone_slab на уровне ВЕРХА колонны (нижняя половина блока)
-        int ySlab = yTop + 1; // полублок в нижней половине этого уровня
+        int ySlab = yTop + 1;
         if (ySlab > worldMax) return;
 
-        // вектор «к центру полотна» (перпендикуляр к направлению сегмента)
         int sx = horizontalMajor ? 0 : towardCenterSign;
         int sz = horizontalMajor ? towardCenterSign : 0;
 
@@ -772,23 +964,35 @@ public class BridgeGenerator {
         placeBottomSlab(edgeX + sx,       ySlab, edgeZ + sz,       Blocks.SMOOTH_STONE_SLAB);
         placeBottomSlab(edgeX + 2 * sx,   ySlab, edgeZ + 2 * sz,   Blocks.SMOOTH_STONE_SLAB);
 
-        // 3) Светокамень под КРАЙНИМ полублоком (вниз на 1 блок)
         int gx = edgeX + 2 * sx;
         int gz = edgeZ + 2 * sz;
-        int gy = ySlab - 1; // вплотную под нижним полублоком
+        int gy = ySlab - 1;
         if (gy >= worldMin && gy <= worldMax && gx >= minX && gx <= maxX && gz >= minZ && gz <= maxZ) {
             setBridgeBlock(gx, gy, gz, Blocks.GLOWSTONE);
         }
     }
 
-    /** Поставить полублок в нижней половине блока и пометить как «наш». */
+    /** Поставить полублок в нижней половине блока и учесть в диапазоне колонки. */
     private void placeBottomSlab(int x, int y, int z, Block slabBlock) {
         BlockState st = slabBlock.defaultBlockState();
         if (st.hasProperty(SlabBlock.TYPE)) {
             st = st.setValue(SlabBlock.TYPE, SlabType.BOTTOM);
         }
-        level.setBlock(new BlockPos(x, y, z), st, 3);
-        placedByBridge.add(BlockPos.asLong(x, y, z));
+        level.setBlock(mpos.set(x, y, z), st, 3);
+        registerPlaced(x, y, z);
     }
 
+    // === учёт занятого диапазона по колонке (x,z) ===
+    private void registerPlaced(int x, int y, int z) {
+        long k = packXZ(x, z);
+        YRange r = placedColumnRanges.get(k);
+        if (r == null) {
+            r = new YRange();
+            placedColumnRanges.put(k, r);
+        }
+        r.add(y);
+    }
+    private static long packXZ(int x, int z) {
+        return (((long) x) << 32) ^ (z & 0xffffffffL);
+    }
 }

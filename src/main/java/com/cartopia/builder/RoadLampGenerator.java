@@ -48,6 +48,20 @@ public class RoadLampGenerator {
         System.out.println("[Cartopia] " + msg);
     }
 
+    private static boolean isStone(Block b) {
+        ResourceLocation key = ForgeRegistries.BLOCKS.getKey(b);
+        return key != null && "minecraft:stone".equals(key.toString());
+    }
+
+    private static boolean isLampComponent(Block b) {
+        ResourceLocation key = ForgeRegistries.BLOCKS.getKey(b);
+        if (key == null) return false;
+        String id = key.toString();
+        return "minecraft:andesite_wall".equals(id)
+            || "minecraft:smooth_stone_slab".equals(id)
+            || "minecraft:glowstone".equals(id);
+    }
+
     // === Материалы дорог (ТОЧНО как в RoadGenerator) ===
     private static final class RoadStyle {
         final String blockId;
@@ -284,23 +298,37 @@ public class RoadLampGenerator {
         final int worldMin = level.getMinBuildHeight();
         final int worldMax = level.getMaxBuildHeight() - 1;
 
+        // Быстрый локальный проход вокруг подсказки
         if (hintY != null) {
             int from = Math.min(worldMax, hintY + 16);
             int to   = Math.max(worldMin, hintY - 16);
             for (int y = from; y >= to; y--) {
+                BlockPos pos = new BlockPos(x, y, z);
                 long key = BlockPos.asLong(x, y, z);
-                if (placedByRoadLamps.contains(key)) continue; // лампа = воздух
-                if (!level.getBlockState(new BlockPos(x, y, z)).isAir()) return y;
+
+                // Считаем блоки фонаря как «воздух» — и свежепоставленные, и от прошлых прогонов
+                if (placedByRoadLamps.contains(key)) continue;
+                Block block = level.getBlockState(pos).getBlock();
+                if (isLampComponent(block)) continue;
+
+                if (!level.getBlockState(pos).isAir()) return y;
             }
         }
+
+        // Полный проход (на всякий)
         for (int y = worldMax; y >= worldMin; y--) {
+            BlockPos pos = new BlockPos(x, y, z);
             long key = BlockPos.asLong(x, y, z);
-            if (placedByRoadLamps.contains(key)) continue; // лампа = воздух
-            if (!level.getBlockState(new BlockPos(x, y, z)).isAir()) return y;
+
+            if (placedByRoadLamps.contains(key)) continue;
+            Block block = level.getBlockState(pos).getBlock();
+            if (isLampComponent(block)) continue;
+
+            if (!level.getBlockState(pos).isAir()) return y;
         }
         return Integer.MIN_VALUE;
     }
-
+    
     private void placeRoadLamp(int edgeX, int edgeZ, Integer hintY,
                                boolean horizontalMajor, int towardCenterSign,
                                int minX, int maxX, int minZ, int maxZ) {
@@ -313,12 +341,20 @@ public class RoadLampGenerator {
         int ySurfEdge = findTopNonAirNearSkippingRoadLamps(edgeX, edgeZ, hintY);
         if (ySurfEdge == Integer.MIN_VALUE) return;
 
+        // === НОВОЕ: строим только на рельефе (groundY) и строго на высоте groundY+1 ===
+        Integer gridY = terrainGroundYFromGrid(edgeX, edgeZ);
+        if (gridY == null) return;              // нет данных о рельефе — ничего не ставим (строгий режим)
+        if (isWaterCell(edgeX, edgeZ)) return;  // вода исключается
+        if (ySurfEdge != gridY) return;         // верхний непустой блок не совпал с высотой рельефа → не ставим фонарь
+
         // НИКОГДА не ставим на дорожное полотно и запрещённые бетоны
-        Block under = level.getBlockState(new BlockPos(edgeX, ySurfEdge, edgeZ)).getBlock();
-        if (isRoadLikeBlock(under) || isForbiddenConcrete(under)) return;
+        Block under = level.getBlockState(new BlockPos(edgeX, gridY, edgeZ)).getBlock();
+        // стало: если это дорожное полотно — запрещаем, КРОМЕ случая камня;
+        // бетоны из isForbiddenConcrete по-прежнему нельзя.
+        if ((isRoadLikeBlock(under) && !isStone(under)) || isForbiddenConcrete(under)) return;
 
         // База колонны
-        int y0 = ySurfEdge + 1;
+        int y0 = gridY + 1; // строго на высоту рельефа + 1
         if (y0 > worldMax) return;
 
         // Если в базе уже что-то поставлено лампой раньше — пропускаем
@@ -328,29 +364,49 @@ public class RoadLampGenerator {
         // Если база НЕ воздух — не ставим, чтобы не «садиться» сверху
         if (!level.getBlockState(new BlockPos(edgeX, y0, edgeZ)).isAir()) return;
 
-        // Колонна из ANDESITE_WALL (высота 5)
-        int yTop = Math.min(y0 + ROAD_LAMP_COLUMN_WALLS - 1, worldMax);
-        for (int y = y0; y <= yTop; y++) {
-            BlockPos pos = new BlockPos(edgeX, y, edgeZ);
-            level.setBlock(pos, Blocks.ANDESITE_WALL.defaultBlockState(), 3);
-            placedByRoadLamps.add(BlockPos.asLong(edgeX, y, edgeZ));
-        }
 
-        // Три нижних полублока к центру дороги
+        // Верх колонны
+        int yTop = Math.min(y0 + ROAD_LAMP_COLUMN_WALLS - 1, worldMax);
+
+        // Посчитаем координаты всех будущих блоков фонаря
         int ySlab = yTop + 1;
         if (ySlab > worldMax) return;
 
         int sx = horizontalMajor ? 0 : towardCenterSign;
         int sz = horizontalMajor ? towardCenterSign : 0;
 
+        int gx = edgeX + 2 * sx;
+        int gz = edgeZ + 2 * sz;
+        int gy = ySlab - 1;
+
+        // === ПРЕДОХРАНИТЕЛЬ ОТ ПЕРЕЗАПИСИ ***ЛЮБЫХ*** БЛОКОВ ===
+        // 1) Вся колонна (edgeX, y0..yTop, edgeZ) должна быть воздухом
+        for (int y = y0; y <= yTop; y++) {
+            if (!level.getBlockState(new BlockPos(edgeX, y, edgeZ)).isAir()) return;
+        }
+        // 2) Все три плиты (на уровне ySlab) — только воздух под замену
+        if (!level.getBlockState(new BlockPos(edgeX,                 ySlab, edgeZ                )).isAir()) return;
+        if (!level.getBlockState(new BlockPos(edgeX + 1 * sx,        ySlab, edgeZ + 1 * sz       )).isAir()) return;
+        if (!level.getBlockState(new BlockPos(edgeX + 2 * sx,        ySlab, edgeZ + 2 * sz       )).isAir()) return;
+        // 3) Светокамень: если точка внутри мира/границ — там тоже должен быть воздух
+        if (gy >= worldMin && gy <= worldMax && gx >= minX && gx <= maxX && gz >= minZ && gz <= maxZ) {
+            if (!level.getBlockState(new BlockPos(gx, gy, gz)).isAir()) return;
+        }
+
+        for (int y = y0; y <= yTop; y++) {
+            BlockPos pos = new BlockPos(edgeX, y, edgeZ);
+            level.setBlock(pos, Blocks.ANDESITE_WALL.defaultBlockState(), 3);
+            placedByRoadLamps.add(BlockPos.asLong(edgeX, y, edgeZ));
+        }
+
+
+
         placeBottomSlab(edgeX,              ySlab, edgeZ,              Blocks.SMOOTH_STONE_SLAB);
         placeBottomSlab(edgeX + 1 * sx,     ySlab, edgeZ + 1 * sz,     Blocks.SMOOTH_STONE_SLAB);
         placeBottomSlab(edgeX + 2 * sx,     ySlab, edgeZ + 2 * sz,     Blocks.SMOOTH_STONE_SLAB);
 
         // Светокамень под крайним полублоком
-        int gx = edgeX + 2 * sx;
-        int gz = edgeZ + 2 * sz;
-        int gy = ySlab - 1;
+
         if (gy >= worldMin && gy <= worldMax && gx >= minX && gx <= maxX && gz >= minZ && gz <= maxZ) {
             BlockPos gpos = new BlockPos(gx, gy, gz);
             level.setBlock(gpos, Blocks.GLOWSTONE.defaultBlockState(), 3);
@@ -434,5 +490,65 @@ public class RoadLampGenerator {
             } catch (Exception ignore) { }
         }
         return Math.max(1, def);
+    }
+
+    // === TERRAIN GRID (из SurfaceGenerator) ===
+    // Вернёт высоту рельефа groundY из coords. Поддерживает v1 (data[]) и v2 (grids.groundY[]).
+    private Integer terrainGroundYFromGrid(int x, int z) {
+        try {
+            if (coords == null || !coords.has("terrainGrid")) return null;
+            JsonObject tg = coords.getAsJsonObject("terrainGrid");
+            if (tg == null) return null;
+
+            int minX = tg.get("minX").getAsInt();
+            int minZ = tg.get("minZ").getAsInt();
+            int width = tg.get("width").getAsInt();
+            int idx = (z - minZ) * width + (x - minX);
+            if (idx < 0) return null;
+
+            if (tg.has("grids") && tg.get("grids").isJsonObject()) {
+                JsonObject grids = tg.getAsJsonObject("grids");
+                if (!grids.has("groundY")) return null;
+                JsonArray groundY = grids.getAsJsonArray("groundY");
+                if (idx >= groundY.size()) return null;
+                return groundY.get(idx).getAsInt();
+            }
+
+            // v1 fallback: terrainGrid.data[]
+            if (tg.has("data") && tg.get("data").isJsonArray()) {
+                JsonArray data = tg.getAsJsonArray("data");
+                if (idx >= data.size()) return null;
+                return data.get(idx).getAsInt();
+            }
+        } catch (Throwable ignore) {}
+        return null;
+    }
+
+    // true если клетка — вода (по финальному terrain-grid: waterY!=null или topBlock=="minecraft:water")
+    private boolean isWaterCell(int x, int z) {
+        try {
+            if (coords == null || !coords.has("terrainGrid")) return false;
+            JsonObject tg = coords.getAsJsonObject("terrainGrid");
+            int minX = tg.get("minX").getAsInt();
+            int minZ = tg.get("minZ").getAsInt();
+            int width = tg.get("width").getAsInt();
+            int idx = (z - minZ) * width + (x - minX);
+            if (idx < 0) return false;
+
+            if (tg.has("grids") && tg.get("grids").isJsonObject()) {
+                JsonObject grids = tg.getAsJsonObject("grids");
+                if (grids.has("waterY")) {
+                    JsonArray waterY = grids.getAsJsonArray("waterY");
+                    if (idx >= waterY.size()) return false;
+                    return !waterY.get(idx).isJsonNull();
+                }
+                if (grids.has("topBlock")) {
+                    JsonArray tb = grids.getAsJsonArray("topBlock");
+                    if (idx >= tb.size()) return false;
+                    return "minecraft:water".equals(tb.get(idx).getAsString());
+                }
+            }
+        } catch (Throwable ignore) {}
+        return false;
     }
 }

@@ -30,6 +30,7 @@ import java.net.http.HttpResponse;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.nio.file.Files;
 
 public class SurfaceGenerator {
 
@@ -450,6 +451,23 @@ public class SurfaceGenerator {
 
         // уровни воды
         Map<Long, Integer> waterSurfaceY = computeWaterSurfaceY(surface, terrainY, minX, maxX, minZ, maxZ);
+
+
+        // === экспорт/сохранение сетки рельефа ===
+        publishTerrainGrid(coordsJson, terrainY, minX, maxX, minZ, maxZ); // в coordsJson
+        File areaDir = detectAreaPackDir(demFile);
+        if (areaDir != null) {
+            try {
+                File out = new File(areaDir, "terrain-grid.json");
+                JsonObject tg = coordsJson.getAsJsonObject("terrainGrid");
+                if (tg != null) {
+                    Files.writeString(out.toPath(), tg.toString(), StandardCharsets.UTF_8);
+                    broadcast(level, "Сетка рельефа сохранена: " + out.getAbsolutePath());
+                }
+            } catch (Exception e) {
+                System.err.println("[Cartopia] Не удалось сохранить terrain-grid.json: " + e);
+            }
+        }
 
         // ВЫЗОВ placeBlocks с новым параметром
         placeBlocks(surface, terrainY, waterMask, waterSurfaceY, cliffCapCells, minX, maxX, minZ, maxZ, totalCells);
@@ -1101,8 +1119,19 @@ public class SurfaceGenerator {
         int[] chatMilestones = {25, 50, 75, 100};
         int chatIdx = 0;
 
+
         final int worldMin = level.getMinBuildHeight();
         final int worldMax = level.getMaxBuildHeight();
+
+        // === FINAL DUMP: коллекции для подробного результата ===
+        final int width  = maxX - minX + 1;
+        final int height = maxZ - minZ + 1;
+
+        // сюда сложим подробную информацию по КАЖДОЙ колонке (x,z)
+        final JsonArray columns = new JsonArray();
+
+        // а здесь — небольшая сводка: сколько каких top-блоков получилось
+        final Map<String,Integer> topBlockCounts = new HashMap<>();
 
         for (int x = minX; x <= maxX; x++) {
             for (int z = minZ; z <= maxZ; z++) {
@@ -1126,6 +1155,54 @@ public class SurfaceGenerator {
                     setBlock(x, yWaterSurface,  z, "minecraft:water");
                     setBlock(x, yAirTop,        z, "minecraft:air");
                     clearColumnAbove(x, yAirTop + 1, z, worldMax);
+
+                    // --- FINAL LOG (water) ---
+                    {
+                        JsonObject col = new JsonObject();
+                        col.addProperty("x", x);
+                        col.addProperty("z", z);
+                        col.addProperty("isWater", true);
+                        col.addProperty("groundY", yLapis);            // дно под водой (lapis)
+                        col.addProperty("topY", yWaterSurface);        // верхний непустой блок
+                        col.addProperty("waterY", yWaterSurface);      // зеркало воды
+                        col.addProperty("groundBlock", "minecraft:lapis_block");
+                        col.addProperty("topBlock", "minecraft:water");
+                        col.addProperty("isCliffCap", false);
+
+                        // Полный профиль колонки (RLE)
+                        JsonArray runs = new JsonArray();
+                        if (yLapis - 1 >= worldMin) {
+                            JsonObject r1 = new JsonObject();
+                            r1.addProperty("y1", worldMin);
+                            r1.addProperty("y2", yLapis - 1);
+                            r1.addProperty("id", "minecraft:air");
+                            runs.add(r1);
+                        }
+                        {
+                            JsonObject r = new JsonObject();
+                            r.addProperty("y1", yLapis);
+                            r.addProperty("y2", yLapis);
+                            r.addProperty("id", "minecraft:lapis_block");
+                            runs.add(r);
+                        }
+                        {
+                            JsonObject r = new JsonObject();
+                            r.addProperty("y1", yWaterSurface);
+                            r.addProperty("y2", yWaterSurface);
+                            r.addProperty("id", "minecraft:water");
+                            runs.add(r);
+                        }
+                        if (yWaterSurface + 1 <= worldMax) {
+                            JsonObject r4 = new JsonObject();
+                            r4.addProperty("y1", yWaterSurface + 1);
+                            r4.addProperty("y2", worldMax);
+                            r4.addProperty("id", "minecraft:air");
+                            runs.add(r4);
+                        }
+                        col.add("runs", runs);
+                        columns.add(col);
+                        topBlockCounts.merge("minecraft:water", 1, Integer::sum);
+                    }
                 } else {
                     // суша
                     setBlock(x, yTop, z, "minecraft:" + mat);
@@ -1141,6 +1218,58 @@ public class SurfaceGenerator {
                     }
 
                     clearColumnBelow(x, z, worldMin, yTop - 1);
+
+                    // --- FINAL LOG (land) ---
+                    {
+                        String groundBlockId = "minecraft:" + mat;
+                        String topBlockId    = isCliff ? "minecraft:cracked_stone_bricks" : groundBlockId;
+                        int    topYFinal     = isCliff ? (yTop + 1) : yTop;
+
+                        JsonObject col = new JsonObject();
+                        col.addProperty("x", x);
+                        col.addProperty("z", z);
+                        col.addProperty("isWater", false);
+                        col.addProperty("groundY", yTop);             // высота рельефа
+                        col.addProperty("topY", topYFinal);           // самый верхний непустой блок
+                        col.add("waterY", com.google.gson.JsonNull.INSTANCE);
+                        col.addProperty("groundBlock", groundBlockId);
+                        col.addProperty("topBlock", topBlockId);
+                        col.addProperty("isCliffCap", isCliff);
+
+                        JsonArray runs = new JsonArray();
+                        if (yTop - 1 >= worldMin) {
+                            JsonObject r1 = new JsonObject();
+                            r1.addProperty("y1", worldMin);
+                            r1.addProperty("y2", yTop - 1);
+                            r1.addProperty("id", "minecraft:air");
+                            runs.add(r1);
+                        }
+                        {
+                            JsonObject r = new JsonObject();
+                            r.addProperty("y1", yTop);
+                            r.addProperty("y2", yTop);
+                            r.addProperty("id", groundBlockId);
+                            runs.add(r);
+                        }
+                        if (isCliff) {
+                            JsonObject r = new JsonObject();
+                            r.addProperty("y1", yTop + 1);
+                            r.addProperty("y2", yTop + 1);
+                            r.addProperty("id", "minecraft:cracked_stone_bricks");
+                            runs.add(r);
+                        }
+                        int airFrom = isCliff ? (yTop + 2) : (yTop + 1);
+                        if (airFrom <= worldMax) {
+                            JsonObject rLast = new JsonObject();
+                            rLast.addProperty("y1", airFrom);
+                            rLast.addProperty("y2", worldMax);
+                            rLast.addProperty("id", "minecraft:air");
+                            runs.add(rLast);
+                        }
+                        col.add("runs", runs);
+                        columns.add(col);
+                        topBlockCounts.merge(topBlockId, 1, Integer::sum);
+                    }
                 }
 
                 done++;
@@ -1155,6 +1284,80 @@ public class SurfaceGenerator {
                     chatIdx++;
                 }
             }
+        }
+
+        // === FINAL JSON assembly & write: перезаписываем terrain-grid.json финальной версией ===
+        JsonObject fin = new JsonObject();
+        fin.addProperty("version", 2);
+        fin.addProperty("minX", minX);
+        fin.addProperty("minZ", minZ);
+        fin.addProperty("width", width);
+        fin.addProperty("height", height);
+        fin.addProperty("order", "row-major(Z,X)");  // порядок индексов в grid-ах ниже
+        fin.addProperty("worldMin", worldMin);
+        fin.addProperty("worldMax", worldMax);
+
+        // сводка: сколько каких top-блоков
+        JsonObject counts = new JsonObject();
+        for (Map.Entry<String,Integer> e : topBlockCounts.entrySet()) {
+            counts.addProperty(e.getKey(), e.getValue());
+        }
+        fin.add("countsByTopBlock", counts);
+
+        // детальные колонки с координатами и RLE-профилем
+        fin.add("columns", columns);
+
+        // Дополнительно — компактные "гриды" для быстрого доступа по индексу (z,x)
+        JsonArray groundYGrid = new JsonArray();
+        JsonArray topYGrid    = new JsonArray();
+        JsonArray waterYGrid  = new JsonArray();
+        JsonArray topBlockGrid= new JsonArray();
+
+        for (int z = minZ; z <= maxZ; z++) {
+            for (int x = minX; x <= maxX; x++) {
+                long k = key(x, z);
+                int yTop0 = terrain.getOrDefault(k, Y_BASE);
+                if (yTop0 <= worldMin + 2) yTop0 = worldMin + 3;
+                if (yTop0 >= worldMax - 2) yTop0 = worldMax - 3;
+
+                String mat0 = surface.getOrDefault(k, "moss_block");
+
+                if ("water".equals(mat0) || waterMask.contains(k)) {
+                    int yWaterSurface = (waterSurfaceY != null && waterSurfaceY.containsKey(k))
+                            ? waterSurfaceY.get(k)
+                            : (yTop0 - 1);
+                    groundYGrid.add(yWaterSurface - 1);       // lapis
+                    topYGrid.add(yWaterSurface);
+                    waterYGrid.add(yWaterSurface);
+                    topBlockGrid.add("minecraft:water");
+                } else {
+                    boolean isCliff0 = (cliffCapCells != null && cliffCapCells.contains(k));
+                    groundYGrid.add(yTop0);
+                    topYGrid.add(isCliff0 ? (yTop0 + 1) : yTop0);
+                    waterYGrid.add(com.google.gson.JsonNull.INSTANCE);
+                    topBlockGrid.add(isCliff0 ? "minecraft:cracked_stone_bricks" : ("minecraft:" + mat0));
+                }
+            }
+        }
+
+        JsonObject grids = new JsonObject();
+        grids.add("groundY", groundYGrid);    // индекс = (z-minZ)*width + (x-minX)
+        grids.add("topY",    topYGrid);
+        grids.add("waterY",  waterYGrid);     // null где суша
+        grids.add("topBlock",topBlockGrid);
+        fin.add("grids", grids);
+
+        // кладём в coordsJson и сохраняем файл (перезаписываем ранний черновик)
+        coordsJson.add("terrainGrid", fin);
+        try {
+            File areaDir = detectAreaPackDir(demFile);
+            if (areaDir != null) {
+                File outFile = new File(areaDir, "terrain-grid.json");
+                Files.writeString(outFile.toPath(), fin.toString(), StandardCharsets.UTF_8);
+                broadcast(level, "Финальный рельеф сохранён: " + outFile.getAbsolutePath());
+            }
+        } catch (Exception e) {
+            System.err.println("[Cartopia] Не удалось сохранить финальный terrain-grid.json: " + e);
         }
     }
 
@@ -1787,5 +1990,41 @@ public class SurfaceGenerator {
         return out;
     }
 
+    private static void publishTerrainGrid(JsonObject coordsJson,
+                                        Map<Long,Integer> terrainY,
+                                        int minX, int maxX, int minZ, int maxZ) {
+        int width  = maxX - minX + 1;
+        int height = maxZ - minZ + 1;
+
+        JsonObject g = new JsonObject();
+        g.addProperty("minX", minX);
+        g.addProperty("minZ", minZ);
+        g.addProperty("width", width);
+        g.addProperty("height", height);
+
+        JsonArray data = new JsonArray();
+        for (int z = minZ; z <= maxZ; z++) {
+            for (int x = minX; x <= maxX; x++) {
+                long k = (((long)x)<<32) ^ (z & 0xffffffffL);
+                int y = terrainY.getOrDefault(k, Y_BASE);
+                data.add(y);
+            }
+        }
+        g.add("data", data);
+
+        coordsJson.add("terrainGrid", g);
+    }
+
+    private static File detectAreaPackDir(File demFile) {
+        if (demFile == null) return null;
+        File dir = demFile.getParentFile();
+        // поднимемся на 0–3 уровня, ищем директорию вида area_...
+        for (int i = 0; i < 4 && dir != null; i++) {
+            if (dir.getName().startsWith("area_")) return dir;
+            dir = dir.getParentFile();
+        }
+        // если не нашли — кладём рядом с DEM
+        return demFile.getParentFile();
+    }
 
 }

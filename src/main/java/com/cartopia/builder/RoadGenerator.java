@@ -55,8 +55,8 @@ public class RoadGenerator {
         ROAD_MATERIALS.put("secondary",    new RoadStyle("gray_concrete", 15));
         ROAD_MATERIALS.put("tertiary",     new RoadStyle("gray_concrete", 15));
         ROAD_MATERIALS.put("residential",  new RoadStyle("gray_concrete", 15));
-        ROAD_MATERIALS.put("unclassified", new RoadStyle("stone", 6));
-        ROAD_MATERIALS.put("service",      new RoadStyle("stone", 5));
+        ROAD_MATERIALS.put("unclassified", new RoadStyle("gray_concrete", 6));
+        ROAD_MATERIALS.put("service",      new RoadStyle("gray_concrete", 5));
         ROAD_MATERIALS.put("footway",      new RoadStyle("stone", 4));
         ROAD_MATERIALS.put("path",         new RoadStyle("stone", 4));
         ROAD_MATERIALS.put("cycleway",     new RoadStyle("stone", 4));
