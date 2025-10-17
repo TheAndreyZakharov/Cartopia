@@ -1,9 +1,25 @@
 modLoader="javafml"
 loaderVersion="[47,)"
-license="Apache-2.0 license"
+license="Apache-2.0"
 
 [[mods]]
 modId="cartopia"
 version="1.0"
 displayName="Cartopia"
-description='''Генерация по картам'''
+logoFile="public/logos/Cartopia_logo.png"
+
+displayURL="https://github.com/TheAndreyZakharov/Cartopia"
+issueTrackerURL="https://github.com/TheAndreyZakharov/Cartopia/issues"
+
+authors="Andrey Zakharov"
+credits="OpenStreetMap, OpenLandMap, OpenTopography, GMRT"
+
+description='''
+Cartopia turns real places into Minecraft worlds. Choose any location on Earth, set the area, confirm — and get a world generated from open map data.
+
+Project repo: https://github.com/TheAndreyZakharov/Cartopia
+Issue tracker: https://github.com/TheAndreyZakharov/Cartopia/issues
+
+Author GitHub: https://github.com/TheAndreyZakharov
+Author website: https://theandreyzakharov.github.io
+'''
