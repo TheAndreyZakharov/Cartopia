@@ -1,6 +1,8 @@
 package com.cartopia.builder;
 
 import com.cartopia.spawn.CartopiaSurfaceSpawn;
+import com.cartopia.store.FeatureStream;
+import com.cartopia.store.GenerationStore;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
@@ -57,6 +59,23 @@ public class SurfaceGenerator {
     private final JsonObject coordsJson;
     private final File demFile;
     private final File landcoverFileOrNull; // GeoTIFF OLM (классы покрытия)
+
+    // Новое: доступ к NDJSON и совместимой сетке
+    private final GenerationStore store; // может быть null
+
+    // уменьшаем аллокации
+    private final BlockPos.MutableBlockPos mpos = new BlockPos.MutableBlockPos();
+
+    public SurfaceGenerator(ServerLevel level, JsonObject coordsJson, File demFile, File landcoverFileOrNull) {
+        this(level, coordsJson, demFile, landcoverFileOrNull, null);
+    }
+    public SurfaceGenerator(ServerLevel level, JsonObject coordsJson, File demFile, File landcoverFileOrNull, GenerationStore store) {
+        this.level = level;
+        this.coordsJson = coordsJson;
+        this.demFile = demFile;
+        this.landcoverFileOrNull = landcoverFileOrNull;
+        this.store = store;
+    }
 
     private static void broadcast(ServerLevel level, String msg) {
         try {
@@ -173,21 +192,14 @@ public class SurfaceGenerator {
         LANDCOVER_CLASS_TO_BLOCK.put(182, "muddy_mangrove_roots"); // Marsh
         LANDCOVER_CLASS_TO_BLOCK.put(183, "muddy_mangrove_roots"); // Flooded flat
         LANDCOVER_CLASS_TO_BLOCK.put(184, "sandstone");          // Saline
-        LANDCOVER_CLASS_TO_BLOCK.put(185, "mangrove_log");       // Mangrove (лог в MC есть)
+        LANDCOVER_CLASS_TO_BLOCK.put(185, "mangrove_log");       // Mangrove
         LANDCOVER_CLASS_TO_BLOCK.put(186, "muddy_mangrove_roots"); // Salt marsh
         LANDCOVER_CLASS_TO_BLOCK.put(187, "sandstone");          // Tidal flat
         LANDCOVER_CLASS_TO_BLOCK.put(190, "moss_block");         // Impervious (города)
         LANDCOVER_CLASS_TO_BLOCK.put(140, "snow_block");         // Lichens and mosses
-        LANDCOVER_CLASS_TO_BLOCK.put(0,   "water");              // no-data → вода (как в старом коде)
+        LANDCOVER_CLASS_TO_BLOCK.put(0,   "water");              // no-data → вода
         LANDCOVER_CLASS_TO_BLOCK.put(250, "water");
         LANDCOVER_CLASS_TO_BLOCK.put(255, "water");
-    }
-
-    public SurfaceGenerator(ServerLevel level, JsonObject coordsJson, File demFile, File landcoverFileOrNull) {
-        this.level = level;
-        this.coordsJson = coordsJson;
-        this.demFile = demFile;
-        this.landcoverFileOrNull = landcoverFileOrNull;
     }
 
     // ====== Генерация ======
@@ -294,17 +306,15 @@ public class SurfaceGenerator {
             }
         }
 
-        // ---------- OLM (landcover): локальный файл ИЛИ онлайн по WMS/шаблону ----------
+        // ---------- OLM (landcover): локальный файл ИЛИ онлайн ----------
         File lcFile = (landcoverFileOrNull != null && landcoverFileOrNull.exists() && landcoverFileOrNull.length() > 0)
                 ? landcoverFileOrNull
                 : downloadOLMIfConfigured(coordsJson, south, west, north, east);
 
-
         if (lcFile != null && lcFile.exists() && lcFile.length() > 0) {
             broadcast(level, "Читаю OpenLandMap landcover…");
 
-            // Границы растрового файла: если заданы landcoverBounds — берём их; иначе
-            // если файл онлайн-скачанный под наш bbox — используем bbox участка.
+            // Границы растрового файла:
             double lcovW = -180.0, lcovE = 180.0, lcovS = -90.0, lcovN = 90.0;
             if (coordsJson.has("landcoverBounds") && coordsJson.get("landcoverBounds").isJsonObject()) {
                 JsonObject lb = coordsJson.getAsJsonObject("landcoverBounds");
@@ -322,7 +332,7 @@ public class SurfaceGenerator {
                         double[] ll = blockToLatLng(x, z, centerLat, centerLng, east, west, north, south, sizeMeters, centerX, centerZ);
                         int cls = lcov.sampleClassByLatLon(ll[0], ll[1]);
 
-                        // вне растра/нет данных → вода (как в старом подходе)
+                        // вне растра/нет данных → вода
                         String block = (cls == Integer.MIN_VALUE) ? "water" : blockForLandcoverClass(cls);
                         if (block == null) block = "moss_block";
 
@@ -335,7 +345,7 @@ public class SurfaceGenerator {
                             }
                         } else if (!"water".equals(surface.get(k))) {
                             surface.put(k, block);                 // суша из OLM
-                            olmAll.add(k);                         // помечаем как OLM
+                            olmAll.add(k);
                         }
                     }
                 }
@@ -345,8 +355,14 @@ public class SurfaceGenerator {
         } else {
             System.out.println("[Cartopia] OLM landcover отсутствует (и онлайн не настроен) — пропускаю.");
         }
-        // ---------- OSM зоны ----------
-        List<ZonePoly> zones = extractZonesFromOSM(coordsJson);
+
+        // ---------- OSM зоны: читаем из NDJSON если можем, иначе из coords.features ----------
+        List<ZonePoly> zones = new ArrayList<>();
+        if (store != null) zones.addAll(extractZonesFromOSMStream(store));
+        // Фолбэк как в старом коде: дополняем зонами из coordsJson
+        List<ZonePoly> z2 = extractZonesFromOSM(coordsJson);
+        if (!z2.isEmpty()) zones.addAll(z2);
+
         System.out.println("[Cartopia] ОSM зон для покраски: " + zones.size());
 
         // Сначала — вода (outer минус inner), затем прочее.
@@ -371,7 +387,7 @@ public class SurfaceGenerator {
                     if (!inWaterHole) {
                         surface.put(k, "water");
                         waterProtected.add(k);   // воду из OSM не трогаем и не учитываем
-                        waterFromOLM.remove(k);  // если раньше пометили как OLM — убрать
+                        waterFromOLM.remove(k);
                         continue; // вода победила
                     }
                 }
@@ -399,10 +415,10 @@ public class SurfaceGenerator {
             }
         }
 
-        // Параметры сглаживания (теперь можно скруглять воду тоже)
+        // Параметры сглаживания
         int surfaceBlurIters = SURFACE_BLUR_ITERS;
         int surfaceBlurMinMajority = SURFACE_BLUR_MIN_MAJORITY;
-        boolean surfaceBlurIncludeWater = true; // <— хотим сглаживать и воду
+        boolean surfaceBlurIncludeWater = true;
 
         if (coordsJson.has("tuning") && coordsJson.get("tuning").isJsonObject()) {
             JsonObject t = coordsJson.getAsJsonObject("tuning");
@@ -411,10 +427,10 @@ public class SurfaceGenerator {
             if (t.has("surfaceBlurIncludeWater")) surfaceBlurIncludeWater = t.get("surfaceBlurIncludeWater").getAsBoolean();
         }
 
-        // --- Скругление границ всех OLM-зон (и воды, и суши), OSM/моря не трогаем
-        int olmFeatherRadius    = 5;  // толщина «пера»: 2–3 блока
-        int olmFeatherIters     = 10;  // сколько проходов
-        int olmFeatherMinVotes  = 2;  // минимум голосов из 8 соседей
+        // --- Скругление границ OLM-зон (и воды, и суши), OSM/моря не трогаем
+        int olmFeatherRadius    = 5;
+        int olmFeatherIters     = 10;
+        int olmFeatherMinVotes  = 2;
 
         if (coordsJson.has("tuning") && coordsJson.get("tuning").isJsonObject()) {
             JsonObject t = coordsJson.getAsJsonObject("tuning");
@@ -425,36 +441,40 @@ public class SurfaceGenerator {
 
         featherOlmZones(surface, minX, maxX, minZ, maxZ,
                 olmFeatherRadius, olmFeatherIters, olmFeatherMinVotes,
-                olmAll, waterFromOLM,          // кто из OLM и какая вода – тоже из OLM
-                waterProtected, lockedOSM);    // защищённая вода/OSM — вне игры
+                olmAll, waterFromOLM,
+                waterProtected, lockedOSM);
 
         blurSurface(surface, minX, maxX, minZ, maxZ,
-            surfaceBlurIters, surfaceBlurMinMajority,
-            /*includeWater=*/surfaceBlurIncludeWater,
-            waterProtected, waterFromOLM,
-            lockedOSM);
+                surfaceBlurIters, surfaceBlurMinMajority,
+                /*includeWater=*/surfaceBlurIncludeWater,
+                waterProtected, waterFromOLM,
+                lockedOSM);
 
         // Маска воды
         Set<Long> waterMask = new HashSet<>();
         for (Map.Entry<Long,String> e : surface.entrySet())
             if ("water".equals(e.getValue())) waterMask.add(e.getKey());
 
-        // === НОВОЕ: клетки обрывов/укреплений из OSM
-        Set<Long> cliffCapCells = extractCliffCellsFromOSM(
-                coordsJson,
-                centerLat, centerLng, east, west, north, south,
-                sizeMeters, centerX, centerZ,
-                minX, maxX, minZ, maxZ
-        );
+        // === НОВОЕ: клетки обрывов/укреплений из OSM (через стрим, если есть)
+        Set<Long> cliffCapCells = (store != null)
+                ? extractCliffCellsFromOSMStream(store,
+                        centerLat, centerLng, east, west, north, south,
+                        sizeMeters, centerX, centerZ,
+                        minX, maxX, minZ, maxZ)
+                : extractCliffCellsFromOSM(
+                        coordsJson,
+                        centerLat, centerLng, east, west, north, south,
+                        sizeMeters, centerX, centerZ,
+                        minX, maxX, minZ, maxZ
+                );
 
         broadcast(level, String.format("Размещение блоков (%d клеток)…", totalCells));
 
         // уровни воды
         Map<Long, Integer> waterSurfaceY = computeWaterSurfaceY(surface, terrainY, minX, maxX, minZ, maxZ);
 
-
-        // === экспорт/сохранение сетки рельефа ===
-        publishTerrainGrid(coordsJson, terrainY, minX, maxX, minZ, maxZ); // в coordsJson
+        // === экспорт/сохранение сетки рельефа — черновик (v1) для совместимости на ранних этапах
+        publishTerrainGrid(coordsJson, terrainY, minX, maxX, minZ, maxZ);
         File areaDir = detectAreaPackDir(demFile);
         if (areaDir != null) {
             try {
@@ -462,7 +482,7 @@ public class SurfaceGenerator {
                 JsonObject tg = coordsJson.getAsJsonObject("terrainGrid");
                 if (tg != null) {
                     Files.writeString(out.toPath(), tg.toString(), StandardCharsets.UTF_8);
-                    broadcast(level, "Сетка рельефа сохранена: " + out.getAbsolutePath());
+                    broadcast(level, "Сетка рельефа сохранена (черновик): " + out.getAbsolutePath());
                 }
             } catch (Exception e) {
                 System.err.println("[Cartopia] Не удалось сохранить terrain-grid.json: " + e);
@@ -472,6 +492,75 @@ public class SurfaceGenerator {
         // ВЫЗОВ placeBlocks с новым параметром
         placeBlocks(surface, terrainY, waterMask, waterSurfaceY, cliffCapCells, minX, maxX, minZ, maxZ, totalCells);
         broadcast(level, "Размещение блоков завершено.");
+
+        // === FINAL JSON (v2) + дублируем groundY как data для обратной совместимости ===
+        final int worldMin = level.getMinBuildHeight();
+        final int worldMax = level.getMaxBuildHeight();
+
+        JsonObject fin = new JsonObject();
+        fin.addProperty("version", 2);
+        fin.addProperty("minX", minX);
+        fin.addProperty("minZ", minZ);
+        fin.addProperty("width", width);
+        fin.addProperty("height", height);
+        fin.addProperty("order", "row-major(Z,X)");
+        fin.addProperty("worldMin", worldMin);
+        fin.addProperty("worldMax", worldMax);
+
+        // компактные "гриды" для быстрого доступа по индексу (z,x)
+        JsonArray groundYGrid = new JsonArray();
+        JsonArray topYGrid    = new JsonArray();
+        JsonArray waterYGrid  = new JsonArray();
+        JsonArray topBlockGrid= new JsonArray();
+
+        for (int z = minZ; z <= maxZ; z++) {
+            for (int x = minX; x <= maxX; x++) {
+                long k = key(x, z);
+                int yTop0 = terrainY.getOrDefault(k, Y_BASE);
+                if (yTop0 <= worldMin + 2) yTop0 = worldMin + 3;
+                if (yTop0 >= worldMax - 2) yTop0 = worldMax - 3;
+
+                String mat0 = surface.getOrDefault(k, "moss_block");
+
+                if ("water".equals(mat0) || waterMask.contains(k)) {
+                    int yWaterSurface = (waterSurfaceY != null && waterSurfaceY.containsKey(k))
+                            ? waterSurfaceY.get(k)
+                            : (yTop0 - 1);
+                    groundYGrid.add(yWaterSurface - 1);       // lapis
+                    topYGrid.add(yWaterSurface);
+                    waterYGrid.add(yWaterSurface);
+                    topBlockGrid.add("minecraft:water");
+                } else {
+                    boolean isCliff0 = (cliffCapCells != null && cliffCapCells.contains(k));
+                    groundYGrid.add(yTop0);
+                    topYGrid.add(isCliff0 ? (yTop0 + 1) : yTop0);
+                    waterYGrid.add(com.google.gson.JsonNull.INSTANCE);
+                    topBlockGrid.add(isCliff0 ? "minecraft:cracked_stone_bricks" : ("minecraft:" + mat0));
+                }
+            }
+        }
+
+        JsonObject grids = new JsonObject();
+        grids.add("groundY", groundYGrid);
+        grids.add("topY",    topYGrid);
+        grids.add("waterY",  waterYGrid);
+        grids.add("topBlock",topBlockGrid);
+        fin.add("grids", grids);
+
+        // Дублируем groundY как "data" (старый формат grid v1)
+        fin.add("data", groundYGrid.deepCopy());
+
+        coordsJson.add("terrainGrid", fin);
+        try {
+            File areaDir2 = detectAreaPackDir(demFile);
+            if (areaDir2 != null) {
+                File outFile = new File(areaDir2, "terrain-grid.json");
+                Files.writeString(outFile.toPath(), fin.toString(), StandardCharsets.UTF_8);
+                broadcast(level, "Финальный рельеф сохранён (v2 + data): " + outFile.getAbsolutePath());
+            }
+        } catch (Exception e) {
+            System.err.println("[Cartopia] Не удалось сохранить финальный terrain-grid.json: " + e);
+        }
     }
 
     // ===== helpers =====
@@ -805,10 +894,7 @@ public class SurfaceGenerator {
         return LANDCOVER_CLASS_TO_BLOCK.getOrDefault(cls, "moss_block");
     }
 
-    // ===== Поверхность: сглаживание только для воды из OLM; вода из OSM/моря — неизменяема и не учитывается =====
-    // Поверхность: сглаживаем только фон (OLM/дефолт), но НЕ трогаем
-    // 1) воду (sea+OSM) и 2) сушу, пришедшую из OSM (lockedOSM)
-    // Также lockedOSM и защищённая вода НЕ участвуют в голосовании.
+    // ===== Поверхность: сглаживание и перо OLM =====
     private static void blurSurface(Map<Long,String> srf,
                                     int minX, int maxX, int minZ, int maxZ,
                                     int iters, int minMajority, boolean includeWater,
@@ -882,7 +968,7 @@ public class SurfaceGenerator {
         HashSet<Long> ring = new HashSet<>();
         for (long k : olmAll) {
             if (lockedOSM.contains(k)) continue;                         // на всякий
-            if (protectedWater.contains(k) && !olmWater.contains(k)) continue; // чужая вода (не OLM) — не трогаем
+            if (protectedWater.contains(k) && !olmWater.contains(k)) continue; // чужая вода — не трогаем
 
             int x = (int)(k >> 32);
             int z = (int)k;
@@ -907,9 +993,9 @@ public class SurfaceGenerator {
                     int nx = x + dx, nz = z + dz;
                     if (nx<minX || nx>maxX || nz<minZ || nz>maxZ) continue;
                     long nk = key(nx, nz);
-                    if (!olmAll.contains(nk)) continue;                          // меняем только OLM
-                    if (lockedOSM.contains(nk)) continue;                        // OSM — нельзя
-                    if (protectedWater.contains(nk) && !olmWater.contains(nk)) continue; // «моря/OSM-вода» — нельзя
+                    if (!olmAll.contains(nk)) continue;
+                    if (lockedOSM.contains(nk)) continue;
+                    if (protectedWater.contains(nk) && !olmWater.contains(nk)) continue;
                     ring.add(nk);
                 }
             }
@@ -933,10 +1019,10 @@ public class SurfaceGenerator {
                     for (int dz=-1; dz<=1; dz++) {
                         if (dx==0 && dz==0) continue;
                         int nx = x+dx, nz = z+dz;
-                        if (nx<minX || nx>maxX || nz<minZ || nz>maxZ) continue;
+                        if (nx<minX||nx>maxX||nz<minZ||nz>maxZ) continue;
 
                         long nk = key(nx, nz);
-                        if (!olmAll.contains(nk)) continue;                        // голосуют только OLM-соседи
+                        if (!olmAll.contains(nk)) continue;
                         if (lockedOSM.contains(nk)) continue;
                         if (protectedWater.contains(nk) && !olmWater.contains(nk)) continue;
 
@@ -951,7 +1037,7 @@ public class SurfaceGenerator {
                         .stream().max(Map.Entry.comparingByValue()).get();
 
                 if (!best.getKey().equals(curVal) && best.getValue() >= minVotes) {
-                    next.put(k, best.getKey()); // позволяем переходы и в воду, и из воды — но только для OLM
+                    next.put(k, best.getKey());
                 }
             }
             cur = next;
@@ -1037,10 +1123,10 @@ public class SurfaceGenerator {
 
     // === Удаляем бугорки/ямки меньше 5×5 ===
     private static void despeckleHeights(Map<Long,Integer> h, int minX, int maxX, int minZ, int maxZ, int radius) {
-        Map<Long,Integer> tmp = grayscaleOpen(h, minX, maxX, minZ, maxZ, radius);   // убирает маленькие "пики"
-        tmp = grayscaleClose(tmp, minX, maxX, minZ, maxZ, radius);                  // засыпает маленькие "ямки"
+        Map<Long,Integer> tmp = grayscaleOpen(h, minX, maxX, minZ, maxZ, radius);
+        tmp = grayscaleClose(tmp, minX, maxX, minZ, maxZ, radius);
         h.clear(); h.putAll(tmp);
-        fixSingleCellSpikes(h, minX, maxX, minZ, maxZ);                              // точечные 1×1
+        fixSingleCellSpikes(h, minX, maxX, minZ, maxZ);
     }
 
     private static Map<Long,Integer> grayscaleOpen(Map<Long,Integer> src, int minX, int maxX, int minZ, int maxZ, int r) {
@@ -1092,46 +1178,17 @@ public class SurfaceGenerator {
         }
     }
 
-    @SuppressWarnings("unused")
-    private static String dominantAround(Map<Long,String> srf, int x, int z, int minX, int maxX, int minZ, int maxZ, int radius) {
-        Map<String,Integer> cnt = new HashMap<>();
-        for (int dx=-radius; dx<=radius; dx++) {
-            for (int dz=-radius; dz<=radius; dz++) {
-                if (dx==0 && dz==0) continue;
-                int nx=x+dx, nz=z+dz;
-                if (nx<minX||nx>maxX||nz<minZ||nz>maxZ) continue;
-                String m = srf.get(key(nx,nz));
-                if (m==null || "water".equals(m)) continue;
-                if (!("moss_block".equals(m) || "snow_block".equals(m) || "sandstone".equals(m))) continue;
-                cnt.merge(m, 1, Integer::sum);
-            }
-        }
-        if (cnt.isEmpty()) return "moss_block";
-        return cnt.entrySet().stream().max(Map.Entry.comparingByValue()).get().getKey();
-    }
-
     private void placeBlocks(Map<Long,String> surface, Map<Long,Integer> terrain,
-                            Set<Long> waterMask, Map<Long,Integer> waterSurfaceY,
-                            Set<Long> cliffCapCells,
-                            int minX, int maxX, int minZ, int maxZ, int totalCells) {
+                             Set<Long> waterMask, Map<Long,Integer> waterSurfaceY,
+                             Set<Long> cliffCapCells,
+                             int minX, int maxX, int minZ, int maxZ, int totalCells) {
         int done = 0;
         int nextConsole = 5;
         int[] chatMilestones = {25, 50, 75, 100};
         int chatIdx = 0;
 
-
         final int worldMin = level.getMinBuildHeight();
         final int worldMax = level.getMaxBuildHeight();
-
-        // === FINAL DUMP: коллекции для подробного результата ===
-        final int width  = maxX - minX + 1;
-        final int height = maxZ - minZ + 1;
-
-        // сюда сложим подробную информацию по КАЖДОЙ колонке (x,z)
-        final JsonArray columns = new JsonArray();
-
-        // а здесь — небольшая сводка: сколько каких top-блоков получилось
-        final Map<String,Integer> topBlockCounts = new HashMap<>();
 
         for (int x = minX; x <= maxX; x++) {
             for (int z = minZ; z <= maxZ; z++) {
@@ -1142,7 +1199,7 @@ public class SurfaceGenerator {
                 String mat = surface.getOrDefault(key(x, z), "moss_block");
 
                 if ("water".equals(mat) || waterMask.contains(key(x, z))) {
-                    // (как было) — вода
+                    // вода
                     int yWaterSurface = (waterSurfaceY != null && waterSurfaceY.containsKey(key(x,z)))
                             ? waterSurfaceY.get(key(x,z))
                             : (yTop - 1);
@@ -1155,121 +1212,19 @@ public class SurfaceGenerator {
                     setBlock(x, yWaterSurface,  z, "minecraft:water");
                     setBlock(x, yAirTop,        z, "minecraft:air");
                     clearColumnAbove(x, yAirTop + 1, z, worldMax);
-
-                    // --- FINAL LOG (water) ---
-                    {
-                        JsonObject col = new JsonObject();
-                        col.addProperty("x", x);
-                        col.addProperty("z", z);
-                        col.addProperty("isWater", true);
-                        col.addProperty("groundY", yLapis);            // дно под водой (lapis)
-                        col.addProperty("topY", yWaterSurface);        // верхний непустой блок
-                        col.addProperty("waterY", yWaterSurface);      // зеркало воды
-                        col.addProperty("groundBlock", "minecraft:lapis_block");
-                        col.addProperty("topBlock", "minecraft:water");
-                        col.addProperty("isCliffCap", false);
-
-                        // Полный профиль колонки (RLE)
-                        JsonArray runs = new JsonArray();
-                        if (yLapis - 1 >= worldMin) {
-                            JsonObject r1 = new JsonObject();
-                            r1.addProperty("y1", worldMin);
-                            r1.addProperty("y2", yLapis - 1);
-                            r1.addProperty("id", "minecraft:air");
-                            runs.add(r1);
-                        }
-                        {
-                            JsonObject r = new JsonObject();
-                            r.addProperty("y1", yLapis);
-                            r.addProperty("y2", yLapis);
-                            r.addProperty("id", "minecraft:lapis_block");
-                            runs.add(r);
-                        }
-                        {
-                            JsonObject r = new JsonObject();
-                            r.addProperty("y1", yWaterSurface);
-                            r.addProperty("y2", yWaterSurface);
-                            r.addProperty("id", "minecraft:water");
-                            runs.add(r);
-                        }
-                        if (yWaterSurface + 1 <= worldMax) {
-                            JsonObject r4 = new JsonObject();
-                            r4.addProperty("y1", yWaterSurface + 1);
-                            r4.addProperty("y2", worldMax);
-                            r4.addProperty("id", "minecraft:air");
-                            runs.add(r4);
-                        }
-                        col.add("runs", runs);
-                        columns.add(col);
-                        topBlockCounts.merge("minecraft:water", 1, Integer::sum);
-                    }
                 } else {
                     // суша
                     setBlock(x, yTop, z, "minecraft:" + mat);
 
                     boolean isCliff = (cliffCapCells != null && cliffCapCells.contains(key(x, z)));
                     if (isCliff) {
-                        // кладём «шапку» из потрескавшегося кирпича на 1 блок выше рельефа
                         setBlock(x, yTop + 1, z, "minecraft:cracked_stone_bricks");
-                        // чистим выше, начиная со следующего, чтобы «шапку» не снести
                         clearColumnAbove(x, yTop + 2, z, worldMax);
                     } else {
                         clearColumnAbove(x, yTop + 1, z, worldMax);
                     }
 
                     clearColumnBelow(x, z, worldMin, yTop - 1);
-
-                    // --- FINAL LOG (land) ---
-                    {
-                        String groundBlockId = "minecraft:" + mat;
-                        String topBlockId    = isCliff ? "minecraft:cracked_stone_bricks" : groundBlockId;
-                        int    topYFinal     = isCliff ? (yTop + 1) : yTop;
-
-                        JsonObject col = new JsonObject();
-                        col.addProperty("x", x);
-                        col.addProperty("z", z);
-                        col.addProperty("isWater", false);
-                        col.addProperty("groundY", yTop);             // высота рельефа
-                        col.addProperty("topY", topYFinal);           // самый верхний непустой блок
-                        col.add("waterY", com.google.gson.JsonNull.INSTANCE);
-                        col.addProperty("groundBlock", groundBlockId);
-                        col.addProperty("topBlock", topBlockId);
-                        col.addProperty("isCliffCap", isCliff);
-
-                        JsonArray runs = new JsonArray();
-                        if (yTop - 1 >= worldMin) {
-                            JsonObject r1 = new JsonObject();
-                            r1.addProperty("y1", worldMin);
-                            r1.addProperty("y2", yTop - 1);
-                            r1.addProperty("id", "minecraft:air");
-                            runs.add(r1);
-                        }
-                        {
-                            JsonObject r = new JsonObject();
-                            r.addProperty("y1", yTop);
-                            r.addProperty("y2", yTop);
-                            r.addProperty("id", groundBlockId);
-                            runs.add(r);
-                        }
-                        if (isCliff) {
-                            JsonObject r = new JsonObject();
-                            r.addProperty("y1", yTop + 1);
-                            r.addProperty("y2", yTop + 1);
-                            r.addProperty("id", "minecraft:cracked_stone_bricks");
-                            runs.add(r);
-                        }
-                        int airFrom = isCliff ? (yTop + 2) : (yTop + 1);
-                        if (airFrom <= worldMax) {
-                            JsonObject rLast = new JsonObject();
-                            rLast.addProperty("y1", airFrom);
-                            rLast.addProperty("y2", worldMax);
-                            rLast.addProperty("id", "minecraft:air");
-                            runs.add(rLast);
-                        }
-                        col.add("runs", runs);
-                        columns.add(col);
-                        topBlockCounts.merge(topBlockId, 1, Integer::sum);
-                    }
                 }
 
                 done++;
@@ -1285,94 +1240,20 @@ public class SurfaceGenerator {
                 }
             }
         }
-
-        // === FINAL JSON assembly & write: перезаписываем terrain-grid.json финальной версией ===
-        JsonObject fin = new JsonObject();
-        fin.addProperty("version", 2);
-        fin.addProperty("minX", minX);
-        fin.addProperty("minZ", minZ);
-        fin.addProperty("width", width);
-        fin.addProperty("height", height);
-        fin.addProperty("order", "row-major(Z,X)");  // порядок индексов в grid-ах ниже
-        fin.addProperty("worldMin", worldMin);
-        fin.addProperty("worldMax", worldMax);
-
-        // сводка: сколько каких top-блоков
-        JsonObject counts = new JsonObject();
-        for (Map.Entry<String,Integer> e : topBlockCounts.entrySet()) {
-            counts.addProperty(e.getKey(), e.getValue());
-        }
-        fin.add("countsByTopBlock", counts);
-
-        // детальные колонки с координатами и RLE-профилем
-        fin.add("columns", columns);
-
-        // Дополнительно — компактные "гриды" для быстрого доступа по индексу (z,x)
-        JsonArray groundYGrid = new JsonArray();
-        JsonArray topYGrid    = new JsonArray();
-        JsonArray waterYGrid  = new JsonArray();
-        JsonArray topBlockGrid= new JsonArray();
-
-        for (int z = minZ; z <= maxZ; z++) {
-            for (int x = minX; x <= maxX; x++) {
-                long k = key(x, z);
-                int yTop0 = terrain.getOrDefault(k, Y_BASE);
-                if (yTop0 <= worldMin + 2) yTop0 = worldMin + 3;
-                if (yTop0 >= worldMax - 2) yTop0 = worldMax - 3;
-
-                String mat0 = surface.getOrDefault(k, "moss_block");
-
-                if ("water".equals(mat0) || waterMask.contains(k)) {
-                    int yWaterSurface = (waterSurfaceY != null && waterSurfaceY.containsKey(k))
-                            ? waterSurfaceY.get(k)
-                            : (yTop0 - 1);
-                    groundYGrid.add(yWaterSurface - 1);       // lapis
-                    topYGrid.add(yWaterSurface);
-                    waterYGrid.add(yWaterSurface);
-                    topBlockGrid.add("minecraft:water");
-                } else {
-                    boolean isCliff0 = (cliffCapCells != null && cliffCapCells.contains(k));
-                    groundYGrid.add(yTop0);
-                    topYGrid.add(isCliff0 ? (yTop0 + 1) : yTop0);
-                    waterYGrid.add(com.google.gson.JsonNull.INSTANCE);
-                    topBlockGrid.add(isCliff0 ? "minecraft:cracked_stone_bricks" : ("minecraft:" + mat0));
-                }
-            }
-        }
-
-        JsonObject grids = new JsonObject();
-        grids.add("groundY", groundYGrid);    // индекс = (z-minZ)*width + (x-minX)
-        grids.add("topY",    topYGrid);
-        grids.add("waterY",  waterYGrid);     // null где суша
-        grids.add("topBlock",topBlockGrid);
-        fin.add("grids", grids);
-
-        // кладём в coordsJson и сохраняем файл (перезаписываем ранний черновик)
-        coordsJson.add("terrainGrid", fin);
-        try {
-            File areaDir = detectAreaPackDir(demFile);
-            if (areaDir != null) {
-                File outFile = new File(areaDir, "terrain-grid.json");
-                Files.writeString(outFile.toPath(), fin.toString(), StandardCharsets.UTF_8);
-                broadcast(level, "Финальный рельеф сохранён: " + outFile.getAbsolutePath());
-            }
-        } catch (Exception e) {
-            System.err.println("[Cartopia] Не удалось сохранить финальный terrain-grid.json: " + e);
-        }
     }
 
     private void setBlock(int x, int y, int z, String id) {
         Block b = ForgeRegistries.BLOCKS.getValue(ResourceLocation.tryParse(id));
         if (b == null) b = Blocks.MOSS_BLOCK;
-        level.setBlock(new BlockPos(x,y,z), b.defaultBlockState(), 3);
+        level.setBlock(mpos.set(x,y,z), b.defaultBlockState(), 3);
     }
     private void clearColumnAbove(int x, int fromY, int z, int toYInclusive) {
         int maxY = Math.min(level.getMaxBuildHeight(), toYInclusive);
-        for (int y=fromY; y<=maxY; y++) level.setBlock(new BlockPos(x,y,z), Blocks.AIR.defaultBlockState(), 3);
+        for (int y=fromY; y<=maxY; y++) level.setBlock(mpos.set(x,y,z), Blocks.AIR.defaultBlockState(), 3);
     }
     private void clearColumnBelow(int x, int z, int fromY, int toYInclusive) {
         int minY = Math.max(level.getMinBuildHeight(), fromY);
-        for (int y=minY; y<=toYInclusive; y++) level.setBlock(new BlockPos(x,y,z), Blocks.AIR.defaultBlockState(), 3);
+        for (int y=minY; y<=toYInclusive; y++) level.setBlock(mpos.set(x,y,z), Blocks.AIR.defaultBlockState(), 3);
     }
 
     private static long key(int x, int z) { return (((long)x)<<32) ^ (z & 0xffffffffL); }
@@ -1384,7 +1265,7 @@ public class SurfaceGenerator {
         final String material;
         final boolean isHole; // для inner-колец воды
         @SuppressWarnings("unused")
-        final String tagKV;   // исходный тег key=value для спец-логики (например, residential)
+        final String tagKV;   // исходный тег key=value
         final double minLat, maxLat, minLon, maxLon;
 
         ZonePoly(double[] lats, double[] lons, String material, boolean isHole, String tagKV) {
@@ -1409,7 +1290,7 @@ public class SurfaceGenerator {
     private static boolean isAreaByTags(JsonObject tags) {
         if ("yes".equals(optString(tags, "area"))) return true;
         String[] areaKeys = { "natural","landuse","leisure","amenity","building","water",
-                "landcover","military","aeroway","man_made","power","boundary","place" };
+        "landcover","military","aeroway","man_made","power","boundary","place","waterway" };
         for (String k: areaKeys) if (tags.has(k)) return true;
         return false;
     }
@@ -1427,7 +1308,7 @@ public class SurfaceGenerator {
         for (double[][] seg : segs) {
             int n = seg[0].length;
             List<double[]> poly = new ArrayList<>(n);
-            for (int i=0;i<n;i++) poly.add(new double[]{ seg[0][i], seg[1][i] }); // [lat,lon]
+            for (int i=0;i<n;i++) poly.add(new double[]{ seg[0][i], seg[1][i] });
             work.add(poly);
         }
         List<double[][]> rings = new ArrayList<>();
@@ -1477,6 +1358,7 @@ public class SurfaceGenerator {
     private static class MatMatch { final String material; final String tagKV; MatMatch(String m, String k){material=m; tagKV=k;} }
 
     private static MatMatch materialAndKeyForTags(JsonObject tags) {
+        if (tags == null) return null;
         if ("riverbank".equals(optString(tags, "waterway"))) return new MatMatch("water", "waterway=riverbank");
         if ("water".equals(optString(tags, "natural")))      return new MatMatch("water", "natural=water");
         if ("reservoir".equals(optString(tags, "landuse")))  return new MatMatch("water", "landuse=reservoir");
@@ -1493,6 +1375,156 @@ public class SurfaceGenerator {
         return null;
     }
 
+    // --- Вариант через NDJSON-стрим ---
+    private static List<ZonePoly> extractZonesFromOSMStream(GenerationStore store) {
+        List<ZonePoly> out = new ArrayList<>();
+        if (store == null) return out;
+
+        try (FeatureStream fs = store.featureStream()) {
+            for (JsonObject e : fs) {
+                String type = optString(e, "type");
+                if (type == null) continue;
+
+                JsonObject tags = e.has("tags") && e.get("tags").isJsonObject() ? e.getAsJsonObject("tags") : null;
+                MatMatch mm = materialAndKeyForTags(tags);
+                String mat = mm == null ? null : mm.material;
+                String tagKV = mm == null ? null : mm.tagKV;
+                JsonArray geom = e.has("geometry") && e.get("geometry").isJsonArray() ? e.getAsJsonArray("geometry") : null;
+
+                if ("relation".equals(type) && e.has("members") && e.get("members").isJsonArray()) {
+                    boolean treatAsArea = (mat != null) || isAreaByTags(tags);
+                    // NEW: считать мультиполигон реки как площадь, даже если теги только waterway=riverbank на relation
+                    if (!treatAsArea) {
+                        String ww = optString(tags, "waterway");
+                        String w  = optString(tags, "water");
+                        if ("riverbank".equals(ww) || "river".equals(w)) {
+                            treatAsArea = true;
+                            if (mat == null) {
+                                mat = "water";
+                                tagKV = (ww != null ? "waterway=" + ww : "water=" + w);
+                            }
+                        }
+                    }
+
+                    if (!treatAsArea) continue;
+
+                    List<double[][]> outerSegs = new ArrayList<>();
+                    List<double[][]> innerSegs = new ArrayList<>();
+
+                    for (JsonElement memEl : e.getAsJsonArray("members")) {
+                        JsonObject mem = memEl.getAsJsonObject();
+                        if (!"way".equals(optString(mem, "type"))) continue;
+                        String role = optString(mem, "role");
+                        JsonArray mGeom = mem.has("geometry") && mem.get("geometry").isJsonArray()
+                                ? mem.getAsJsonArray("geometry") : null;
+                        if (mGeom == null || mGeom.size() < 2) continue;
+
+                        int n = mGeom.size();
+                        double[] la = new double[n], lo = new double[n];
+                        for (int i=0;i<n;i++){ JsonObject p=mGeom.get(i).getAsJsonObject(); la[i]=p.get("lat").getAsDouble(); lo[i]=p.get("lon").getAsDouble(); }
+                        ("inner".equals(role) ? innerSegs : outerSegs).add(new double[][]{ la, lo });
+                    }
+
+                    List<double[][]> outers = stitchSegmentsToRings(outerSegs);
+                    List<double[][]> inners = stitchSegmentsToRings(innerSegs);
+
+                    boolean isWaterArea = "water".equals(mat)
+                            || "riverbank".equals(optString(tags, "waterway"))
+                            || "river".equals(optString(tags, "water"));
+                    for (double[][] r : outers) {
+                        if (isWaterArea) out.add(new ZonePoly(r[0], r[1], "water", false, tagKV));
+                        else if (mat != null) out.add(new ZonePoly(r[0], r[1], mat, false, tagKV));
+                    }
+                    if (isWaterArea) {
+                        for (double[][] h : inners) {
+                            out.add(new ZonePoly(h[0], h[1], "water", true, tagKV));
+                        }
+                    }
+
+                    // Fallback: если замкнутых колец не получилось (стрим не дал всех сегментов),
+                    // рисуем по самим outerSegs как по "открытым" цепочкам — rectIntersectsPolygon теперь их понимает.
+                    if ((outers == null || outers.isEmpty()) && !outerSegs.isEmpty()) {
+                        if (isWaterArea || mat != null) {
+                            for (double[][] seg : outerSegs) {
+                                double[] la = seg[0];
+                                double[] lo = seg[1];
+                                if (la != null && lo != null && la.length >= 2 && la.length == lo.length) {
+                                    out.add(new ZonePoly(la, lo, (isWaterArea ? "water" : mat), false, tagKV));
+                                }
+                            }
+                        }
+                    }
+
+                    continue;
+                }
+
+                if ("way".equals(type) && geom != null && geom.size() >= 2) {
+                    boolean closed = isClosed(geom);
+                    if (closed && (mat != null || isAreaByTags(tags))) {
+                        int n = geom.size();
+                        double[] la = new double[n], lo = new double[n];
+                        for (int i=0;i<n;i++){ JsonObject p=geom.get(i).getAsJsonObject(); la[i]=p.get("lat").getAsDouble(); lo[i]=p.get("lon").getAsDouble(); }
+                        if (mat != null) out.add(new ZonePoly(la, lo, mat, false, tagKV));
+                        continue;
+                    }
+                    else if (!closed && (mat != null || isAreaByTags(tags))) {
+                        // Fallback для площадных way, которые пришли незамкнутыми: добавим как "открытую" цепочку.
+                        int n = geom.size();
+                        double[] la = new double[n], lo = new double[n];
+                        for (int i=0; i<n; i++) {
+                            JsonObject p = geom.get(i).getAsJsonObject();
+                            la[i] = p.get("lat").getAsDouble();
+                            lo[i] = p.get("lon").getAsDouble();
+                        }
+                        if (mat != null) {
+                            out.add(new ZonePoly(la, lo, mat, false, tagKV));
+                        }
+                        // если mat == null, ничего не добавляем (иначе может «потянуть» нерелевантные зоны)
+                    }
+
+                    // линейная гидрография → расширяем до «ленты»
+                    if (isLinearWater(tags)) {
+                        int n = geom.size();
+                        double[] lats = new double[n], lons = new double[n];
+                        for (int i=0;i<n;i++){ JsonObject p=geom.get(i).getAsJsonObject(); lats[i]=p.get("lat").getAsDouble(); lons[i]=p.get("lon").getAsDouble(); }
+
+                        double widen = 0.0;
+                        String wTag = optString(tags, "width");
+                        if (wTag == null) wTag = optString(tags, "width:river");
+                        if (wTag == null) wTag = optString(tags, "est_width");
+                        if (wTag != null) try { widen = Double.parseDouble(wTag.replace(",", ".")); } catch (Exception ignore) {}
+                        if (widen <= 0) {
+                            String w = optString(tags, "waterway");
+                            widen = ("river".equals(w) ? 8 : "canal".equals(w) ? 4 : 1);
+                        }
+
+                        double midLat = lats[Math.max(0, n/2)];
+                        double dLat = widen / 111320.0;
+                        double dLon = widen / (111320.0 * Math.max(0.35, Math.cos(Math.toRadians(midLat))));
+
+                        double[] la = new double[2*n], lo = new double[2*n];
+                        for (int i=0;i<n;i++) {
+                            la[i]           = lats[i] + dLat; lo[i]           = lons[i] + dLon;
+                            la[2*n-1 - i]   = lats[i] - dLat; lo[2*n-1 - i]   = lons[i] - dLon;
+                        }
+                        out.add(new ZonePoly(la, lo, "water", false, "waterway=" + optString(tags,"waterway")));
+                    }
+                }
+
+                if ("relation".equals(type) && geom != null && geom.size() >= 4 && (mat != null || isAreaByTags(tags))) {
+                    int n = geom.size();
+                    double[] la = new double[n], lo = new double[n];
+                    for (int i=0;i<n;i++){ JsonObject p=geom.get(i).getAsJsonObject(); la[i]=p.get("lat").getAsDouble(); lo[i]=p.get("lon").getAsDouble(); }
+                    if (mat != null) out.add(new ZonePoly(la, lo, mat, false, tagKV));
+                }
+            }
+        } catch (Exception ex) {
+            System.err.println("[Cartopia] featureStream for zones failed: " + ex);
+        }
+        return out;
+    }
+
+    // --- Старый вариант через coords.features ---
     private static List<ZonePoly> extractZonesFromOSM(JsonObject root) {
         List<ZonePoly> out = new ArrayList<>();
         if (!root.has("features")) return out;
@@ -1517,7 +1549,7 @@ public class SurfaceGenerator {
 
             JsonArray geom = e.has("geometry") && e.get("geometry").isJsonArray() ? e.getAsJsonArray("geometry") : null;
 
-            // --- RELATION (multipolygon): сшиваем OUTER и вычитаем INNER ---
+            // --- RELATION (multipolygon) ---
             if ("relation".equals(type) && e.has("members") && e.get("members").isJsonArray()) {
                 boolean treatAsArea = (mat != null) || isAreaByTags(tags);
                 if (!treatAsArea) continue;
@@ -1548,7 +1580,7 @@ public class SurfaceGenerator {
                         out.add(new ZonePoly(r[0], r[1], "water", false, tagKV));
                     } else if (mat != null) {
                         out.add(new ZonePoly(r[0], r[1], mat, false, tagKV));
-                    } // иначе — пропускаем
+                    }
                 }
                 if (isWaterArea) {
                     for (double[][] h : inners) {
@@ -1559,7 +1591,7 @@ public class SurfaceGenerator {
                 continue;
             }
 
-            // --- WAY: площадные или линейная вода ---
+            // --- WAY ---
             if ("way".equals(type) && geom != null && geom.size() >= 2) {
                 boolean closed = isClosed(geom);
                 if (closed && (mat != null || isAreaByTags(tags))) {
@@ -1572,7 +1604,7 @@ public class SurfaceGenerator {
                     continue;
                 }
 
-                // линейная гидрография → расширяем до «ленты»
+                // линейная гидрография
                 if (isLinearWater(tags)) {
                     int n = geom.size();
                     double[] lats = new double[n], lons = new double[n];
@@ -1585,7 +1617,7 @@ public class SurfaceGenerator {
                     if (wTag != null) try { widen = Double.parseDouble(wTag.replace(",", ".")); } catch (Exception ignore) {}
                     if (widen <= 0) {
                         String w = optString(tags, "waterway");
-                        widen = ("river".equals(w) ? 8 : "canal".equals(w) ? 4 : 1); // метры
+                        widen = ("river".equals(w) ? 8 : "canal".equals(w) ? 4 : 1);
                     }
 
                     double midLat = lats[Math.max(0, n/2)];
@@ -1601,7 +1633,7 @@ public class SurfaceGenerator {
                 }
             }
 
-            // --- (редкий случай) relation с geometry[] на самом relation ---
+            // --- relation с geometry на самом relation ---
             if ("relation".equals(type) && geom != null && geom.size() >= 4 && (mat != null || isAreaByTags(tags))) {
                 int n = geom.size();
                 double[] la = new double[n], lo = new double[n];
@@ -1612,11 +1644,6 @@ public class SurfaceGenerator {
             }
         }
         return out;
-    }
-
-    private static String optString(JsonObject o, String k) {
-        try { return o.has(k) && !o.get(k).isJsonNull() ? o.get(k).getAsString() : null; }
-        catch (Throwable ignore) { return null; }
     }
 
     /** Чётно-нечётный алгоритм, lat/lon в градусах (lon = X, lat = Y) */
@@ -1630,7 +1657,7 @@ public class SurfaceGenerator {
         return inside;
     }
 
-    // ====== Пересечение прямоугольника клетки с полигоном (любой ненулевой контакт) ======
+    // ====== Пересечение прямоугольника клетки с полигоном ======
 
     private static final double EPS = 1e-12;
 
@@ -1662,9 +1689,21 @@ public class SurfaceGenerator {
         return !(aMaxLon < bMinLon || aMinLon > bMaxLon || aMaxLat < bMinLat || aMinLat > bMaxLat);
     }
 
+    // Кольцо считается замкнутым, если первая и последняя точки совпадают
+    private static boolean isClosedRing(double[] lats, double[] lons) {
+        if (lats == null || lons == null || lats.length < 2 || lats.length != lons.length) return false;
+        return Math.abs(lats[0] - lats[lats.length - 1]) < EPS && Math.abs(lons[0] - lons[lons.length - 1]) < EPS;
+    }
+
+
+    // Пересечение прямоугольника клетки с полигоном ИЛИ незамкнутой цепочкой (любой ненулевой контакт)
     private static boolean rectIntersectsPolygon(RectLL r, double[] polyLats, double[] polyLons) {
-        // 1) Любая вершина полигона внутри прямоугольника
-        for (int i=0;i<polyLats.length;i++) {
+        if (polyLats == null || polyLons == null || polyLats.length < 2 || polyLats.length != polyLons.length) return false;
+
+        final boolean closed = isClosedRing(polyLats, polyLons);
+
+        // 1) Любая вершина поли(линии) внутри прямоугольника
+        for (int i = 0; i < polyLats.length; i++) {
             double lat = polyLats[i], lon = polyLons[i];
             if (lon >= r.minLon - EPS && lon <= r.maxLon + EPS &&
                 lat >= r.minLat - EPS && lat <= r.maxLat + EPS) {
@@ -1672,35 +1711,49 @@ public class SurfaceGenerator {
             }
         }
 
-        // 2) Любой угол прямоугольника внутри полигона
-        double[][] rectPts = new double[][] {
-                {r.minLat, r.minLon},
-                {r.minLat, r.maxLon},
-                {r.maxLat, r.maxLon},
-                {r.maxLat, r.minLon}
-        };
-        for (double[] pt : rectPts) {
-            if (pointInPolygon(pt[0], pt[1], polyLats, polyLons)) return true;
+        // 2) Любой угол прямоугольника внутри полигона — только для ЗАМКНУТЫХ
+        if (closed) {
+            double[][] rectPts = new double[][]{
+                    {r.minLat, r.minLon},
+                    {r.minLat, r.maxLon},
+                    {r.maxLat, r.maxLon},
+                    {r.maxLat, r.minLon}
+            };
+            for (double[] pt : rectPts) {
+                if (pointInPolygon(pt[0], pt[1], polyLats, polyLons)) return true;
+            }
         }
 
-        // 3) Пересечение рёбер полигона с рёбрами прямоугольника
-        double[][] E = new double[][] {
-                {r.minLon, r.minLat, r.maxLon, r.minLat}, // низ
-                {r.maxLon, r.minLat, r.maxLon, r.maxLat}, // право
-                {r.maxLon, r.maxLat, r.minLon, r.maxLat}, // верх
-                {r.minLon, r.maxLat, r.minLon, r.minLat}  // лево
+        // 3) Пересечение рёбер: идём по сегментам [i-1 -> i]
+        //    Для незамкнутых НЕ добавляем "замыкающее" ребро last->first.
+        double[][] E = new double[][]{
+                {r.minLon, r.minLat, r.maxLon, r.minLat},
+                {r.maxLon, r.minLat, r.maxLon, r.maxLat},
+                {r.maxLon, r.maxLat, r.minLon, r.maxLat},
+                {r.minLon, r.maxLat, r.minLon, r.minLat}
         };
 
-        for (int i=0, j=polyLats.length-1; i<polyLats.length; j=i++) {
-            double x1 = polyLons[j], y1 = polyLats[j];
-            double x2 = polyLons[i], y2 = polyLats[i];
+        // сегменты внутри цепочки
+        for (int i = 1; i < polyLats.length; i++) {
+            double x1 = polyLons[i - 1], y1 = polyLats[i - 1];
+            double x2 = polyLons[i],     y2 = polyLats[i];
             for (double[] e : E) {
-                if (segmentsIntersect(x1,y1,x2,y2, e[0],e[1],e[2],e[3])) return true;
+                if (segmentsIntersect(x1, y1, x2, y2, e[0], e[1], e[2], e[3])) return true;
+            }
+        }
+
+        // если замкнутый — проверим ещё ребро last->first
+        if (closed) {
+            double x1 = polyLons[polyLons.length - 1], y1 = polyLats[polyLats.length - 1];
+            double x2 = polyLons[0],                   y2 = polyLats[0];
+            for (double[] e : E) {
+                if (segmentsIntersect(x1, y1, x2, y2, e[0], e[1], e[2], e[3])) return true;
             }
         }
 
         return false;
     }
+
 
     private static boolean segmentsIntersect(double x1, double y1, double x2, double y2,
                                              double x3, double y3, double x4, double y4) {
@@ -1709,9 +1762,8 @@ public class SurfaceGenerator {
         double o3 = orient(x3,y3,x4,y4,x1,y1);
         double o4 = orient(x3,y3,x4,y4,x2,y2);
 
-        if (o1*o2 < 0 && o3*o4 < 0) return true; // общий случай
+        if (o1*o2 < 0 && o3*o4 < 0) return true;
 
-        // коллинеарные случаи
         if (Math.abs(o1) < EPS && onSegment(x1,y1,x2,y2,x3,y3)) return true;
         if (Math.abs(o2) < EPS && onSegment(x1,y1,x2,y2,x4,y4)) return true;
         if (Math.abs(o3) < EPS && onSegment(x3,y3,x4,y4,x1,y1)) return true;
@@ -1729,19 +1781,13 @@ public class SurfaceGenerator {
                py >= Math.min(ay,by)-EPS && py <= Math.max(ay,by)+EPS;
     }
 
-    /** Формирует желаемую высоту поверхности воды по компонентам:
-     *  - у берегов вода на (высоте берега - 1);
-     *  - к центру стягиваем плавно к единому минимуму по берегам;
-     *  - применяем только если ширина компоненты >= 30 блоков (R >= 15);
-     *  - если ВСЯ область — вода (нет суши) — кладём всё на один уровень (sea level).
-     */
+    /** Формирует желаемую высоту поверхности воды (см. комментарии в исходнике) */
     private Map<Long, Integer> computeWaterSurfaceY(Map<Long,String> surface,
                                                     Map<Long,Integer> terrainY,
                                                     int minX, int maxX, int minZ, int maxZ) {
         final int worldMin = level.getMinBuildHeight();
         final int worldMax = level.getMaxBuildHeight() - 1;
 
-        // 1) Маски воды/суши
         HashSet<Long> water = new HashSet<>();
         boolean hasLand = false;
         for (int x=minX; x<=maxX; x++) for (int z=minZ; z<=maxZ; z++) {
@@ -1753,7 +1799,6 @@ public class SurfaceGenerator {
         Map<Long,Integer> out = new HashMap<>();
         if (water.isEmpty()) return out;
 
-        // 2) Если только вода — один уровень на всё
         if (!hasLand) {
             int flat = 62;
             try { flat = level.getSeaLevel(); } catch (Throwable ignore) {}
@@ -1762,7 +1807,6 @@ public class SurfaceGenerator {
             return out;
         }
 
-        // 3) Компоненты воды
         HashSet<Long> visited = new HashSet<>();
         int[][] dirs = new int[][]{{1,0},{-1,0},{0,1},{0,-1}};
 
@@ -1771,7 +1815,6 @@ public class SurfaceGenerator {
                 long sk = key(sx,sz);
                 if (!water.contains(sk) || visited.contains(sk)) continue;
 
-                // Собираем компоненту
                 ArrayDeque<long[]> q = new ArrayDeque<>();
                 ArrayList<long[]> compCells = new ArrayList<>();
                 q.add(new long[]{sx,sz});
@@ -1791,9 +1834,8 @@ public class SurfaceGenerator {
                     }
                 }
 
-                // Берега этой компоненты
                 ArrayDeque<long[]> seeds = new ArrayDeque<>();
-                Map<Long,Integer> seedHeight = new HashMap<>(); // высота воды у берега (берег-1)
+                Map<Long,Integer> seedHeight = new HashMap<>();
                 int minSeed = Integer.MAX_VALUE;
                 int maxR = 0;
 
@@ -1823,11 +1865,9 @@ public class SurfaceGenerator {
                 }
 
                 if (seeds.isEmpty()) {
-                    // компонент воды без видимых берегов внутри bbox — оставляем как есть
                     continue;
                 }
 
-                // BFS из всех берегов: расстояния и высота ближайшего берега
                 Map<Long,Integer> dist = new HashMap<>();
                 Map<Long,Integer> nearestH = new HashMap<>();
                 for (long[] s : seeds) {
@@ -1853,21 +1893,18 @@ public class SurfaceGenerator {
                         if (!water.contains(nk)) continue;
                         if (dist.containsKey(nk)) continue;
                         dist.put(nk, cd + 1);
-                        nearestH.put(nk, ch); // ближайший берег и его высота
+                        nearestH.put(nk, ch);
                         qq.add(new long[]{nx,nz});
                     }
                 }
 
-                // Проверка «ширины»: R >= 15 ⇒ ширина ~>= 30
                 if (maxR < 15) {
-                    // узко — не преобразуем
                     continue;
                 }
 
                 int R = Math.max(1, maxR);
-                int Wmin = minSeed; // единый минимум ближе к центру
+                int Wmin = minSeed;
 
-                // Назначаем высоты воды по формуле
                 for (Map.Entry<Long,Integer> e : dist.entrySet()) {
                     long k = e.getKey();
                     int d = e.getValue();
@@ -1882,7 +1919,6 @@ public class SurfaceGenerator {
         return out;
     }
 
-    // === Cliff helpers ===
     private static boolean isCliffLike(JsonObject tags) {
         if (tags == null) return false;
         String nat = optString(tags, "natural");
@@ -1919,7 +1955,74 @@ public class SurfaceGenerator {
         }
     }
 
-    /** Собираем клетки для cliff/embankment/retaining_wall из OSM. */
+    // NDJSON-стрим для обрывов/укреплений
+    private static Set<Long> extractCliffCellsFromOSMStream(
+            GenerationStore store,
+            double centerLat, double centerLng,
+            double east, double west, double north, double south,
+            int sizeMeters, int centerX, int centerZ,
+            int minX, int maxX, int minZ, int maxZ) {
+
+        Set<Long> out = new HashSet<>();
+        if (store == null) return out;
+
+        try (FeatureStream fs = store.featureStream()) {
+            for (JsonObject e : fs) {
+                String type = optString(e, "type");
+                JsonObject tags = e.has("tags") && e.get("tags").isJsonObject() ? e.getAsJsonObject("tags") : null;
+                if (!isCliffLike(tags)) continue;
+
+                if ("way".equals(type) && e.has("geometry") && e.get("geometry").isJsonArray()) {
+                    JsonArray geom = e.getAsJsonArray("geometry");
+                    if (geom.size() < 2) continue;
+                    JsonObject p0 = geom.get(0).getAsJsonObject();
+                    int[] prev = latlngToBlock(
+                            p0.get("lat").getAsDouble(), p0.get("lon").getAsDouble(),
+                            centerLat, centerLng, east, west, north, south,
+                            sizeMeters, centerX, centerZ);
+                    for (int i = 1; i < geom.size(); i++) {
+                        JsonObject pi = geom.get(i).getAsJsonObject();
+                        int[] cur = latlngToBlock(
+                                pi.get("lat").getAsDouble(), pi.get("lon").getAsDouble(),
+                                centerLat, centerLng, east, west, north, south,
+                                sizeMeters, centerX, centerZ);
+                        drawLineCells(prev[0], prev[1], cur[0], cur[1], minX, maxX, minZ, maxZ, out);
+                        prev = cur;
+                    }
+                }
+
+                if ("relation".equals(type) && e.has("members") && e.get("members").isJsonArray()) {
+                    for (JsonElement memEl : e.getAsJsonArray("members")) {
+                        JsonObject mem = memEl.getAsJsonObject();
+                        if (!"way".equals(optString(mem, "type"))) continue;
+                        if (!mem.has("geometry") || !mem.get("geometry").isJsonArray()) continue;
+                        JsonArray geom = mem.getAsJsonArray("geometry");
+                        if (geom.size() < 2) continue;
+
+                        JsonObject p0 = geom.get(0).getAsJsonObject();
+                        int[] prev = latlngToBlock(
+                                p0.get("lat").getAsDouble(), p0.get("lon").getAsDouble(),
+                                centerLat, centerLng, east, west, north, south,
+                                sizeMeters, centerX, centerZ);
+                        for (int i = 1; i < geom.size(); i++) {
+                            JsonObject pi = geom.get(i).getAsJsonObject();
+                            int[] cur = latlngToBlock(
+                                    pi.get("lat").getAsDouble(), pi.get("lon").getAsDouble(),
+                                    centerLat, centerLng, east, west, north, south,
+                                    sizeMeters, centerX, centerZ);
+                            drawLineCells(prev[0], prev[1], cur[0], cur[1], minX, maxX, minZ, maxZ, out);
+                            prev = cur;
+                        }
+                    }
+                }
+            }
+        } catch (Exception ex) {
+            System.err.println("[Cartopia] featureStream for cliffs failed: " + ex);
+        }
+        return out;
+    }
+
+    // Старый вариант (coords.features)
     private static Set<Long> extractCliffCellsFromOSM(
             JsonObject root,
             double centerLat, double centerLng,
@@ -1941,7 +2044,7 @@ public class SurfaceGenerator {
             JsonObject tags = e.has("tags") && e.get("tags").isJsonObject() ? e.getAsJsonObject("tags") : null;
             if (!isCliffLike(tags)) continue;
 
-            // WAY c geometry[]
+            // WAY
             if ("way".equals(type) && e.has("geometry") && e.get("geometry").isJsonArray()) {
                 JsonArray geom = e.getAsJsonArray("geometry");
                 if (geom.size() < 2) continue;
@@ -1961,7 +2064,7 @@ public class SurfaceGenerator {
                 }
             }
 
-            // RELATION с members[].geometry[] (редко, но поддержим)
+            // RELATION
             if ("relation".equals(type) && e.has("members") && e.get("members").isJsonArray()) {
                 for (JsonElement memEl : e.getAsJsonArray("members")) {
                     JsonObject mem = memEl.getAsJsonObject();
@@ -2027,4 +2130,8 @@ public class SurfaceGenerator {
         return demFile.getParentFile();
     }
 
+    private static String optString(JsonObject o, String k) {
+        try { return o.has(k) && !o.get(k).isJsonNull() ? o.get(k).getAsString() : null; }
+        catch (Throwable ignore) { return null; }
+    }
 }

@@ -1,5 +1,8 @@
 package com.cartopia.builder;
 
+import com.cartopia.store.FeatureStream;
+import com.cartopia.store.GenerationStore;
+import com.cartopia.store.TerrainGridStore;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
@@ -17,19 +20,28 @@ import net.minecraftforge.registries.ForgeRegistries;
 
 import java.util.*;
 
+/**
+ * RailLampGenerator — версия со стримингом OSM-элементов (NDJSON) и чтением рельефа из TerrainGridStore (mmap).
+ * Поведение логики не менялось: ставим фонари вдоль "surface" железных дорог, без метро/мостов/тоннелей.
+ */
 public class RailLampGenerator {
 
     private final ServerLevel level;
     private final JsonObject coords;
+    private final GenerationStore store;      // может быть null (fallback к старому поведению)
+    private final TerrainGridStore grid;      // может быть null
 
     private static final int RAIL_LAMP_PERIOD = 100;  // 1-в-1 как у тебя
     private static final int RAIL_LAMP_COLUMN_WALLS = 5;
 
     private static final class Counter { int v = 0; }
 
-    public RailLampGenerator(ServerLevel level, JsonObject coords) {
+    // НОВЫЙ конструктор: передаём store (из пайплайна). coords оставляем для геопривязки и fallback'ов.
+    public RailLampGenerator(ServerLevel level, JsonObject coords, GenerationStore store) {
         this.level = level;
         this.coords = coords;
+        this.store = store;
+        this.grid = (store != null) ? store.grid : null;
     }
 
     private static void broadcast(ServerLevel level, String msg) {
@@ -46,12 +58,11 @@ public class RailLampGenerator {
     public void generate() {
         broadcast(level, "💡 Расставляю фонари вдоль железных дорог…");
 
-        if (coords == null || !coords.has("features")) {
-            broadcast(level, "В coords нет features — пропускаю RailLampGenerator.");
+        // Геопривязка и границы из coords (как было)
+        if (coords == null || !coords.has("center") || !coords.has("bbox")) {
+            broadcast(level, "Нет center/bbox в coords — пропускаю RailLampGenerator.");
             return;
         }
-
-        // Геопривязка и границы
         JsonObject center = coords.getAsJsonObject("center");
         JsonObject bbox   = coords.getAsJsonObject("bbox");
 
@@ -78,6 +89,102 @@ public class RailLampGenerator {
         final int minZ = Math.min(a[1], b[1]);
         final int maxZ = Math.max(a[1], b[1]);
 
+        // === Путь 1 (НОВЫЙ): читаем features построчно из NDJSON через store ===
+        if (store != null) {
+            int totalRails = 0;
+
+            // Первый проход — считаем подходящие ways (для прогресса)
+            try (FeatureStream fs = store.featureStream()) {
+                for (JsonObject e : fs) {
+                    JsonObject tags = (e.has("tags") && e.get("tags").isJsonObject()) ? e.getAsJsonObject("tags") : null;
+                    if (tags == null) continue;
+                    if (!isRailCandidate(tags)) continue;
+                    if (!"way".equals(optString(e,"type"))) continue;
+                    if (!e.has("geometry") || !e.get("geometry").isJsonArray()) continue;
+                    if (e.getAsJsonArray("geometry").size() < 2) continue;
+                    // surface only
+                    String type = optString(tags, "railway");
+                    boolean isSubway = "subway".equals(type);
+                    if (isSubway) continue;
+                    if (isElevatedLike(tags) || isUndergroundLike(tags)) continue;
+                    totalRails++;
+                }
+            } catch (Exception ex) {
+                broadcast(level, "Ошибка чтения features NDJSON: " + ex.getMessage() + " — откатываюсь на старый путь.");
+                // fallback к старому пути ниже
+                handleLegacyFeaturesPath(minX, maxX, minZ, maxZ, centerLat, centerLng, east, west, north, south, sizeMeters, centerX, centerZ);
+                return;
+            }
+
+            // Второй проход — фактическая расстановка
+            int processed = 0;
+            try (FeatureStream fs = store.featureStream()) {
+                for (JsonObject e : fs) {
+                    JsonObject tags = (e.has("tags") && e.get("tags").isJsonObject()) ? e.getAsJsonObject("tags") : null;
+                    if (tags == null) continue;
+                    if (!isRailCandidate(tags)) continue;
+                    if (!"way".equals(optString(e,"type"))) continue;
+
+                    JsonArray geom = e.getAsJsonArray("geometry");
+                    if (geom == null || geom.size() < 2) continue;
+
+                    String type = optString(tags, "railway");
+                    boolean isSubway = "subway".equals(type);
+
+                    // только surface рельсы
+                    if (isSubway || isElevatedLike(tags) || isUndergroundLike(tags)) {
+                        processed++;
+                        continue;
+                    }
+
+                    Integer yHintTop = null;
+                    int prevX = Integer.MIN_VALUE, prevZ = Integer.MIN_VALUE;
+                    Counter lamp = new Counter();
+
+                    for (int i=0; i<geom.size(); i++) {
+                        JsonObject p = geom.get(i).getAsJsonObject();
+                        double lat = p.get("lat").getAsDouble();
+                        double lon = p.get("lon").getAsDouble();
+                        int[] xz = latlngToBlock(lat, lon, centerLat, centerLng, east, west, north, south, sizeMeters, centerX, centerZ);
+                        int x = xz[0], z = xz[1];
+
+                        if (prevX != Integer.MIN_VALUE) {
+                            placeLampsAlongSurfaceRailSegment(prevX, prevZ, x, z,
+                                    minX, maxX, minZ, maxZ, yHintTop, lamp);
+                        }
+
+                        // hint — по миру (быстро), строго не зависит от coords/grid
+                        yHintTop = findTopNonAirNearSkippingRails(x, z, yHintTop);
+                        prevX = x; prevZ = z;
+                    }
+
+                    processed++;
+                    if (totalRails > 0 && processed % Math.max(1, totalRails/10) == 0) {
+                        int pct = (int)Math.round(100.0 * processed / Math.max(1,totalRails));
+                        broadcast(level, "Фонари на рельсах: ~" + pct + "%");
+                    }
+                }
+            } catch (Exception ex) {
+                broadcast(level, "Ошибка второго прохода NDJSON: " + ex.getMessage());
+            }
+
+            broadcast(level, "Фонари вдоль железных дорог готовы.");
+            return;
+        }
+
+        // === Путь 2 (СТАРЫЙ): если store == null, читаем из coords.features.elements (как раньше) ===
+        handleLegacyFeaturesPath(minX, maxX, minZ, maxZ, centerLat, centerLng, east, west, north, south, sizeMeters, centerX, centerZ);
+    }
+
+    // Старый путь — оставляем как fallback на случай, если store == null или NDJSON сломан
+    private void handleLegacyFeaturesPath(int minX, int maxX, int minZ, int maxZ,
+                                          double centerLat, double centerLng,
+                                          double east, double west, double north, double south,
+                                          int sizeMeters, int centerX, int centerZ) {
+        if (coords == null || !coords.has("features")) {
+            broadcast(level, "В coords нет features — пропускаю RailLampGenerator.");
+            return;
+        }
         JsonArray elements = coords.getAsJsonObject("features").getAsJsonArray("elements");
         if (elements == null || elements.size() == 0) {
             broadcast(level, "OSM elements пуст — пропускаю фонари на рельсах.");
@@ -93,6 +200,11 @@ public class RailLampGenerator {
             if (!"way".equals(optString(e,"type"))) continue;
             if (!e.has("geometry") || !e.get("geometry").isJsonArray()) continue;
             if (e.getAsJsonArray("geometry").size() < 2) continue;
+
+            String type = optString(tags, "railway");
+            boolean isSubway = "subway".equals(type);
+            if (isSubway || isElevatedLike(tags) || isUndergroundLike(tags)) continue;
+
             totalRails++;
         }
 
@@ -109,19 +221,11 @@ public class RailLampGenerator {
 
             String type = optString(tags, "railway");
             boolean isSubway = "subway".equals(type);
-
-            // Фонари только для surface-рельс (не метро и не мосты/тоннели)
-            if (!isSubway && (isElevatedLike(tags) || isUndergroundLike(tags))) {
-                processed++;
-                continue;
-            }
-            if (isSubway) {
-                // для метро фонари в этом генераторе не ставим (как и было)
+            if (isSubway || isElevatedLike(tags) || isUndergroundLike(tags)) {
                 processed++;
                 continue;
             }
 
-            // Идём по сегментам
             Integer yHintTop = null;
             int prevX = Integer.MIN_VALUE, prevZ = Integer.MIN_VALUE;
             Counter lamp = new Counter();
@@ -138,7 +242,6 @@ public class RailLampGenerator {
                             minX, maxX, minZ, maxZ, yHintTop, lamp);
                 }
 
-                // обновляем hint приблизительно на поверхность рядом с конечной точкой отрезка
                 yHintTop = findTopNonAirNearSkippingRails(x, z, yHintTop);
                 prevX = x; prevZ = z;
             }
@@ -174,8 +277,8 @@ public class RailLampGenerator {
             int x = pt[0], z = pt[1];
             if (x < minX || x > maxX || z < minZ || z > maxZ) continue;
 
-            // берем реальный y рельефа (как в генераторе путей)
-            int yBase = terrainYFromCoordsOrWorld(x, z, yHintTop);
+            // базовый y — по grid, если есть; иначе как раньше
+            int yBase = terrainYFromGridOrWorld(x, z, yHintTop);
             if (yBase < worldMin || yBase + 1 > worldMax) {
                 lamp.v++;
                 continue;
@@ -205,7 +308,6 @@ public class RailLampGenerator {
 
     // === ПОСТАНОВКА ФОНАРЯ (1-в-1 как в твоём RailGenerator) ===
 
-    // НЕ СТАВИТЬ ФОНАРИ на дорожный серый/белый/жёлтый бетон
     private static boolean isGrayConcrete(Block b) {
         ResourceLocation key = ForgeRegistries.BLOCKS.getKey(b);
         if (key == null) return false;
@@ -224,48 +326,6 @@ public class RailLampGenerator {
             || "minecraft:glowstone".equals(id);
     }
 
-    @SuppressWarnings("unused")
-    private void placeRailLamp(int edgeX, int edgeZ, int yBase,
-                               boolean horizontalMajor, int towardCenterSign,
-                               int minX, int maxX, int minZ, int maxZ) {
-        if (edgeX < minX || edgeX > maxX || edgeZ < minZ || edgeZ > maxZ) return;
-
-        final int worldMin = level.getMinBuildHeight();
-        final int worldMax = level.getMaxBuildHeight() - 1;
-
-        // Берём фактический рельеф в точке установки и ставим колонну "на поверхность" (ySurf+1)
-        int ySurfEdge = findTopNonAirNearSkippingRails(edgeX, edgeZ, null);
-        if (ySurfEdge == Integer.MIN_VALUE) return;
-
-        // НЕ ставим фонарь, если верхний не-air блок — серый/белый/жёлтый бетон дороги
-        Block under = level.getBlockState(new BlockPos(edgeX, ySurfEdge, edgeZ)).getBlock();
-        if (isGrayConcrete(under)) return;
-
-        int y0   = ySurfEdge + 1;                                   // база колонны на уровне «как рельсы»
-        int yTop = Math.min(y0 + RAIL_LAMP_COLUMN_WALLS - 1, worldMax);
-
-        // 1) Колонна из стен
-        for (int y = y0; y <= yTop; y++) {
-            level.setBlock(new BlockPos(edgeX, y, edgeZ), Blocks.ANDESITE_WALL.defaultBlockState(), 3);
-        }
-
-        // 2) ДВА нижних полублока, направленных к центру пути
-        int ySlab = yTop + 1;
-        if (ySlab > worldMax) return;
-
-        int sx = horizontalMajor ? 0 : towardCenterSign;
-        int sz = horizontalMajor ? towardCenterSign : 0;
-
-        placeBottomSlab(edgeX,          ySlab, edgeZ,          Blocks.SMOOTH_STONE_SLAB);
-        placeBottomSlab(edgeX + sx,     ySlab, edgeZ + sz,     Blocks.SMOOTH_STONE_SLAB);
-
-        // 3) Светокамень под КРАЙНИМ (вторым) полублоком
-        int gx = edgeX + sx, gz = edgeZ + sz, gy = ySlab - 1;
-        if (gy >= worldMin && gy <= worldMax && gx >= minX && gx <= maxX && gz >= minZ && gz <= maxZ) {
-            level.setBlock(new BlockPos(gx, gy, gz), Blocks.GLOWSTONE.defaultBlockState(), 3);
-        }
-    }
-
     private void placeBottomSlab(int x, int y, int z, Block slabBlock) {
         BlockState st = slabBlock.defaultBlockState();
         if (st.hasProperty(SlabBlock.TYPE)) {
@@ -274,7 +334,7 @@ public class RailLampGenerator {
         level.setBlock(new BlockPos(x, y, z), st, 3);
     }
 
-    // === УТИЛИТЫ / ФИЛЬТРЫ (скопировано из RailGenerator, чтобы было 1-в-1) ===
+    // === УТИЛИТЫ / ФИЛЬТРЫ (как было) ===
 
     private static boolean isRailCandidate(JsonObject tags) {
         String r = optString(tags, "railway");
@@ -341,7 +401,6 @@ public class RailLampGenerator {
     }
 
     private static boolean isUndergroundLike(JsonObject tags) {
-        // tunnel=*, layer<0, level<0, location=underground/below_ground
         if (isTunnel(tags)) return true;
         String layer = optString(tags, "layer");
         if (layer != null && layer.matches(".*-\\d+.*")) return true;
@@ -356,7 +415,6 @@ public class RailLampGenerator {
     }
 
     private static boolean isElevatedLike(JsonObject tags) {
-        // bridge-like без явного bridge: layer>0, level>0, bridge:structure=*, location=overground
         if (isBridge(tags)) return true;
         String layer = optString(tags, "layer");
         if (layer != null && layer.matches(".*\\b[1-9]\\d*.*")) return true;
@@ -368,32 +426,99 @@ public class RailLampGenerator {
         return false;
     }
 
-    private int terrainYFromCoordsOrWorld(int x, int z, Integer hintY) {
+    // === НОВОЕ: доступ к рельефу через TerrainGridStore (mmap) с fallback'ами ===
+
+    /** Базовый Y по grid, если он есть; иначе как раньше (по миру). */
+    private int terrainYFromGridOrWorld(int x, int z, Integer hintY) {
+        Integer gy = groundYFromGrid(x, z);
+        if (gy != null) return gy;
+        return findTopNonAirNearSkippingRails(x, z, hintY);
+    }
+
+    private Integer terrainGroundYFromAny(int x, int z) {
+        Integer gy = groundYFromGrid(x, z);  // mmap
+        if (gy != null) return gy;
         try {
             if (coords != null && coords.has("terrainGrid")) {
-                JsonObject g = coords.getAsJsonObject("terrainGrid");
-                int minX = g.get("minX").getAsInt();
-                int minZ = g.get("minZ").getAsInt();
-                int w    = g.get("width").getAsInt();
-                int h    = g.get("height").getAsInt();
-                int ix = x - minX, iz = z - minZ;
-                if (ix >= 0 && ix < w && iz >= 0 && iz < h) {
-                    JsonArray data = g.getAsJsonArray("data");
-                    int idx = iz * w + ix;
-                    return data.get(idx).getAsInt();
+                JsonObject tg = coords.getAsJsonObject("terrainGrid");
+                int minX = tg.get("minX").getAsInt();
+                int minZ = tg.get("minZ").getAsInt();
+                int width = tg.get("width").getAsInt();
+                int idx = (z - minZ) * width + (x - minX);
+                if (idx >= 0) {
+                    // v2
+                    if (tg.has("grids")) {
+                        JsonObject grids = tg.getAsJsonObject("grids");
+                        if (grids.has("groundY")) {
+                            JsonArray g = grids.getAsJsonArray("groundY");
+                            if (idx < g.size()) return g.get(idx).getAsInt();
+                        }
+                    }
+                    // v1
+                    if (tg.has("data")) {
+                        JsonArray d = tg.getAsJsonArray("data");
+                        if (idx < d.size()) return d.get(idx).getAsInt();
+                    }
                 }
             }
         } catch (Throwable ignore) {}
-        // fallback (на всякий) — как раньше
-        return findTopNonAirNearSkippingRails(x, z, hintY);
+        return null;
     }
+
+
+    private Integer groundYFromGrid(int x, int z) {
+        try {
+            if (grid != null && grid.inBounds(x, z)) {
+                int v = grid.groundY(x, z);
+                if (v != Integer.MIN_VALUE) return v;
+            }
+        } catch (Throwable ignore) {}
+        return null;
+    }
+
+    private boolean isWaterCellByGrid(int x, int z) {
+        try {
+            if (grid == null || !grid.inBounds(x,z)) return false;
+            Integer wy = grid.waterY(x, z);
+            if (wy != null) return true;
+            String tb = grid.topBlockId(x, z);
+            return "minecraft:water".equals(tb);
+        } catch (Throwable ignore) {}
+        return false;
+    }
+
+    private boolean isWaterCellByAny(int x, int z) {
+        if (isWaterCellByGrid(x, z)) return true;
+        // фолбэк по coords, как в дорожном генераторе
+        try {
+            if (coords == null || !coords.has("terrainGrid")) return false;
+            JsonObject tg = coords.getAsJsonObject("terrainGrid");
+            int minX = tg.get("minX").getAsInt();
+            int minZ = tg.get("minZ").getAsInt();
+            int width = tg.get("width").getAsInt();
+            int idx = (z - minZ) * width + (x - minX);
+            if (idx < 0) return false;
+            if (tg.has("grids")) {
+                JsonObject grids = tg.getAsJsonObject("grids");
+                if (grids.has("waterY")) {
+                    JsonArray waterY = grids.getAsJsonArray("waterY");
+                    if (idx < waterY.size()) return !waterY.get(idx).isJsonNull();
+                }
+                if (grids.has("topBlock")) {
+                    JsonArray tb = grids.getAsJsonArray("topBlock");
+                    if (idx < tb.size()) return "minecraft:water".equals(tb.get(idx).getAsString());
+                }
+            }
+        } catch (Throwable ignore) {}
+        return false;
+    }
+
 
     private static boolean isRailBlock(Block b) {
         return b == Blocks.RAIL || b == Blocks.POWERED_RAIL || b == Blocks.DETECTOR_RAIL || b == Blocks.ACTIVATOR_RAIL;
     }
 
-    /** Верхний не-air, но рельсы считаем как воздух (чтобы база не «лезла» на рельс). */
-    /** Верхний не-air, но рельсы и детали фонаря считаем как воздух. */
+    /** Верхний не-air, но рельсы и детали фонаря считаем как воздух (чтобы база не «лезла» на рельс). */
     private int findTopNonAirNearSkippingRails(int x, int z, Integer hintY) {
         final int worldMin = level.getMinBuildHeight();
         final int worldMax = level.getMaxBuildHeight() - 1;
@@ -419,22 +544,22 @@ public class RailLampGenerator {
 
     /** Пытается поставить фонарь в точке; возвращает true, если получилось. */
     private boolean tryPlaceRailLampAt(int edgeX, int edgeZ, Integer hintY,
-                                    boolean horizontalMajor, int towardCenterSign,
-                                    int minX, int maxX, int minZ, int maxZ) {
+                                       boolean horizontalMajor, int towardCenterSign,
+                                       int minX, int maxX, int minZ, int maxZ) {
         if (edgeX < minX || edgeX > maxX || edgeZ < minZ || edgeZ > maxZ) return false;
 
         final int worldMin = level.getMinBuildHeight();
         final int worldMax = level.getMaxBuildHeight() - 1;
 
-        // Верхний не-air в мире (рельсы и детали фонаря считаем "воздухом" только для поиска поверхности)
+        // Верхний не-air в мире (рельсы/детали фонаря считаем "воздухом" только для поиска поверхности)
         int ySurfEdge = findTopNonAirNearSkippingRails(edgeX, edgeZ, hintY);
         if (ySurfEdge == Integer.MIN_VALUE) return false;
 
-        // === Жёсткая привязка к рельефу по terrainGrid ===
-        Integer gridY = terrainGroundYFromGrid(edgeX, edgeZ);
-        if (gridY == null) return false;           // нет данных о рельефе — пропуск
-        if (isWaterCell(edgeX, edgeZ)) return false; // вода — запрещено
-        if (ySurfEdge != gridY) return false;      // верхний блок мира не совпал с высотой рельефа — пропуск
+        // === Жёсткая привязка к grid: нужна согласованность с groundY и запрет на воду
+        Integer gridY = terrainGroundYFromAny(edgeX, edgeZ);
+        if (gridY == null) return false;             // нет данных — пропуск
+        if (isWaterCellByAny(edgeX, edgeZ)) return false;
+        if (Math.abs(ySurfEdge - gridY) > 1) return false;       // конфликт с рельефом — пропуск
 
         // Нельзя ставить на дорожные серый/белый/жёлтый бетоны
         Block under = level.getBlockState(new BlockPos(edgeX, gridY, edgeZ)).getBlock();
@@ -444,7 +569,6 @@ public class RailLampGenerator {
         int y0 = gridY + 1;
         if (y0 > worldMax) return false;
 
-        // Геометрия фонаря
         int yTop  = Math.min(y0 + RAIL_LAMP_COLUMN_WALLS - 1, worldMax);
         int ySlab = yTop + 1;
         if (ySlab > worldMax) return false;
@@ -452,21 +576,16 @@ public class RailLampGenerator {
         int sx = horizontalMajor ? 0 : towardCenterSign;
         int sz = horizontalMajor ? towardCenterSign : 0;
 
-        // Glowstone под вторым слэбом
         int gx = edgeX + sx;
         int gz = edgeZ + sz;
         int gy = ySlab - 1;
 
         // === "Сухой прогон": ничего не ставим, если где-то не воздух ===
-
-        // Колонна целиком
         for (int y = y0; y <= yTop; y++) {
             if (!level.getBlockState(new BlockPos(edgeX, y, edgeZ)).isAir()) return false;
         }
-        // Две плиты
         if (!level.getBlockState(new BlockPos(edgeX,      ySlab, edgeZ     )).isAir()) return false;
         if (!level.getBlockState(new BlockPos(edgeX + sx, ySlab, edgeZ + sz)).isAir()) return false;
-        // Glowstone (если внутри мира/границ)
         if (gy >= worldMin && gy <= worldMax && gx >= minX && gx <= maxX && gz >= minZ && gz <= maxZ) {
             if (!level.getBlockState(new BlockPos(gx, gy, gz)).isAir()) return false;
         }
@@ -475,75 +594,12 @@ public class RailLampGenerator {
         for (int y = y0; y <= yTop; y++) {
             level.setBlock(new BlockPos(edgeX, y, edgeZ), Blocks.ANDESITE_WALL.defaultBlockState(), 3);
         }
-
         placeBottomSlab(edgeX,      ySlab, edgeZ,      Blocks.SMOOTH_STONE_SLAB);
         placeBottomSlab(edgeX + sx, ySlab, edgeZ + sz, Blocks.SMOOTH_STONE_SLAB);
-
         if (gy >= worldMin && gy <= worldMax && gx >= minX && gx <= maxX && gz >= minZ && gz <= maxZ) {
             level.setBlock(new BlockPos(gx, gy, gz), Blocks.GLOWSTONE.defaultBlockState(), 3);
         }
 
         return true;
     }
-
-    // Вернёт высоту рельефа groundY из coords. Поддерживает v1 (data[]) и v2 (grids.groundY[]).
-    private Integer terrainGroundYFromGrid(int x, int z) {
-        try {
-            if (coords == null || !coords.has("terrainGrid")) return null;
-            JsonObject tg = coords.getAsJsonObject("terrainGrid");
-            if (tg == null) return null;
-
-            int minX = tg.get("minX").getAsInt();
-            int minZ = tg.get("minZ").getAsInt();
-            int width = tg.get("width").getAsInt();
-            int idx = (z - minZ) * width + (x - minX);
-            if (idx < 0) return null;
-
-            // v2: terrainGrid.grids.groundY[]
-            if (tg.has("grids") && tg.get("grids").isJsonObject()) {
-                JsonObject grids = tg.getAsJsonObject("grids");
-                if (!grids.has("groundY")) return null;
-                JsonArray groundY = grids.getAsJsonArray("groundY");
-                if (idx >= groundY.size()) return null;
-                return groundY.get(idx).getAsInt();
-            }
-
-            // v1: terrainGrid.data[]
-            if (tg.has("data") && tg.get("data").isJsonArray()) {
-                JsonArray data = tg.getAsJsonArray("data");
-                if (idx >= data.size()) return null;
-                return data.get(idx).getAsInt();
-            }
-        } catch (Throwable ignore) {}
-        return null;
-    }
-
-    // true если клетка — вода (по финальному terrain-grid: waterY != null или topBlock == "minecraft:water")
-    private boolean isWaterCell(int x, int z) {
-        try {
-            if (coords == null || !coords.has("terrainGrid")) return false;
-            JsonObject tg = coords.getAsJsonObject("terrainGrid");
-            int minX = tg.get("minX").getAsInt();
-            int minZ = tg.get("minZ").getAsInt();
-            int width = tg.get("width").getAsInt();
-            int idx = (z - minZ) * width + (x - minX);
-            if (idx < 0) return false;
-
-            if (tg.has("grids") && tg.get("grids").isJsonObject()) {
-                JsonObject grids = tg.getAsJsonObject("grids");
-                if (grids.has("waterY")) {
-                    JsonArray waterY = grids.getAsJsonArray("waterY");
-                    if (idx >= waterY.size()) return false;
-                    return !waterY.get(idx).isJsonNull();
-                }
-                if (grids.has("topBlock")) {
-                    JsonArray tb = grids.getAsJsonArray("topBlock");
-                    if (idx >= tb.size()) return false;
-                    return "minecraft:water".equals(tb.get(idx).getAsString());
-                }
-            }
-        } catch (Throwable ignore) {}
-        return false;
-    }
-
 }

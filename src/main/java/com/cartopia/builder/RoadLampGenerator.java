@@ -1,11 +1,13 @@
 package com.cartopia.builder;
 
+import com.cartopia.store.FeatureStream;
+import com.cartopia.store.GenerationStore;
+import com.cartopia.store.TerrainGridStore;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import net.minecraft.core.BlockPos;
 import net.minecraft.network.chat.Component;
-import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.level.block.Block;
@@ -14,9 +16,16 @@ import net.minecraft.world.level.block.SlabBlock;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.block.state.properties.SlabType;
 import net.minecraftforge.registries.ForgeRegistries;
+import net.minecraft.resources.ResourceLocation;
 
 import java.util.*;
 
+/**
+ * RoadLampGenerator — потоковая версия:
+ * - OSM читаем из GenerationStore.featureStream() (NDJSON, построчно)
+ * - рельеф/вода/topBlock читаем из TerrainGridStore (mmap)
+ * - при отсутствии store/sidecar-ов мягко фолбэчим на coords.json (как раньше)
+ */
 public class RoadLampGenerator {
 
     // === ПАРАМЕТРЫ ЛАМП ===
@@ -29,11 +38,21 @@ public class RoadLampGenerator {
     private final Set<Long> placedByRoadLamps = new HashSet<>();
 
     private final ServerLevel level;
-    private final JsonObject coords;
+    private final JsonObject coords;             // оставляем для геопривязки + фолбэков
+    private final GenerationStore store;         // НОВОЕ: источник стримов/гридов (может быть null)
+    private final TerrainGridStore grid;         // НОВОЕ: удобная ссылка (может быть null)
 
-    public RoadLampGenerator(ServerLevel level, JsonObject coords) {
+    // --- конструкторы ---
+    public RoadLampGenerator(ServerLevel level, JsonObject coords, GenerationStore store) {
         this.level = level;
         this.coords = coords;
+        this.store = store;
+        this.grid = (store != null) ? store.grid : null;
+    }
+
+    /** Временный фолбэк — если пайплайн ещё не передаёт store. */
+    public RoadLampGenerator(ServerLevel level, JsonObject coords) {
+        this(level, coords, null);
     }
 
     // --- широковещалка ---
@@ -110,30 +129,35 @@ public class RoadLampGenerator {
     public void generate() {
         broadcast(level, "💡 Расставляю дорожные фонари вокруг уже построенных дорог…");
 
-        if (coords == null || !coords.has("features")) {
-            broadcast(level, "В coords нет features — пропускаю RoadLampGenerator.");
+        // 1) Геопривязка из index (если есть) или из coords
+        JsonObject sourceIndex = (store != null && store.indexJsonObject() != null)
+                ? store.indexJsonObject() : coords;
+
+        if (sourceIndex == null || !sourceIndex.has("bbox") || !sourceIndex.has("center")) {
+            broadcast(level, "Нет center/bbox — пропускаю RoadLampGenerator.");
             return;
         }
 
-        // Геопривязка и границы
-        JsonObject center = coords.getAsJsonObject("center");
-        JsonObject bbox   = coords.getAsJsonObject("bbox");
+        JsonObject center = sourceIndex.getAsJsonObject("center");
+        JsonObject bbox   = sourceIndex.getAsJsonObject("bbox");
 
         final double centerLat = center.get("lat").getAsDouble();
         final double centerLng = center.get("lng").getAsDouble();
-        final int    sizeMeters = coords.get("sizeMeters").getAsInt();
+        final int    sizeMeters = sourceIndex.has("sizeMeters") ? sourceIndex.get("sizeMeters").getAsInt()
+                                                                : (coords != null && coords.has("sizeMeters")
+                                                                    ? coords.get("sizeMeters").getAsInt() : 1000);
 
         final double south = bbox.get("south").getAsDouble();
         final double north = bbox.get("north").getAsDouble();
         final double west  = bbox.get("west").getAsDouble();
         final double east  = bbox.get("east").getAsDouble();
 
-        final int centerX = coords.has("player")
-                ? (int)Math.round(coords.getAsJsonObject("player").get("x").getAsDouble())
-                : 0;
-        final int centerZ = coords.has("player")
-                ? (int)Math.round(coords.getAsJsonObject("player").get("z").getAsDouble())
-                : 0;
+        final int centerX = sourceIndex.has("player") && sourceIndex.get("player").isJsonObject()
+                ? (int)Math.round(sourceIndex.getAsJsonObject("player").get("x").getAsDouble())
+                : (coords != null && coords.has("player") ? (int)Math.round(coords.getAsJsonObject("player").get("x").getAsDouble()) : 0);
+        final int centerZ = sourceIndex.has("player") && sourceIndex.get("player").isJsonObject()
+                ? (int)Math.round(sourceIndex.getAsJsonObject("player").get("z").getAsDouble())
+                : (coords != null && coords.has("player") ? (int)Math.round(coords.getAsJsonObject("player").get("z").getAsDouble()) : 0);
 
         int[] a = latlngToBlock(south, west, centerLat, centerLng, east, west, north, south, sizeMeters, centerX, centerZ);
         int[] b = latlngToBlock(north, east, centerLat, centerLng, east, west, north, south, sizeMeters, centerX, centerZ);
@@ -142,73 +166,119 @@ public class RoadLampGenerator {
         final int minZ = Math.min(a[1], b[1]);
         final int maxZ = Math.max(a[1], b[1]);
 
-        JsonArray elements = coords.getAsJsonObject("features").getAsJsonArray("elements");
-        if (elements == null || elements.size() == 0) {
-            broadcast(level, "OSM elements пуст — пропускаю фонари.");
-            return;
-        }
-
+        // 2) Источник OSM-элементов: предпочтительно NDJSON через FeatureStream
+        boolean usedStream = (store != null);
         int totalWays = 0;
-        for (JsonElement el : elements) {
-            JsonObject e = el.getAsJsonObject();
-            JsonObject tags = e.has("tags") && e.get("tags").isJsonObject() ? e.getAsJsonObject("tags") : null;
-            if (tags == null) continue;
-            if (!isRoadCandidate(tags)) continue;            // только линии-дороги
-            if (isBridgeOrTunnel(tags)) continue;            // мосты/тоннели пропускаем
-            if (!"way".equals(optString(e,"type"))) continue;
-            if (!e.has("geometry") || !e.get("geometry").isJsonArray()) continue;
-            if (e.getAsJsonArray("geometry").size() < 2) continue;
-            totalWays++;
-        }
 
-        int processed = 0;
-        for (JsonElement el : elements) {
-            JsonObject e = el.getAsJsonObject();
-            JsonObject tags = e.has("tags") && e.get("tags").isJsonObject() ? e.getAsJsonObject("tags") : null;
-            if (tags == null) continue;
-
-            if (!isRoadCandidate(tags)) continue;
-            if (isBridgeOrTunnel(tags)) continue;
-            if (!"way".equals(optString(e,"type"))) continue;
-
-            JsonArray geom = e.getAsJsonArray("geometry");
-            if (geom == null || geom.size() < 2) continue;
-
-            String highway = optString(tags, "highway");
-            String aeroway = optString(tags, "aeroway");
-            String styleKey = (highway != null) ? highway
-                            : (aeroway != null ? "aeroway:" + aeroway : "");
-            RoadStyle style = ROAD_MATERIALS.getOrDefault(styleKey, new RoadStyle("stone", 4));
-
-            int widthBlocks = widthFromTagsOrDefault(tags, style.width);
-
-            // счётчик для шага ламп по этой дороге
-            Counter lamp = new Counter();
-
-            int prevLX = Integer.MIN_VALUE, prevLZ = Integer.MIN_VALUE;
-            Integer hint = null;
-            for (int i=0; i<geom.size(); i++) {
-                JsonObject p = geom.get(i).getAsJsonObject();
-                double lat = p.get("lat").getAsDouble();
-                double lon = p.get("lon").getAsDouble();
-                int[] xz = latlngToBlock(lat, lon, centerLat, centerLng, east, west, north, south, sizeMeters, centerX, centerZ);
-                int x = xz[0], z = xz[1];
-
-                if (prevLX != Integer.MIN_VALUE) {
-                    placeLampsAlongSegment(prevLX, prevLZ, x, z, widthBlocks, hint,
-                            minX, maxX, minZ, maxZ, lamp);
+        try {
+            if (usedStream) {
+                // Подсчёт кандидатов (первая быстрая проходка потоком)
+                try (FeatureStream fs = store.featureStream()) {
+                    for (JsonObject e : fs) {
+                        JsonObject tags = tagObj(e);
+                        if (tags == null) continue;
+                        if (!isRoadCandidate(tags)) continue;
+                        if (isBridgeOrTunnel(tags)) continue;
+                        if (!"way".equals(optString(e,"type"))) continue;
+                        if (!hasGeometry(e)) continue;
+                        totalWays++;
+                    }
                 }
-                prevLX = x; prevLZ = z;
+            } else {
+                // Фолбэк на старый coords.features.elements (если sidecar-ов нет)
+                JsonArray elements = safeElementsArray(coords);
+                if (elements == null || elements.size() == 0) {
+                    broadcast(level, "OSM elements пуст — пропускаю фонари.");
+                    return;
+                }
+                for (JsonElement el : elements) {
+                    JsonObject e = el.getAsJsonObject();
+                    JsonObject tags = tagObj(e);
+                    if (tags == null) continue;
+                    if (!isRoadCandidate(tags)) continue;
+                    if (isBridgeOrTunnel(tags)) continue;
+                    if (!"way".equals(optString(e,"type"))) continue;
+                    if (!hasGeometry(e)) continue;
+                    totalWays++;
+                }
             }
 
-            processed++;
-            if (totalWays > 0 && processed % Math.max(1, totalWays/10) == 0) {
-                int pct = (int)Math.round(100.0 * processed / Math.max(1,totalWays));
-                broadcast(level, "Фонари вдоль дорог: ~" + pct + "%");
+            // 3) Основной проход: расстановка фонарей
+            int processed = 0;
+
+            if (usedStream) {
+                try (FeatureStream fs = store.featureStream()) {
+                    for (JsonObject e : fs) {
+                        JsonObject tags = tagObj(e);
+                        if (tags == null) continue;
+                        if (!isRoadCandidate(tags)) continue;
+                        if (isBridgeOrTunnel(tags)) continue;
+                        if (!"way".equals(optString(e,"type"))) continue;
+                        JsonArray geom = geometryArray(e);
+                        if (geom == null || geom.size() < 2) continue;
+
+                        placeLampsForWay(geom, tags,
+                                centerLat, centerLng, east, west, north, south, sizeMeters, centerX, centerZ,
+                                minX, maxX, minZ, maxZ);
+
+                        processed++;
+                        progress(processed, totalWays);
+                    }
+                }
+            } else {
+                JsonArray elements = safeElementsArray(coords);
+                for (JsonElement el : elements) {
+                    JsonObject e = el.getAsJsonObject();
+                    JsonObject tags = tagObj(e);
+                    if (tags == null) continue;
+                    if (!isRoadCandidate(tags)) continue;
+                    if (isBridgeOrTunnel(tags)) continue;
+                    if (!"way".equals(optString(e,"type"))) continue;
+                    JsonArray geom = geometryArray(e);
+                    if (geom == null || geom.size() < 2) continue;
+
+                    placeLampsForWay(geom, tags,
+                            centerLat, centerLng, east, west, north, south, sizeMeters, centerX, centerZ,
+                            minX, maxX, minZ, maxZ);
+
+                    processed++;
+                    progress(processed, totalWays);
+                }
             }
+
+        } catch (Exception io) {
+            broadcast(level, "Ошибка при чтении OSM-элементов (стрим): " + io.getMessage());
         }
 
         broadcast(level, "Фонари для дорог готовы.");
+    }
+
+    private static void progress(int processed, int total) {
+        if (total > 0 && processed % Math.max(1, total/10) == 0) {
+            int pct = (int)Math.round(100.0 * processed / Math.max(1,total));
+            // `level` недоступен здесь; прогресс выводим реже, основной лог в generate()
+            System.out.println("[Cartopia] Фонари вдоль дорог: ~" + pct + "%");
+        }
+    }
+
+    private static JsonArray safeElementsArray(JsonObject coords) {
+        if (coords == null) return null;
+        if (!coords.has("features")) return null;
+        JsonObject f = coords.getAsJsonObject("features");
+        if (f == null || !f.has("elements")) return null;
+        return f.getAsJsonArray("elements");
+    }
+
+    private static boolean hasGeometry(JsonObject e) {
+        return e.has("geometry") && e.get("geometry").isJsonArray() && e.getAsJsonArray("geometry").size() >= 2;
+    }
+
+    private static JsonArray geometryArray(JsonObject e) {
+        return (e.has("geometry") && e.get("geometry").isJsonArray()) ? e.getAsJsonArray("geometry") : null;
+    }
+
+    private static JsonObject tagObj(JsonObject e) {
+        return (e.has("tags") && e.get("tags").isJsonObject()) ? e.getAsJsonObject("tags") : null;
     }
 
     // === ОТБОР ===
@@ -241,7 +311,40 @@ public class RoadLampGenerator {
         return false;
     }
 
-    // === РАССТАНОВКА ЛАМП ВДОЛЬ СЕГМЕНТА (РОВНО КАК У ТЕБЯ) ===
+    // === Расстановка вдоль одного way ===
+    private void placeLampsForWay(JsonArray geom, JsonObject tags,
+                                  double centerLat, double centerLng,
+                                  double east, double west, double north, double south,
+                                  int sizeMeters, int centerX, int centerZ,
+                                  int minX, int maxX, int minZ, int maxZ) {
+
+        String highway = optString(tags, "highway");
+        String aeroway = optString(tags, "aeroway");
+        String styleKey = (highway != null) ? highway
+                        : (aeroway != null ? "aeroway:" + aeroway : "");
+        RoadStyle style = ROAD_MATERIALS.getOrDefault(styleKey, new RoadStyle("stone", 4));
+
+        int widthBlocks = widthFromTagsOrDefault(tags, style.width);
+
+        Counter lamp = new Counter();
+        int prevLX = Integer.MIN_VALUE, prevLZ = Integer.MIN_VALUE;
+
+        for (int i=0; i<geom.size(); i++) {
+            JsonObject p = geom.get(i).getAsJsonObject();
+            double lat = p.get("lat").getAsDouble();
+            double lon = p.get("lon").getAsDouble();
+            int[] xz = latlngToBlock(lat, lon, centerLat, centerLng, east, west, north, south, sizeMeters, centerX, centerZ);
+            int x = xz[0], z = xz[1];
+
+            if (prevLX != Integer.MIN_VALUE) {
+                placeLampsAlongSegment(prevLX, prevLZ, x, z, widthBlocks, null,
+                        minX, maxX, minZ, maxZ, lamp);
+            }
+            prevLX = x; prevLZ = z;
+        }
+    }
+
+    // === РАССТАНОВКА ЛАМП ВДОЛЬ СЕГМЕНТА (твоя логика) ===
     private void placeLampsAlongSegment(int x1, int z1, int x2, int z2, int width, Integer yHintStart,
                                         int minX, int maxX, int minZ, int maxZ, Counter lamp) {
         List<int[]> line = bresenhamLine(x1, z1, x2, z2);
@@ -256,13 +359,13 @@ public class RoadLampGenerator {
             if (lamp.v % ROAD_LAMP_PERIOD == 0) {
                 int off = Math.max(1, half + 1); // строго за кромкой полотна
                 if (horizontalMajor) {
-                    int lx1 = x,     lz1 = z - off; // toward +1 к центру
-                    int lx2 = x,     lz2 = z + off; // toward -1 к центру
+                    int lx1 = x,     lz1 = z - off;
+                    int lx2 = x,     lz2 = z + off;
                     placeRoadLamp(lx1, lz1, yHint, true,  +1, minX, maxX, minZ, maxZ);
                     placeRoadLamp(lx2, lz2, yHint, true,  -1, minX, maxX, minZ, maxZ);
                 } else {
-                    int lx1 = x - off, lz1 = z;     // toward +1 к центру
-                    int lx2 = x + off, lz2 = z;     // toward -1 к центру
+                    int lx1 = x - off, lz1 = z;
+                    int lx2 = x + off, lz2 = z;
                     placeRoadLamp(lx1, lz1, yHint, false, +1, minX, maxX, minZ, maxZ);
                     placeRoadLamp(lx2, lz2, yHint, false, -1, minX, maxX, minZ, maxZ);
                 }
@@ -272,7 +375,7 @@ public class RoadLampGenerator {
         }
     }
 
-    // === ФОНАРЬ: КОЛОННА + 3 ПОЛУБЛОКА + GLOWSTONE (ТОЧНО КАК СЕЙЧАС) ===
+    // === ФОНАРЬ: КОЛОННА + 3 ПОЛУБЛОКА + GLOWSTONE (как было) ===
     /** Нельзя ставить фонарь на белый/серый/жёлтый бетон. */
     private static boolean isForbiddenConcrete(Block b) {
         ResourceLocation key = ForgeRegistries.BLOCKS.getKey(b);
@@ -293,7 +396,7 @@ public class RoadLampGenerator {
         placedByRoadLamps.add(BlockPos.asLong(x, y, z));
     }
 
-    /** Верхний не-air, считая все блоки наших ламп как «воздух», чтобы не ставить лампы на лампы. */
+    /** Верхний не-air, считая блоки наших ламп как «воздух», чтобы не ставить лампы на лампы. */
     private int findTopNonAirNearSkippingRoadLamps(int x, int z, Integer hintY) {
         final int worldMin = level.getMinBuildHeight();
         final int worldMax = level.getMaxBuildHeight() - 1;
@@ -303,32 +406,25 @@ public class RoadLampGenerator {
             int from = Math.min(worldMax, hintY + 16);
             int to   = Math.max(worldMin, hintY - 16);
             for (int y = from; y >= to; y--) {
-                BlockPos pos = new BlockPos(x, y, z);
                 long key = BlockPos.asLong(x, y, z);
-
-                // Считаем блоки фонаря как «воздух» — и свежепоставленные, и от прошлых прогонов
                 if (placedByRoadLamps.contains(key)) continue;
-                Block block = level.getBlockState(pos).getBlock();
+                Block block = level.getBlockState(new BlockPos(x, y, z)).getBlock();
                 if (isLampComponent(block)) continue;
-
-                if (!level.getBlockState(pos).isAir()) return y;
+                if (!level.getBlockState(new BlockPos(x, y, z)).isAir()) return y;
             }
         }
 
         // Полный проход (на всякий)
         for (int y = worldMax; y >= worldMin; y--) {
-            BlockPos pos = new BlockPos(x, y, z);
             long key = BlockPos.asLong(x, y, z);
-
             if (placedByRoadLamps.contains(key)) continue;
-            Block block = level.getBlockState(pos).getBlock();
+            Block block = level.getBlockState(new BlockPos(x, y, z)).getBlock();
             if (isLampComponent(block)) continue;
-
-            if (!level.getBlockState(pos).isAir()) return y;
+            if (!level.getBlockState(new BlockPos(x, y, z)).isAir()) return y;
         }
         return Integer.MIN_VALUE;
     }
-    
+
     private void placeRoadLamp(int edgeX, int edgeZ, Integer hintY,
                                boolean horizontalMajor, int towardCenterSign,
                                int minX, int maxX, int minZ, int maxZ) {
@@ -341,34 +437,26 @@ public class RoadLampGenerator {
         int ySurfEdge = findTopNonAirNearSkippingRoadLamps(edgeX, edgeZ, hintY);
         if (ySurfEdge == Integer.MIN_VALUE) return;
 
-        // === НОВОЕ: строим только на рельефе (groundY) и строго на высоте groundY+1 ===
-        Integer gridY = terrainGroundYFromGrid(edgeX, edgeZ);
-        if (gridY == null) return;              // нет данных о рельефе — ничего не ставим (строгий режим)
-        if (isWaterCell(edgeX, edgeZ)) return;  // вода исключается
-        if (ySurfEdge != gridY) return;         // верхний непустой блок не совпал с высотой рельефа → не ставим фонарь
+        // === НОВОЕ: строгая привязка к groundY + запрет воды ===
+        Integer gridY = terrainGroundY(edgeX, edgeZ);
+        if (gridY == null) return;                    // нет данных — ничего не ставим
+        if (isWaterCell(edgeX, edgeZ)) return;        // в воде не ставим
+        if (ySurfEdge != gridY) return;               // верхний непустой блок ≠ groundY → не ставим
 
         // НИКОГДА не ставим на дорожное полотно и запрещённые бетоны
         Block under = level.getBlockState(new BlockPos(edgeX, gridY, edgeZ)).getBlock();
-        // стало: если это дорожное полотно — запрещаем, КРОМЕ случая камня;
-        // бетоны из isForbiddenConcrete по-прежнему нельзя.
         if ((isRoadLikeBlock(under) && !isStone(under)) || isForbiddenConcrete(under)) return;
 
         // База колонны
-        int y0 = gridY + 1; // строго на высоту рельефа + 1
+        int y0 = gridY + 1; // строго над рельефом
         if (y0 > worldMax) return;
 
-        // Если в базе уже что-то поставлено лампой раньше — пропускаем
         long baseKey = BlockPos.asLong(edgeX, y0, edgeZ);
         if (roadLampBases.contains(baseKey)) return;
-
-        // Если база НЕ воздух — не ставим, чтобы не «садиться» сверху
         if (!level.getBlockState(new BlockPos(edgeX, y0, edgeZ)).isAir()) return;
-
 
         // Верх колонны
         int yTop = Math.min(y0 + ROAD_LAMP_COLUMN_WALLS - 1, worldMax);
-
-        // Посчитаем координаты всех будущих блоков фонаря
         int ySlab = yTop + 1;
         if (ySlab > worldMax) return;
 
@@ -379,41 +467,36 @@ public class RoadLampGenerator {
         int gz = edgeZ + 2 * sz;
         int gy = ySlab - 1;
 
-        // === ПРЕДОХРАНИТЕЛЬ ОТ ПЕРЕЗАПИСИ ***ЛЮБЫХ*** БЛОКОВ ===
-        // 1) Вся колонна (edgeX, y0..yTop, edgeZ) должна быть воздухом
+        // === Предохранитель от перезаписи любых блоков ===
         for (int y = y0; y <= yTop; y++) {
             if (!level.getBlockState(new BlockPos(edgeX, y, edgeZ)).isAir()) return;
         }
-        // 2) Все три плиты (на уровне ySlab) — только воздух под замену
         if (!level.getBlockState(new BlockPos(edgeX,                 ySlab, edgeZ                )).isAir()) return;
         if (!level.getBlockState(new BlockPos(edgeX + 1 * sx,        ySlab, edgeZ + 1 * sz       )).isAir()) return;
         if (!level.getBlockState(new BlockPos(edgeX + 2 * sx,        ySlab, edgeZ + 2 * sz       )).isAir()) return;
-        // 3) Светокамень: если точка внутри мира/границ — там тоже должен быть воздух
         if (gy >= worldMin && gy <= worldMax && gx >= minX && gx <= maxX && gz >= minZ && gz <= maxZ) {
             if (!level.getBlockState(new BlockPos(gx, gy, gz)).isAir()) return;
         }
 
+        // Колонна
         for (int y = y0; y <= yTop; y++) {
             BlockPos pos = new BlockPos(edgeX, y, edgeZ);
             level.setBlock(pos, Blocks.ANDESITE_WALL.defaultBlockState(), 3);
             placedByRoadLamps.add(BlockPos.asLong(edgeX, y, edgeZ));
         }
 
-
-
+        // Полублоки
         placeBottomSlab(edgeX,              ySlab, edgeZ,              Blocks.SMOOTH_STONE_SLAB);
         placeBottomSlab(edgeX + 1 * sx,     ySlab, edgeZ + 1 * sz,     Blocks.SMOOTH_STONE_SLAB);
         placeBottomSlab(edgeX + 2 * sx,     ySlab, edgeZ + 2 * sz,     Blocks.SMOOTH_STONE_SLAB);
 
-        // Светокамень под крайним полублоком
-
+        // Светокамень
         if (gy >= worldMin && gy <= worldMax && gx >= minX && gx <= maxX && gz >= minZ && gz <= maxZ) {
             BlockPos gpos = new BlockPos(gx, gy, gz);
             level.setBlock(gpos, Blocks.GLOWSTONE.defaultBlockState(), 3);
             placedByRoadLamps.add(BlockPos.asLong(gx, gy, gz));
         }
 
-        // помечаем базу, чтобы второй раз в этом месте лампу не ставить
         roadLampBases.add(baseKey);
     }
 
@@ -492,9 +575,33 @@ public class RoadLampGenerator {
         return Math.max(1, def);
     }
 
-    // === TERRAIN GRID (из SurfaceGenerator) ===
-    // Вернёт высоту рельефа groundY из coords. Поддерживает v1 (data[]) и v2 (grids.groundY[]).
-    private Integer terrainGroundYFromGrid(int x, int z) {
+    // === TERRAIN GRID: основная ветка (через mmap), + фолбэк на coords ===
+    private Integer terrainGroundY(int x, int z) {
+        try {
+            if (grid != null && grid.inBounds(x, z)) {
+                int v = grid.groundY(x, z);
+                return (v == Integer.MIN_VALUE) ? null : v;
+            }
+        } catch (Throwable ignore) { }
+        // фолбэк на старый coords.terrainGrid
+        return terrainGroundYFromCoords(x, z);
+    }
+
+    private boolean isWaterCell(int x, int z) {
+        try {
+            if (grid != null && grid.inBounds(x, z)) {
+                Integer wy = grid.waterY(x, z);
+                if (wy != null) return true;
+                String tb = grid.topBlockId(x, z);
+                return "minecraft:water".equals(tb);
+            }
+        } catch (Throwable ignore) { }
+        // фолбэк
+        return isWaterCellFromCoords(x, z);
+    }
+
+    // ====== ФОЛБЭК-РЕАЛИЗАЦИИ (оставлены на переходный период) ======
+    private Integer terrainGroundYFromCoords(int x, int z) {
         try {
             if (coords == null || !coords.has("terrainGrid")) return null;
             JsonObject tg = coords.getAsJsonObject("terrainGrid");
@@ -514,7 +621,6 @@ public class RoadLampGenerator {
                 return groundY.get(idx).getAsInt();
             }
 
-            // v1 fallback: terrainGrid.data[]
             if (tg.has("data") && tg.get("data").isJsonArray()) {
                 JsonArray data = tg.getAsJsonArray("data");
                 if (idx >= data.size()) return null;
@@ -524,8 +630,7 @@ public class RoadLampGenerator {
         return null;
     }
 
-    // true если клетка — вода (по финальному terrain-grid: waterY!=null или topBlock=="minecraft:water")
-    private boolean isWaterCell(int x, int z) {
+    private boolean isWaterCellFromCoords(int x, int z) {
         try {
             if (coords == null || !coords.has("terrainGrid")) return false;
             JsonObject tg = coords.getAsJsonObject("terrainGrid");

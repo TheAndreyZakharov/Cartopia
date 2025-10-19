@@ -1,5 +1,8 @@
 package com.cartopia.builder;
 
+import com.cartopia.store.FeatureStream;
+import com.cartopia.store.GenerationStore;
+import com.cartopia.store.TerrainGridStore;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
@@ -18,14 +21,22 @@ import java.util.*;
 public class RoadGenerator {
 
     private final ServerLevel level;
-    private final JsonObject coords; // тот же JSON, что и у SurfaceGenerator (Gson)
+    private final JsonObject coords;           // как и раньше
+    private final GenerationStore store;       // НОВОЕ: стрим фич и грид рельефа (может быть null)
 
+    // СТАРЫЙ конструктор — оставляем для совместимости (fallback на coords.features.elements).
     public RoadGenerator(ServerLevel level, JsonObject coords) {
-        this.level = level;
-        this.coords = coords;
+        this(level, coords, null);
     }
 
-    // --- широковещалка (как в SurfaceGenerator/CartopiaPipeline) ---
+    // НОВЫЙ конструктор — предпочтительно использовать его (из Pipeline передаём store).
+    public RoadGenerator(ServerLevel level, JsonObject coords, GenerationStore store) {
+        this.level = level;
+        this.coords = coords;
+        this.store = store;
+    }
+
+    // --- широковещалка ---
     private static void broadcast(ServerLevel level, String msg) {
         try {
             if (level.getServer() != null) {
@@ -39,8 +50,8 @@ public class RoadGenerator {
 
     // === Материалы дорог ===
     private static final class RoadStyle {
-        final String blockId;  // "minecraft:gray_concrete" и т.п.
-        final int width;       // в блоках
+        final String blockId;
+        final int width;
         RoadStyle(String vanillaName, int width) {
             this.blockId = "minecraft:" + vanillaName;
             this.width = Math.max(1, width);
@@ -62,11 +73,11 @@ public class RoadGenerator {
         ROAD_MATERIALS.put("cycleway",     new RoadStyle("stone", 4));
         ROAD_MATERIALS.put("pedestrian",   new RoadStyle("stone", 4));
         ROAD_MATERIALS.put("track",        new RoadStyle("cobblestone", 4));
-        ROAD_MATERIALS.put("aeroway:runway",   new RoadStyle("gray_concrete", 45)); // типично 45 м
-        ROAD_MATERIALS.put("aeroway:taxiway",  new RoadStyle("gray_concrete", 15)); // 10–23 м, возьмём 15
-        ROAD_MATERIALS.put("aeroway:taxilane", new RoadStyle("gray_concrete", 8));  // внутри перронов
+        ROAD_MATERIALS.put("aeroway:runway",   new RoadStyle("gray_concrete", 45));
+        ROAD_MATERIALS.put("aeroway:taxiway",  new RoadStyle("gray_concrete", 15));
+        ROAD_MATERIALS.put("aeroway:taxilane", new RoadStyle("gray_concrete", 8));
 
-        // "rail" оставлен, но НЕ используется (мы исключаем railway целиком).
+        // rail не используем, т.к. railway исключаем.
         ROAD_MATERIALS.put("rail",         new RoadStyle("rail", 1));
     }
 
@@ -74,14 +85,18 @@ public class RoadGenerator {
     public void generate() {
         broadcast(level, "🛣️ Генерация дорог (без мостов/тоннелей/жд)…");
 
-        if (coords == null || !coords.has("features")) {
-            broadcast(level, "В coords нет features — пропускаю RoadGenerator.");
+        if (coords == null) {
+            broadcast(level, "coords == null — пропускаю RoadGenerator.");
             return;
         }
 
         // Параметры геопривязки
         JsonObject center = coords.getAsJsonObject("center");
         JsonObject bbox   = coords.getAsJsonObject("bbox");
+        if (center == null || bbox == null) {
+            broadcast(level, "Нет center/bbox в coords — пропускаю дороги.");
+            return;
+        }
 
         final double centerLat = center.get("lat").getAsDouble();
         final double centerLng = center.get("lng").getAsDouble();
@@ -99,7 +114,7 @@ public class RoadGenerator {
                 ? (int)Math.round(coords.getAsJsonObject("player").get("z").getAsDouble())
                 : 0;
 
-        // --- ВАЖНО: точные границы области генерации в координатах блоков (как в SurfaceGenerator)
+        // Точные границы области генерации (как раньше)
         int[] a = latlngToBlock(south, west, centerLat, centerLng, east, west, north, south, sizeMeters, centerX, centerZ);
         int[] b = latlngToBlock(north, east, centerLat, centerLng, east, west, north, south, sizeMeters, centerX, centerZ);
         final int minX = Math.min(a[0], b[0]);
@@ -107,12 +122,107 @@ public class RoadGenerator {
         final int minZ = Math.min(a[1], b[1]);
         final int maxZ = Math.max(a[1], b[1]);
 
-        JsonObject features = coords.getAsJsonObject("features");
-        JsonArray elements = features.getAsJsonArray("elements");
-        if (elements == null || elements.size() == 0) {
-            broadcast(level, "OSM elements пуст — пропускаю дороги.");
+        // === Два режима чтения фич:
+        // 1) Предпочтительно: поток из store.featureStream() (NDJSON, без загрузки в ОЗУ).
+        // 2) Fallback: старый массив coords.features.elements (если store отсутствует).
+        boolean streaming = (store != null);
+        if (!streaming) {
+            if (!coords.has("features")) {
+                broadcast(level, "В coords нет features — пропускаю RoadGenerator.");
+                return;
+            }
+            JsonObject features = coords.getAsJsonObject("features");
+            JsonArray elements = features.getAsJsonArray("elements");
+            if (elements == null || elements.size() == 0) {
+                broadcast(level, "OSM elements пуст — пропускаю дороги.");
+                return;
+            }
+            runWithJsonArray(elements, minX, maxX, minZ, maxZ,
+                    centerLat, centerLng, east, west, north, south, sizeMeters, centerX, centerZ);
             return;
         }
+
+        // === STREAM режим (двойной проход: быстрый подсчёт, затем рендер) ===
+        int totalWays = 0;
+        try (FeatureStream fs = store.featureStream()) {
+            for (JsonObject e : fs) {
+                JsonObject tags = (e.has("tags") && e.get("tags").isJsonObject()) ? e.getAsJsonObject("tags") : null;
+                if (tags == null) continue;
+                if (!isRoadCandidate(tags)) continue;
+                if (!"way".equals(optString(e,"type"))) continue;
+                if (!e.has("geometry") || !e.get("geometry").isJsonArray()) continue;
+                if (e.getAsJsonArray("geometry").size() < 2) continue;
+                totalWays++;
+            }
+        } catch (Exception ex) {  // <— ЛОВИМ Exception, а не IOException
+            broadcast(level, "Ошибка чтения features NDJSON (подсчёт): " + ex.getMessage() + " — попробую fallback на coords.features.");
+            JsonArray elements = coords.has("features") && coords.getAsJsonObject("features").has("elements")
+                    ? coords.getAsJsonObject("features").getAsJsonArray("elements") : null;
+            if (elements == null || elements.size() == 0) return;
+            runWithJsonArray(elements, minX, maxX, minZ, maxZ,
+                    centerLat, centerLng, east, west, north, south, sizeMeters, centerX, centerZ);
+            return;
+        }
+
+        int processed = 0;
+        try (FeatureStream fs = store.featureStream()) {
+            for (JsonObject e : fs) {
+                JsonObject tags = (e.has("tags") && e.get("tags").isJsonObject()) ? e.getAsJsonObject("tags") : null;
+                if (tags == null) continue;
+
+                if (!isRoadCandidate(tags)) continue;    // только дороги
+                if (isBridgeOrTunnel(tags)) continue;    // исключаем мосты/тоннели/слои
+                if (!"way".equals(optString(e,"type"))) continue;
+
+                JsonArray geom = e.getAsJsonArray("geometry");
+                if (geom == null || geom.size() < 2) continue;
+
+                String highway = optString(tags, "highway");
+                String aeroway = optString(tags, "aeroway");
+                String styleKey = (highway != null) ? highway
+                        : (aeroway != null ? "aeroway:" + aeroway : "");
+                RoadStyle style = ROAD_MATERIALS.getOrDefault(styleKey, new RoadStyle("stone", 4));
+
+                int widthBlocks = widthFromTagsOrDefault(tags, style.width);
+                Block roadBlock = resolveBlock(style.blockId);
+
+                // Переводим lat/lon в блоки и красим сегменты Брезенхэмом
+                int prevX = Integer.MIN_VALUE, prevZ = Integer.MIN_VALUE;
+                Integer lastYHint = null;
+                for (int i=0; i<geom.size(); i++) {
+                    JsonObject p = geom.get(i).getAsJsonObject();
+                    double lat = p.get("lat").getAsDouble();
+                    double lon = p.get("lon").getAsDouble();
+                    int[] xz = latlngToBlock(lat, lon, centerLat, centerLng, east, west, north, south, sizeMeters, centerX, centerZ);
+                    int x = xz[0], z = xz[1];
+
+                    if (prevX != Integer.MIN_VALUE) {
+                        paintSegment(prevX, prevZ, x, z, widthBlocks, roadBlock, lastYHint,
+                                minX, maxX, minZ, maxZ);
+                    }
+
+                    prevX = x; prevZ = z;
+                }
+
+                processed++;
+                if (totalWays > 0 && processed % Math.max(1, totalWays/10) == 0) {
+                    int pct = (int)Math.round(100.0 * processed / Math.max(1,totalWays));
+                    broadcast(level, "Дороги: ~" + pct + "%");
+                }
+            }
+        } catch (Exception ex) {
+            broadcast(level, "Ошибка чтения features NDJSON (рендер): " + ex.getMessage());
+        }
+
+        broadcast(level, "Дороги готовы.");
+    }
+
+    // === режим старого массива (fallback) ===
+    private void runWithJsonArray(JsonArray elements,
+                                  int minX, int maxX, int minZ, int maxZ,
+                                  double centerLat, double centerLng,
+                                  double east, double west, double north, double south,
+                                  int sizeMeters, int centerX, int centerZ) {
 
         int totalWays = 0;
         for (JsonElement el : elements) {
@@ -141,16 +251,14 @@ public class RoadGenerator {
 
             String highway = optString(tags, "highway");
             String aeroway = optString(tags, "aeroway");
-            String styleKey = (highway != null) ? highway
-                            : (aeroway != null ? "aeroway:" + aeroway : "");
+            String styleKey = (highway != null) ? highway : (aeroway != null ? "aeroway:" + aeroway : "");
             RoadStyle style = ROAD_MATERIALS.getOrDefault(styleKey, new RoadStyle("stone", 4));
 
             int widthBlocks = widthFromTagsOrDefault(tags, style.width);
             Block roadBlock = resolveBlock(style.blockId);
 
-            // Переводим lat/lon в блоки и красим сегменты Брезенхэмом
             int prevX = Integer.MIN_VALUE, prevZ = Integer.MIN_VALUE;
-            Integer lastYHint = null; // ускоритель поиска поверхности
+            Integer lastYHint = null;
             for (int i=0; i<geom.size(); i++) {
                 JsonObject p = geom.get(i).getAsJsonObject();
                 double lat = p.get("lat").getAsDouble();
@@ -172,8 +280,6 @@ public class RoadGenerator {
                 broadcast(level, "Дороги: ~" + pct + "%");
             }
         }
-
-        broadcast(level, "Дороги готовы.");
     }
 
     // === логика отбора ===
@@ -183,10 +289,10 @@ public class RoadGenerator {
         boolean isHighway = tags.has("highway");
         String aeroway = optString(tags, "aeroway");
         boolean isAerowayLine = "runway".equals(aeroway)
-                            || "taxiway".equals(aeroway)
-                            || "taxilane".equals(aeroway);
+                || "taxiway".equals(aeroway)
+                || "taxilane".equals(aeroway);
 
-        if (!(isHighway || isAerowayLine)) return false;   // берём highways ИЛИ линейные aeroway
+        if (!(isHighway || isAerowayLine)) return false;
         if (tags.has("railway")) return false;
         if (tags.has("waterway") || tags.has("barrier")) return false;
         return true;
@@ -222,24 +328,39 @@ public class RoadGenerator {
                 int xx = horizontalMajor ? x : x + w;
                 int zz = horizontalMajor ? z + w : z;
 
-                // ЖЁСТКАЯ ОТСЕЧКА: вне области генерации ничего не делаем
+                // жёсткая отсечка области
                 if (xx < minX || xx > maxX || zz < minZ || zz > maxZ) continue;
 
-                int y = findTopNonAirNear(xx, zz, yHint);
+                int y = findTopYSmart(xx, zz, yHint); // НОВОЕ: сначала грид, потом fallback-скан
                 if (y == Integer.MIN_VALUE) continue;
+
+                // Можно дополнительно избегать воды по гриду:
+                // Integer wY = (store != null && store.grid != null) ? store.grid.waterY(xx, zz) : null;
+                // if (wY != null && wY >= y) continue;
 
                 @SuppressWarnings("unused")
                 BlockState top = level.getBlockState(new BlockPos(xx, y, zz));
                 // if (top.getBlock() == Blocks.WATER) continue;
 
-
                 level.setBlock(new BlockPos(xx, y, zz), roadBlock.defaultBlockState(), 3);
-                yHint = y; // подсказка на следующий шаг
+                yHint = y;
             }
         }
     }
 
-    // === утилиты ===
+    // === поиск высоты ===
+
+    /** Сначала берём высоту поверхности из TerrainGridStore, иначе старый скан мира. */
+    private int findTopYSmart(int x, int z, Integer hintY) {
+        if (store != null) {
+            TerrainGridStore g = store.grid;
+            if (g != null && g.inBounds(x, z)) {
+                int gy = g.groundY(x, z);
+                if (gy != Integer.MIN_VALUE) return gy;
+            }
+        }
+        return findTopNonAirNear(x, z, hintY);
+    }
 
     /** быстрый поиск поверхности рядом с предполагаемой высотой; иначе фулл-скан сверху вниз */
     private int findTopNonAirNear(int x, int z, Integer hintY) {
@@ -258,6 +379,8 @@ public class RoadGenerator {
         }
         return Integer.MIN_VALUE;
     }
+
+    // === утилиты ===
 
     private static Block resolveBlock(String id) {
         Block b = ForgeRegistries.BLOCKS.getValue(ResourceLocation.tryParse(id));
@@ -320,7 +443,6 @@ public class RoadGenerator {
         for (String k : keys) {
             String v = optString(tags, k);
             if (v == null) continue;
-            // вычищаем число (поддержим "10", "10.5", "10,5", "10 m")
             v = v.trim().toLowerCase(Locale.ROOT).replace(',', '.');
             StringBuilder num = new StringBuilder();
             boolean dotSeen = false;

@@ -8,7 +8,6 @@ import net.minecraft.core.Direction;
 import net.minecraft.network.chat.Component;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.level.ServerLevel;
-import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.level.block.*;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraftforge.registries.ForgeRegistries;
@@ -16,6 +15,12 @@ import java.util.*;
 import net.minecraft.world.level.levelgen.Heightmap;
 import net.minecraft.world.level.block.state.properties.DoorHingeSide;
 import net.minecraft.world.level.block.state.properties.DoubleBlockHalf;
+import java.util.stream.*;
+import java.util.concurrent.atomic.AtomicInteger;
+import com.cartopia.store.GenerationStore;
+import com.cartopia.store.FeatureStream;
+
+
 
 
 public class BuildingGenerator {
@@ -80,6 +85,8 @@ public class BuildingGenerator {
     private static final int     PERIM_LANTERN_HEIGHT       = 4;  // от уровня земли, снаружи
     private static final int     PERIM_LANTERN_STEP         = 4;  // шаг вдоль периметра
     private static final int     PERIM_LANTERN_SEARCH_RAD   = 3;  // поиск ближайшей замены, если стекло/мешает
+
+    private final GenerationStore store;
 
     static {
         // ----- FACADE materials -----
@@ -728,6 +735,13 @@ public class BuildingGenerator {
         }
     }
 
+    private static Stream<JsonObject> stream(JsonArray arr) {
+        if (arr == null) return Stream.empty();
+        return StreamSupport
+                .stream(Spliterators.spliteratorUnknownSize(arr.iterator(), Spliterator.ORDERED), false)
+                .map(JsonElement::getAsJsonObject);
+    }
+
     /** Наследуем внешний вид части от родителя, который геометрически её содержит.
      *  Копируем ТОЛЬКО материал/цвет фасада и крыши, причём по каждому ключу — если у части он отсутствует. */
     private JsonObject inheritAppearanceFromParent(JsonObject partTags, Set<Long> partFill){
@@ -781,55 +795,55 @@ public class BuildingGenerator {
     // Все XZ-клетки, занятые building:part (защита от перезаписи общим контуром)
     private final Set<Long> partFootprint = new HashSet<>();
 
-    public BuildingGenerator(ServerLevel level, JsonObject coords) {
+ 
+
+    public BuildingGenerator(ServerLevel level, JsonObject coords, GenerationStore store) {
         this.level = level;
         this.coords = coords;
+        this.store = store;
     }
 
     // Взвешенный дефолт фасада, если в OSM не указаны ни материал, ни цвет
     private String pickWeightedDefaultFacade() {
         class W { final String id; final double w; W(String id, double w){ this.id=id; this.w=w; } }
 
-        List<W> options = new ArrayList<>();
-        options.add(new W("minecraft:polished_diorite",      0.20));
-        options.add(new W("minecraft:diorite",               0.20)); 
-        options.add(new W("minecraft:quartz_bricks",         0.20)); 
-        options.add(new W("minecraft:bricks",                0.05)); 
-        options.add(new W("minecraft:end_stone_bricks",      0.05)); 
-        options.add(new W("minecraft:light_gray_concrete",   0.05)); 
-        options.add(new W("minecraft:calcite",               0.05)); 
-        options.add(new W("minecraft:bone_block",            0.05));
-        options.add(new W("minecraft:cut_sandstone",         0.05));
-        options.add(new W("minecraft:white_terracotta",      0.05));
-        options.add(new W("minecraft:light_gray_terracotta", 0.05));
+        List<W> options = Arrays.asList(
+            new W("minecraft:polished_diorite",      0.20),
+            new W("minecraft:diorite",               0.20),
+            new W("minecraft:quartz_bricks",         0.20),
+            new W("minecraft:bricks",                0.05),
+            new W("minecraft:end_stone_bricks",      0.05),
+            new W("minecraft:light_gray_concrete",   0.05),
+            new W("minecraft:calcite",               0.05),
+            new W("minecraft:bone_block",            0.05),
+            new W("minecraft:cut_sandstone",         0.05),
+            new W("minecraft:white_terracotta",      0.05),
+            new W("minecraft:light_gray_terracotta", 0.05)
+        );
 
-        // Оставляем только зарегистрированные блоки, чтобы не свалиться в STONE при resolveBlock
-        double sum = 0.0;
-        List<W> valid = new ArrayList<>();
-        for (W w : options) {
-            if (ForgeRegistries.BLOCKS.getValue(ResourceLocation.tryParse(w.id)) != null) {
-                valid.add(w);
-                sum += w.w;
-            }
-        }
+        // фильтруем только зарегистрированные блоки
+        List<W> valid = options.stream()
+                .filter(w -> ForgeRegistries.BLOCKS.getValue(ResourceLocation.tryParse(w.id)) != null)
+                .collect(Collectors.toList());
         if (valid.isEmpty()) return DEFAULT_FACADE_BLOCK;
 
+        double sum = valid.stream().mapToDouble(w -> w.w).sum();
         double r = Math.random() * sum;
-        double acc = 0.0;
-        for (W w : valid) {
-            acc += w.w;
-            if (r <= acc) return w.id;
-        }
-        return valid.get(valid.size() - 1).id;
+        final double[] acc = {0.0};
+
+        return valid.stream()
+                .filter(w -> { acc[0] += w.w; return r <= acc[0]; })
+                .map(w -> w.id)
+                .findFirst()
+                .orElse(valid.get(valid.size() - 1).id);
     }
 
     // --- широковещалка
     private static void broadcast(ServerLevel level, String msg) {
         try {
             if (level.getServer() != null) {
-                for (ServerPlayer p : level.getServer().getPlayerList().getPlayers()) {
-                    p.sendSystemMessage(Component.literal("[Cartopia] " + msg));
-                }
+                level.getServer().getPlayerList().getPlayers()
+                        .forEach(p -> p.sendSystemMessage(Component.literal("[Cartopia] " + msg)));
             }
         } catch (Throwable ignore) {}
         System.out.println("[Cartopia] " + msg);
@@ -839,8 +853,8 @@ public class BuildingGenerator {
     public void generate() {
         broadcast(level, "🏗️ Генерация зданий…");
 
-        if (coords == null || !coords.has("features")) {
-            broadcast(level, "В coords нет features — пропускаю BuildingGenerator.");
+        if (coords == null) {
+            broadcast(level, "coords == null — пропускаю BuildingGenerator.");
             return;
         }
 
@@ -873,18 +887,39 @@ public class BuildingGenerator {
         // Сделать снимок исходного рельефа, чтобы не опираться на уже построенные блоки
         snapshotGround(minX, maxX, minZ, maxZ);
 
+        // >>> STREAM ENTRY
+        final boolean streaming = (store != null);
+
+        if (streaming) {
+            runStreaming(
+                minX, maxX, minZ, maxZ,
+                centerLat, centerLng,
+                east, west, north, south,
+                sizeMeters, centerX, centerZ
+            );
+            broadcast(level, "Здания готовы.");
+            return;
+        }
+
+        // === Fallback на старый JSON-массив ===
         JsonArray elements = coords.getAsJsonObject("features").getAsJsonArray("elements");
         if (elements == null || elements.size() == 0) {
             broadcast(level, "OSM elements пуст — пропускаю здания.");
             return;
         }
+        // >>> END STREAM ENTRY
+
 
         // === NEW: индекс по id и набор way, которые участвуют в relation, чтобы не дублировать
-        Map<Long, JsonObject> byId = new HashMap<>();
-        for (JsonElement je : elements) {
-            JsonObject e = je.getAsJsonObject();
-            if (e.has("id")) byId.put(e.get("id").getAsLong(), e);
-        }
+        Map<Long, JsonObject> byId = stream(elements)
+                .filter(e -> e.has("id"))
+                .collect(Collectors.toMap(
+                        e -> e.get("id").getAsLong(),
+                        e -> e,
+                        (left, right) -> left,
+                        HashMap::new
+                ));
+
         Set<Long> waysUsedInRelations = new HashSet<>();
 
         collectParentShells(elements, byId,
@@ -895,61 +930,84 @@ public class BuildingGenerator {
         // Соберём заранее узлы entrance=* и линии tunnel=building_passage
         List<int[]> entrances = collectEntrances(elements, centerLat, centerLng, east, west, north, south, sizeMeters, centerX, centerZ);
         List<List<int[]>> passages = collectPassages(elements, centerLat, centerLng, east, west, north, south, sizeMeters, centerX, centerZ);
+
         // === NEW: копим части, чтобы потом построить снизу вверх
         List<PartTask> partTasks = new ArrayList<>();
 
 
         // === NEW: сначала relation с building:part
-        for (JsonElement je : elements) {
-            JsonObject e = je.getAsJsonObject();
-            if (!"relation".equals(optString(e, "type"))) continue;
-            JsonObject tags = (e.has("tags") && e.get("tags").isJsonObject()) ? e.getAsJsonObject("tags") : null;
-            if (tags == null || !isBuildingPart(tags)) continue;
+        stream(elements)
+            .filter(e -> "relation".equals(optString(e, "type")))
+            .map(e -> {
+                JsonObject tags = (e.has("tags") && e.get("tags").isJsonObject()) ? e.getAsJsonObject("tags") : null;
+                return new AbstractMap.SimpleEntry<>(e, tags);
+            })
+            .filter(pair -> pair.getValue() != null && isBuildingPart(pair.getValue()))
+            .map(pair -> {
+                MultiPoly mp = assembleMultiPoly(pair.getKey(), byId,
+                        centerLat, centerLng, east, west, north, south,
+                        sizeMeters, centerX, centerZ, waysUsedInRelations);
+                return (mp != null && !mp.outers.isEmpty())
+                        ? new AbstractMap.SimpleEntry<>(pair, mp)
+                        : null;
+            })
+            .filter(Objects::nonNull)
+            .forEach(pack -> {
+                JsonObject tags = pack.getKey().getValue();
+                MultiPoly mp = pack.getValue();
 
-            MultiPoly mp = assembleMultiPoly(e, byId, centerLat, centerLng, east, west, north, south, sizeMeters, centerX, centerZ, waysUsedInRelations);
-            if (mp != null && !mp.outers.isEmpty()) {
                 Set<Long> fill = rasterizeMultiPolygon(mp.outers, mp.inners, minX, maxX, minZ, maxZ);
                 partFootprint.addAll(fill);
+
                 JsonObject effTags = (mp.tags != null ? mp.tags : tags);
-                effTags = inheritAppearanceFromParent(effTags, fill); // НАСЛЕДОВАНИЕ
+                effTags = inheritAppearanceFromParent(effTags, fill);
                 int mo = effectiveMinOffsetForPart(effTags);
                 partTasks.add(new PartTask(fill, mp.outers, effTags, mo));
-            }        
-        }
+            });
+
 
   
 
         // 1) Сначала building:part (детализация)
         int totalParts = countBy(elements, t -> isBuildingPart(t));
-        int processed = 0;
-        for (JsonElement je : elements) {
-            JsonObject e = je.getAsJsonObject();
-            JsonObject tags = (e.has("tags") && e.get("tags").isJsonObject()) ? e.getAsJsonObject("tags") : null;
-            if (tags == null) continue;
-            if (!isBuildingPart(tags)) continue;
-            if (!"way".equals(optString(e, "type"))) continue;
-            Long id = e.has("id") ? e.get("id").getAsLong() : null;
-            if (id != null && waysUsedInRelations.contains(id)) continue;
-            JsonArray geom = e.getAsJsonArray("geometry");
-            if (geom == null || geom.size() < 3) continue;
+        AtomicInteger processed = new AtomicInteger(0);
 
-            List<int[]> ring = toRingTiles(geom, centerLat, centerLng, east, west, north, south, sizeMeters, centerX, centerZ);
-            Set<Long> partFill = rasterizePolygon(ring, minX, maxX, minZ, maxZ);
-            partFootprint.addAll(partFill);
-            JsonObject effPartTags = inheritAppearanceFromParent(tags, partFill); // НАСЛЕДОВАНИЕ
-            Set<Long> fill = rasterizePolygon(ring, minX, maxX, minZ, maxZ);
-            partFootprint.addAll(fill);
-            int mo = effectiveMinOffsetForPart(effPartTags);
-            List<List<int[]>> outers = new ArrayList<>();
-            outers.add(ring);
-            partTasks.add(new PartTask(fill, outers, effPartTags, mo));
+        stream(elements)
+            .map(e -> e) // JsonObject
+            .map(e -> {
+                JsonObject tags = (e.has("tags") && e.get("tags").isJsonObject()) ? e.getAsJsonObject("tags") : null;
+                return new AbstractMap.SimpleEntry<>(e, tags);
+            })
+            .filter(pair -> pair.getValue() != null && isBuildingPart(pair.getValue()))
+            .filter(pair -> "way".equals(optString(pair.getKey(), "type")))
+            .filter(pair -> {
+                Long id = pair.getKey().has("id") ? pair.getKey().get("id").getAsLong() : null;
+                return id == null || !waysUsedInRelations.contains(id);
+            })
+            .map(pair -> {
+                JsonObject e = pair.getKey();
+                JsonArray geom = e.getAsJsonArray("geometry");
+                if (geom == null || geom.size() < 3) return null;
+                List<int[]> ring = toRingTiles(geom, centerLat, centerLng, east, west, north, south, sizeMeters, centerX, centerZ);
+                Set<Long> partFill = rasterizePolygon(ring, minX, maxX, minZ, maxZ);
+                if (partFill.isEmpty()) return null;
 
-            processed++;
-            if (totalParts > 0 && processed % Math.max(1, totalParts/10) == 0) {
-                int pct = (int)Math.round(100.0 * processed / Math.max(1,totalParts));
-                broadcast(level, "Здания (части): ~" + pct + "%");
-            }
-        }
+                partFootprint.addAll(partFill);
+                JsonObject effPartTags = inheritAppearanceFromParent(pair.getValue(), partFill);
+                int mo = effectiveMinOffsetForPart(effPartTags);
+                List<List<int[]>> outers = Collections.singletonList(ring);
+                return new PartTask(partFill, outers, effPartTags, mo);
+            })
+            .filter(Objects::nonNull)
+            .peek(t -> {
+                int p = processed.incrementAndGet();
+                if (totalParts > 0 && p % Math.max(1, totalParts/10) == 0) {
+                    int pct = (int)Math.round(100.0 * p / Math.max(1,totalParts));
+                    broadcast(level, "Здания (части): ~" + pct + "%");
+                }
+            })
+            .forEach(partTasks::add);
+
 
         // === NEW: строим ВСЕ части снизу вверх (без зазоров на стыке)
         partTasks.sort(Comparator.comparingInt(t -> t.minOffsetSort));
@@ -958,83 +1016,417 @@ public class BuildingGenerator {
                         entrances, passages, minX, maxX, minZ, maxZ, /*airOnly=*/false);
         }
 
-        // === NEW: затем relation с building=*
-        for (JsonElement je : elements) {
-            JsonObject e = je.getAsJsonObject();
-            if (!"relation".equals(optString(e, "type"))) continue;
-            JsonObject tags = (e.has("tags") && e.get("tags").isJsonObject()) ? e.getAsJsonObject("tags") : null;
-            if (tags == null || !(isBuilding(tags) || isCanopy(tags))) continue;
-
-            MultiPoly mp = assembleMultiPoly(e, byId, centerLat, centerLng, east, west, north, south, sizeMeters, centerX, centerZ, waysUsedInRelations);
-            if (mp == null || mp.outers.isEmpty()) continue;
-
-            JsonObject eff = (mp.tags != null ? mp.tags : tags);
-            if (isCanopy(eff)) {
-                for (List<int[]> o : mp.outers) buildCanopy(o, eff, minX, maxX, minZ, maxZ);
-            } else {
-                Set<Long> fill = rasterizeMultiPolygon(mp.outers, mp.inners, minX, maxX, minZ, maxZ);
-                fill.removeAll(partFootprint);
-                if (!fill.isEmpty()) {
-                    // ⬇️ ДОБАВЛЕНО: вывод этажности/высоты из внутренних объектов
-                    eff = augmentHeightFromInteriorIfMissing(
-                            eff, fill, elements,
-                            centerLat, centerLng, east, west, north, south,
-                            sizeMeters, centerX, centerZ
-                    );
-                    buildFromFill(fill, mp.outers, eff, entrances, passages, minX, maxX, minZ, maxZ, false);
+        // В методе runStreaming()
+        final List<JsonObject> interiorHints = new ArrayList<>();
+        try (FeatureStream fs = store.featureStream()) {
+            for (JsonObject e : fs) {
+                String t = optString(e, "type");
+                if (!"node".equals(t) && !"way".equals(t)) continue;
+                JsonObject tags = (e.has("tags") && e.get("tags").isJsonObject()) ? e.getAsJsonObject("tags") : null;
+                if (tags == null) continue;
+                // Понимание того, что является подсказкой для уровней или высот
+                if (hasNonBlank(tags, "level") ||
+                    hasNonBlank(tags, "level:ref") ||
+                    hasNonBlank(tags, "min_level") || hasNonBlank(tags, "building:min_level") ||
+                    hasNonBlank(tags, "max_level") || hasNonBlank(tags, "building:max_level") ||
+                    hasNonBlank(tags, "height") || hasNonBlank(tags, "building:height")) {
+                    interiorHints.add(e);  // Собираем подсказки
                 }
             }
-        }  
+        } catch (Exception ex) {
+            broadcast(level, "Ошибка чтения NDJSON (hints): " + ex.getMessage());
+        }
+
+
+        // === NEW: затем relation с building=*
+        stream(elements)
+            .filter(e -> "relation".equals(optString(e, "type")))
+            .map(e -> {
+                JsonObject tags = (e.has("tags") && e.get("tags").isJsonObject()) ? e.getAsJsonObject("tags") : null;
+                return new AbstractMap.SimpleEntry<>(e, tags);
+            })
+            .filter(pair -> pair.getValue() != null && (isBuilding(pair.getValue()) || isCanopy(pair.getValue())))
+            .forEach(pair -> {
+                JsonObject e = pair.getKey();
+                JsonObject tags = pair.getValue();
+
+                MultiPoly mp = assembleMultiPoly(e, byId,
+                        centerLat, centerLng, east, west, north, south,
+                        sizeMeters, centerX, centerZ, waysUsedInRelations);
+                if (mp == null || mp.outers.isEmpty()) return;
+
+                JsonObject eff = (mp.tags != null ? mp.tags : tags);
+                if (isCanopy(eff)) {
+                    // eff не переназначается => эффективно final, лямбда довольна
+                    mp.outers.forEach(o -> buildCanopy(o, eff, minX, maxX, minZ, maxZ));
+                } else {
+                    Set<Long> fill = rasterizeMultiPolygon(mp.outers, mp.inners, minX, maxX, minZ, maxZ);
+                    fill.removeAll(partFootprint);
+                    if (!fill.isEmpty()) {
+                        JsonObject effAug =
+                            (store != null)
+                            ? augmentHeightFromInteriorUsingHints(tags, fill, interiorHints, centerLat, centerLng, east, west, north, south, sizeMeters, centerX, centerZ)
+
+                            : augmentHeightFromInteriorIfMissing(
+                                  eff, fill, elements,
+                                  centerLat, centerLng, east, west, north, south,
+                                  sizeMeters, centerX, centerZ);
+
+                        buildFromFill(fill, mp.outers, effAug, entrances, passages, minX, maxX, minZ, maxZ, false);
+                    }
+                }
+            });
+
 
         // 2) Затем building=* (общие контуры); объём заполняем только там, где ещё воздух — чтобы не перекрыть части
         int totalBuildings = countBy(elements, t -> isBuilding(t));
-        processed = 0;
-        for (JsonElement je : elements) {
-            JsonObject e = je.getAsJsonObject();
-            JsonObject tags = (e.has("tags") && e.get("tags").isJsonObject()) ? e.getAsJsonObject("tags") : null;
-            if (tags == null) continue;
-            if (!isBuilding(tags)) continue;
+        AtomicInteger processedB = new AtomicInteger(0);
 
-            // навесы отдельно
-            if (isCanopy(tags)) {
-                if (!"way".equals(optString(e, "type"))) continue;
-                Long id = e.has("id") ? e.get("id").getAsLong() : null;
-                if (id != null && waysUsedInRelations.contains(id)) continue;
-                JsonArray geom = e.getAsJsonArray("geometry");
-                if (geom == null || geom.size() < 3) continue;
-                List<int[]> ring = toRingTiles(geom, centerLat, centerLng, east, west, north, south, sizeMeters, centerX, centerZ);
-                buildCanopy(ring, tags, minX, maxX, minZ, maxZ);
-            } else {
-                if (!"way".equals(optString(e, "type"))) continue;
-                Long id = e.has("id") ? e.get("id").getAsLong() : null;
-                if (id != null && waysUsedInRelations.contains(id)) continue;
-                JsonArray geom = e.getAsJsonArray("geometry");
-                if (geom == null || geom.size() < 3) continue;
-                List<int[]> ring = toRingTiles(geom, centerLat, centerLng, east, west, north, south, sizeMeters, centerX, centerZ);
-                Set<Long> fill = rasterizePolygon(ring, minX, maxX, minZ, maxZ);
-                fill.removeAll(partFootprint);
-                if (!fill.isEmpty()) {
-                    List<List<int[]>> outers = new ArrayList<>();
-                    outers.add(ring);
-                    // ⬇️ ДОБАВЛЕНО: вывод этажности/высоты из внутренних объектов
-                    JsonObject eff = augmentHeightFromInteriorIfMissing(
-                            tags, fill, elements,
-                            centerLat, centerLng, east, west, north, south,
-                            sizeMeters, centerX, centerZ
-                    );
-                    buildFromFill(fill, outers, eff, entrances, passages, minX, maxX, minZ, maxZ, /*airOnly=*/false);
+        stream(elements)
+            .map(e -> {
+                JsonObject tags = (e.has("tags") && e.get("tags").isJsonObject()) ? e.getAsJsonObject("tags") : null;
+                return new AbstractMap.SimpleEntry<>(e, tags);
+            })
+            .filter(pair -> pair.getValue() != null && isBuilding(pair.getValue()))
+            .filter(pair -> "way".equals(optString(pair.getKey(), "type")))
+            .filter(pair -> {
+                Long id = pair.getKey().has("id") ? pair.getKey().get("id").getAsLong() : null;
+                return id == null || !waysUsedInRelations.contains(id);
+            })
+            .forEach(pair -> {
+                JsonObject e = pair.getKey();
+                JsonObject tags = pair.getValue();
+
+                if (isCanopy(tags)) {
+                    JsonArray geom = e.getAsJsonArray("geometry");
+                    if (geom != null && geom.size() >= 3) {
+                        List<int[]> ring = toRingTiles(geom, centerLat, centerLng, east, west, north, south, sizeMeters, centerX, centerZ);
+                        buildCanopy(ring, tags, minX, maxX, minZ, maxZ);
+                    }
+                } else {
+                    JsonArray geom = e.getAsJsonArray("geometry");
+                    if (geom != null && geom.size() >= 3) {
+                        List<int[]> ring = toRingTiles(geom, centerLat, centerLng, east, west, north, south, sizeMeters, centerX, centerZ);
+                        Set<Long> fill = rasterizePolygon(ring, minX, maxX, minZ, maxZ);
+                        fill.removeAll(partFootprint);
+                        if (!fill.isEmpty()) {
+                            List<List<int[]>> outers = Collections.singletonList(ring);
+                            JsonObject eff =
+                                (store != null)
+                                ? augmentHeightFromInteriorUsingHints(tags, fill, interiorHints, centerLat, centerLng, east, west, north, south, sizeMeters, centerX, centerZ)
+
+                                : augmentHeightFromInteriorIfMissing(
+                                      tags, fill, elements,
+                                      centerLat, centerLng, east, west, north, south,
+                                      sizeMeters, centerX, centerZ);
+
+                            buildFromFill(fill, outers, eff, entrances, passages, minX, maxX, minZ, maxZ, false);
+                        }
+                    }
                 }
-            }
 
-            processed++;
-            if (totalBuildings > 0 && processed % Math.max(1, totalBuildings/10) == 0) {
-                int pct = (int)Math.round(100.0 * processed / Math.max(1,totalBuildings));
-                broadcast(level, "Здания (контуры): ~" + pct + "%");
-            }
-        }
+                int p = processedB.incrementAndGet();
+                if (totalBuildings > 0 && p % Math.max(1, totalBuildings/10) == 0) {
+                    int pct = (int)Math.round(100.0 * p / Math.max(1,totalBuildings));
+                    broadcast(level, "Здания (контуры): ~" + pct + "%");
+                }
+            });
+
 
         broadcast(level, "Здания готовы.");
     }
+
+    // >>> runStreaming 
+    private void runStreaming(int minX, int maxX, int minZ, int maxZ,
+                            double centerLat, double centerLng,
+                            double east, double west, double north, double south,
+                            int sizeMeters, int centerX, int centerZ) {
+
+        final Set<Long> waysUsedInRelations = new HashSet<>();
+
+        // ---------- Pass A: собрать id нужных ways для relations ----------
+        final Set<Long> neededWayIds = new HashSet<>();
+        try (FeatureStream fs = store.featureStream()) {
+            for (JsonObject e : fs) {
+                String type = e.has("type") ? e.get("type").getAsString() : "";
+                if (!"relation".equals(type)) continue;
+
+                JsonObject tags = (e.has("tags") && e.get("tags").isJsonObject()) ? e.getAsJsonObject("tags") : null;
+                if (tags == null) continue;
+                if (!(isBuilding(tags) || isBuildingPart(tags) || isCanopy(tags))) continue;
+                if (!e.has("members") || !e.get("members").isJsonArray()) continue;
+
+                JsonArray members = e.getAsJsonArray("members");
+                for (JsonElement mEl : members) {
+                    JsonObject m = mEl.getAsJsonObject();
+                    String role  = m.has("role") ? m.get("role").getAsString() : "";
+                    String mType = m.has("type") ? m.get("type").getAsString() : "";
+                    if (isPartRole(role)) continue; // parts строятся отдельно
+                    if ("way".equals(mType) && !m.has("geometry") && m.has("ref")) {
+                        try { neededWayIds.add(m.get("ref").getAsLong()); } catch (Exception ignore) {}
+                    }
+                }
+            }
+        } catch (Exception ex) {
+            broadcast(level, "Ошибка чтения NDJSON (Pass A): " + ex.getMessage());
+            return;
+        }
+
+        // ---------- Pass B: собрать byId ТОЛЬКО для нужных ways ----------
+        final Map<Long, JsonObject> byId = new HashMap<>();
+        if (!neededWayIds.isEmpty()) {
+            try (FeatureStream fs = store.featureStream()) {
+                for (JsonObject e : fs) {
+                    String type = e.has("type") ? e.get("type").getAsString() : "";
+                    if (!"way".equals(type)) continue;
+                    if (!e.has("id")) continue;
+                    long id = e.get("id").getAsLong();
+                    if (neededWayIds.contains(id)) {
+                        byId.put(id, e);
+                    }
+                }
+            } catch (Exception ex) {
+                broadcast(level, "Ошибка чтения NDJSON (Pass B): " + ex.getMessage());
+            }
+        }
+
+        // ---------- Родительские оболочки для наследования внешности ----------
+        collectParentShellsStream(byId,
+            centerLat, centerLng, east, west, north, south,
+            sizeMeters, centerX, centerZ,
+            minX, maxX, minZ, maxZ);
+
+
+        // ---------- Hints для высоты/этажей: один проход ----------
+        final List<JsonObject> interiorHints = new ArrayList<>();
+        try (FeatureStream fs = store.featureStream()) {
+            for (JsonObject e : fs) {
+                String t = optString(e, "type");
+                if (!"node".equals(t) && !"way".equals(t)) continue;
+                JsonObject tags = (e.has("tags") && e.get("tags").isJsonObject()) ? e.getAsJsonObject("tags") : null;
+                if (tags == null) continue;
+                if (hasNonBlank(tags, "level") ||
+                    hasNonBlank(tags, "level:ref") ||
+                    hasNonBlank(tags, "min_level") || hasNonBlank(tags, "building:min_level") ||
+                    hasNonBlank(tags, "max_level") || hasNonBlank(tags, "building:max_level") ||
+                    hasNonBlank(tags, "height") || hasNonBlank(tags, "building:height")) {
+                    interiorHints.add(e);
+                }
+            }
+        } catch (Exception ex) {
+            broadcast(level, "Ошибка чтения NDJSON (hints): " + ex.getMessage());
+        }
+
+        // ---------- Entrances / Passages ----------
+        final List<int[]> entrances;
+        try (FeatureStream fs = store.featureStream()) {
+            entrances = collectEntrances(fs, centerLat, centerLng, east, west, north, south, sizeMeters, centerX, centerZ);
+        } catch (Exception ex) {
+            broadcast(level, "Ошибка чтения NDJSON (entrances): " + ex.getMessage());
+            return;
+        }
+        final List<List<int[]>> passages;
+        try (FeatureStream fs = store.featureStream()) {
+            passages = collectPassages(fs, centerLat, centerLng, east, west, north, south, sizeMeters, centerX, centerZ);
+        } catch (Exception ex) {
+            broadcast(level, "Ошибка чтения NDJSON (passages): " + ex.getMessage());
+            return;
+        }
+
+        // ---------- Pass C: building:part (relations) ----------
+        final List<PartTask> partTasks = new ArrayList<>();
+        try (FeatureStream fs = store.featureStream()) {
+            for (JsonObject e : fs) {
+                String type = e.has("type") ? e.get("type").getAsString() : "";
+                if (!"relation".equals(type)) continue;
+
+                JsonObject tags = (e.has("tags") && e.get("tags").isJsonObject()) ? e.getAsJsonObject("tags") : null;
+                if (tags == null || !isBuildingPart(tags)) continue;
+
+                MultiPoly mp = assembleMultiPoly(e, byId,
+                        centerLat, centerLng, east, west, north, south,
+                        sizeMeters, centerX, centerZ, waysUsedInRelations);
+                if (mp == null || mp.outers.isEmpty()) continue;
+
+                Set<Long> fill = rasterizeMultiPolygon(mp.outers, mp.inners, minX, maxX, minZ, maxZ);
+                partFootprint.addAll(fill);
+                JsonObject effTags = (mp.tags != null ? mp.tags : tags);
+                effTags = inheritAppearanceFromParent(effTags, fill);
+                int mo = effectiveMinOffsetForPart(effTags);
+                partTasks.add(new PartTask(fill, mp.outers, effTags, mo));
+            }
+        } catch (Exception ex) {
+            broadcast(level, "Ошибка чтения NDJSON (Pass C, relation parts): " + ex.getMessage());
+        }
+
+        // ---------- Pass D: building:part (ways, не использованы в relations) ----------
+        try (FeatureStream fs = store.featureStream()) {
+            for (JsonObject e : fs) {
+                String type = e.has("type") ? e.get("type").getAsString() : "";
+                if (!"way".equals(type)) continue;
+
+                JsonObject tags = (e.has("tags") && e.get("tags").isJsonObject()) ? e.getAsJsonObject("tags") : null;
+                if (tags == null || !isBuildingPart(tags)) continue;
+
+                Long id = e.has("id") ? e.get("id").getAsLong() : null;
+                if (id != null && waysUsedInRelations.contains(id)) continue;
+
+                JsonArray geom = e.getAsJsonArray("geometry");
+                if (geom == null || geom.size() < 3) continue;
+
+                List<int[]> ring = toRingTiles(geom, centerLat, centerLng, east, west, north, south, sizeMeters, centerX, centerZ);
+                Set<Long> fill = rasterizePolygon(ring, minX, maxX, minZ, maxZ);
+                if (fill.isEmpty()) continue;
+
+                partFootprint.addAll(fill);
+                JsonObject effPartTags = inheritAppearanceFromParent(tags, fill);
+                int mo = effectiveMinOffsetForPart(effPartTags);
+                partTasks.add(new PartTask(fill, Collections.singletonList(ring), effPartTags, mo));
+            }
+        } catch (Exception ex) {
+            broadcast(level, "Ошибка чтения NDJSON (Pass D, way parts): " + ex.getMessage());
+        }
+
+        // ---------- Построить части снизу вверх ----------
+        partTasks.sort(Comparator.comparingInt(t -> t.minOffsetSort));
+        for (PartTask t : partTasks) {
+            buildFromFill(t.fill, t.outers, t.tags, entrances, passages, minX, maxX, minZ, maxZ, /*airOnly=*/false);
+        }
+
+        // ---------- Pass E: relation с building=* и canopy ----------
+        try (FeatureStream fs = store.featureStream()) {
+            for (JsonObject e : fs) {
+                String type = e.has("type") ? e.get("type").getAsString() : "";
+                if (!"relation".equals(type)) continue;
+
+                JsonObject tags = (e.has("tags") && e.get("tags").isJsonObject()) ? e.getAsJsonObject("tags") : null;
+                if (tags == null || !(isBuilding(tags) || isCanopy(tags))) continue;
+
+                MultiPoly mp = assembleMultiPoly(e, byId,
+                        centerLat, centerLng, east, west, north, south,
+                        sizeMeters, centerX, centerZ, waysUsedInRelations);
+                if (mp == null || mp.outers.isEmpty()) continue;
+
+                if (isCanopy(tags)) {
+                    for (List<int[]> o : mp.outers) buildCanopy(o, (mp.tags != null ? mp.tags : tags), minX, maxX, minZ, maxZ);
+                } else {
+                    Set<Long> fill = rasterizeMultiPolygon(mp.outers, mp.inners, minX, maxX, minZ, maxZ);
+                    fill.removeAll(partFootprint);
+                    if (!fill.isEmpty()) {
+                        JsonObject eff =
+                            augmentHeightFromInteriorUsingHints(tags, fill, interiorHints, centerLat, centerLng, east, west, north, south, sizeMeters, centerX, centerZ);
+
+                        buildFromFill(fill, mp.outers, eff, entrances, passages, minX, maxX, minZ, maxZ, false);
+                    }
+                }
+            }
+        } catch (Exception ex) {
+            broadcast(level, "Ошибка чтения NDJSON (Pass E, relation buildings): " + ex.getMessage());
+        }
+
+        // ---------- Pass F: ways с building=* (не части), не в relations ----------
+        try (FeatureStream fs = store.featureStream()) {
+            for (JsonObject e : fs) {
+                String type = e.has("type") ? e.get("type").getAsString() : "";
+                if (!"way".equals(type)) continue;
+
+                JsonObject tags = (e.has("tags") && e.get("tags").isJsonObject()) ? e.getAsJsonObject("tags") : null;
+                if (tags == null) continue;
+
+                if (isCanopy(tags)) {
+                    JsonArray geom = e.getAsJsonArray("geometry");
+                    if (geom == null || geom.size() < 3) continue;
+                    List<int[]> ring = toRingTiles(geom, centerLat, centerLng, east, west, north, south, sizeMeters, centerX, centerZ);
+                    buildCanopy(ring, tags, minX, maxX, minZ, maxZ);
+                    continue;
+                }
+
+                if (!isBuilding(tags) || isBuildingPart(tags)) continue;
+
+                Long id = e.has("id") ? e.get("id").getAsLong() : null;
+                if (id != null && waysUsedInRelations.contains(id)) continue;
+
+                JsonArray geom = e.getAsJsonArray("geometry");
+                if (geom == null || geom.size() < 3) continue;
+
+                List<int[]> ring = toRingTiles(geom, centerLat, centerLng, east, west, north, south, sizeMeters, centerX, centerZ);
+                Set<Long> fill = rasterizePolygon(ring, minX, maxX, minZ, maxZ);
+                fill.removeAll(partFootprint);
+                if (fill.isEmpty()) continue;
+
+                List<List<int[]>> outers = Collections.singletonList(ring);
+                JsonObject eff =
+                    augmentHeightFromInteriorUsingHints(tags, fill, interiorHints, centerLat, centerLng, east, west, north, south, sizeMeters, centerX, centerZ);
+
+
+                buildFromFill(fill, outers, eff, entrances, passages, minX, maxX, minZ, maxZ, false);
+            }
+        } catch (Exception ex) {
+            broadcast(level, "Ошибка чтения NDJSON (Pass F, way buildings): " + ex.getMessage());
+        }
+    }
+
+    // >>> collectParentShellsStream 
+    private void collectParentShellsStream(Map<Long, JsonObject> byId,
+                                        double centerLat, double centerLng,
+                                        double east, double west, double north, double south,
+                                        int sizeMeters, int centerX, int centerZ,
+                                        int minX, int maxX, int minZ, int maxZ) {
+
+        parentShells.clear();
+
+        // Relations с building=* (НЕ части)
+        try (FeatureStream fs = store.featureStream()) {
+            for (JsonObject e : fs) {
+                String type = e.has("type") ? e.get("type").getAsString() : "";
+                if (!"relation".equals(type)) continue;
+
+                JsonObject tags = (e.has("tags") && e.get("tags").isJsonObject()) ? e.getAsJsonObject("tags") : null;
+                if (tags == null || !isBuilding(tags) || isBuildingPart(tags)) continue;
+
+                MultiPoly mp = assembleMultiPoly(e, byId,
+                        centerLat, centerLng, east, west, north, south,
+                        sizeMeters, centerX, centerZ, new HashSet<>());
+                if (mp == null || mp.outers.isEmpty()) continue;
+
+                Set<Long> fill = rasterizeMultiPolygon(mp.outers, mp.inners, minX, maxX, minZ, maxZ);
+                if (fill.isEmpty()) continue;
+
+                Shell sh = new Shell();
+                sh.fill = fill;
+                sh.tags = (mp.tags != null ? mp.tags : tags).deepCopy();
+                parentShells.add(sh);
+            }
+        } catch (Exception ex) {
+            broadcast(level, "Ошибка NDJSON при сборе parentShells (relations): " + ex.getMessage());
+        }
+
+        // Ways с building=* (НЕ части)
+        try (FeatureStream fs = store.featureStream()) {
+            for (JsonObject e : fs) {
+                String type = e.has("type") ? e.get("type").getAsString() : "";
+                if (!"way".equals(type)) continue;
+
+                JsonObject tags = (e.has("tags") && e.get("tags").isJsonObject()) ? e.getAsJsonObject("tags") : null;
+                if (tags == null || !isBuilding(tags) || isBuildingPart(tags)) continue;
+
+                JsonArray geom = e.getAsJsonArray("geometry");
+                if (geom == null || geom.size() < 3) continue;
+
+                List<int[]> ring = toRingTiles(geom, centerLat, centerLng, east, west, north, south, sizeMeters, centerX, centerZ);
+                Set<Long> fill = rasterizePolygon(ring, minX, maxX, minZ, maxZ);
+                if (fill.isEmpty()) continue;
+
+                Shell sh = new Shell();
+                sh.fill = fill;
+                sh.tags = tags.deepCopy();
+                parentShells.add(sh);
+            }
+        } catch (Exception ex) {
+            broadcast(level, "Ошибка NDJSON при сборе parentShells (ways): " + ex.getMessage());
+        }
+    }
+
 
     @SuppressWarnings("unused")
     // Перегрузка: для общего контура — ставить блоки только в воздух (airOnly=true)
@@ -1299,8 +1691,8 @@ public class BuildingGenerator {
         if (fill.isEmpty()) return;
 
         // 2) Собираем список outer-колец (для совместимости с мультиполигоном)
-        List<List<int[]>> outers = new ArrayList<>(1);
-        outers.add(ring);
+        List<List<int[]>> outers = Collections.singletonList(ring);
+
 
         // 3) Строим через ОДНУ функцию, как и обычные здания:
         // одинаковый рельеф (terrainGrid/snapshot), одинаковая расчистка/стены/крыша/двери.
@@ -1490,8 +1882,9 @@ public class BuildingGenerator {
         if (entrances == null || entrances.isEmpty() || edge == null || edge.isEmpty()) return;
 
         // Быстрая структура для поиска ближайшей точки ребра
-        List<int[]> edgeList = new ArrayList<>(edge.size());
-        for (long k : edge) edgeList.add(new int[]{BlockPos.getX(k), BlockPos.getZ(k)});
+        List<int[]> edgeList = edge.stream()
+                .map(k -> new int[]{BlockPos.getX(k), BlockPos.getZ(k)})
+                .collect(Collectors.toList());
 
         // Чтобы не ставить двери в одну и ту же клетку
         Set<Long> usedDoorSpots = new HashSet<>();
@@ -1513,20 +1906,19 @@ public class BuildingGenerator {
             }
 
             // Ищем ближайшую клетку ребра
-            int bestIdx = -1, bestDist = Integer.MAX_VALUE;
-            for (int i = 0; i < edgeList.size(); i++) {
-                int dx = edgeList.get(i)[0] - ex;
-                int dz = edgeList.get(i)[1] - ez;
-                int d2 = dx*dx + dz*dz;
-                if (d2 < bestDist) { bestDist = d2; bestIdx = i; }
-            }
-            if (bestIdx < 0) continue;
+            int[] nearest = edgeList.stream()
+                    .min(Comparator.comparingInt(p -> {
+                        int dx = p[0] - ex, dz = p[1] - ez;
+                        return dx*dx + dz*dz;
+                    }))
+                    .orElse(null);
+            if (nearest == null) continue;
+            // порог 5 блоков (25 по квадрату расстояния)
+            int ndx = nearest[0] - ex, ndz = nearest[1] - ez;
+            if (ndx*ndx + ndz*ndz > 25) continue;
+            int x = nearest[0];
+            int z = nearest[1];
 
-            // Слишком далеко — пропускаем (шум/чужой вход). Порог 5 блоков.
-            if (bestDist > 25) continue;
-
-            int x = edgeList.get(bestIdx)[0];
-            int z = edgeList.get(bestIdx)[1];
 
             long spot = BlockPos.asLong(x,0,z);
             if (usedDoorSpots.contains(spot)) continue; // уже ставили рядом дверь
@@ -2084,6 +2476,26 @@ public class BuildingGenerator {
         return pts;
     }
 
+    private List<int[]> collectEntrances(FeatureStream fs,
+                                        double centerLat, double centerLng,
+                                        double east, double west, double north, double south,
+                                        int sizeMeters, int centerX, int centerZ) {
+        List<int[]> pts = new ArrayList<>();
+        for (JsonObject e : fs) {
+            if (!"node".equals(optString(e, "type"))) continue;
+            JsonObject tags = (e.has("tags") && e.get("tags").isJsonObject()) ? e.getAsJsonObject("tags") : null;
+            if (tags == null) continue;
+            String ent = optString(tags, "entrance");
+            if (ent == null) continue;
+            double lat = e.get("lat").getAsDouble();
+            double lon = e.get("lon").getAsDouble();
+            int[] xz = latlngToBlock(lat, lon, centerLat, centerLng, east, west, north, south, sizeMeters, centerX, centerZ);
+            pts.add(new int[]{xz[0], xz[1]});
+        }
+        return pts;
+    }
+
+
     private boolean isNonNegativePassage(JsonObject tags) {
         Integer layer = parseFirstInt(optString(tags, "layer"));
         Integer level = parseFirstInt(optString(tags, "level"));
@@ -2137,6 +2549,34 @@ public class BuildingGenerator {
         }
         return lines;
     }
+
+    private List<List<int[]>> collectPassages(FeatureStream fs,
+            double centerLat, double centerLng,
+            double east, double west, double north, double south,
+            int sizeMeters, int centerX, int centerZ) {
+        List<List<int[]>> lines = new ArrayList<>();
+        for (JsonObject e : fs) {
+            if (!"way".equals(optString(e, "type"))) continue;
+            JsonObject tags = (e.has("tags") && e.get("tags").isJsonObject()) ? e.getAsJsonObject("tags") : null;
+            if (tags == null) continue;
+            if (!isPassageCandidate(tags)) continue;
+            if (!isNonNegativePassage(tags)) continue;
+
+            JsonArray geom = e.getAsJsonArray("geometry");
+            if (geom == null || geom.size() < 2) continue;
+            List<int[]> line = new ArrayList<>();
+            for (JsonElement gp : geom) {
+                JsonObject p = gp.getAsJsonObject();
+                int[] xz = latlngToBlock(
+                        p.get("lat").getAsDouble(), p.get("lon").getAsDouble(),
+                        centerLat, centerLng, east, west, north, south, sizeMeters, centerX, centerZ);
+                line.add(xz);
+            }
+            lines.add(line);
+        }
+        return lines;
+    }
+
 
     private List<int[]> toRingTiles(JsonArray geom,
                                     double centerLat, double centerLng,
@@ -2401,6 +2841,138 @@ private boolean isNodeInside(JsonObject node, Set<Long> buildingFill,
         // Ничего не нашли — возвращаем исходные теги
         return buildingTags;
     }
+
+    @SuppressWarnings("unused")
+    private JsonObject augmentHeightFromInteriorIfMissingStream(
+            JsonObject buildingTags,
+            Set<Long> buildingFill,
+            double centerLat, double centerLng,
+            double east, double west, double north, double south,
+            int sizeMeters, int centerX, int centerZ) {
+
+        if (buildingTags == null) buildingTags = new JsonObject();
+        if (hasStructuralHeight(buildingTags)) return buildingTags;
+
+        JsonObject out = buildingTags.deepCopy();
+
+        Set<Integer> unionNonNegLevels = new HashSet<>();
+        double maxHeightMeters = -1;
+
+        try (FeatureStream fs = (store != null ? store.featureStream() : null)) {
+            if (fs == null) return buildingTags; // нет стрима — пусть вызывающий использует старую версию
+
+            for (JsonObject e : fs) {
+                String t = optString(e, "type");
+                if (t == null) continue;
+
+                boolean inside = false;
+                if ("node".equals(t)) {
+                    inside = isNodeInside(e, buildingFill, centerLat, centerLng, east, west, north, south, sizeMeters, centerX, centerZ);
+                } else if ("way".equals(t)) {
+                    inside = isWayMostlyInside(e, buildingFill, centerLat, centerLng, east, west, north, south, sizeMeters, centerX, centerZ);
+                } else {
+                    continue;
+                }
+                if (!inside) continue;
+
+                JsonObject tags = (e.has("tags") && e.get("tags").isJsonObject()) ? e.getAsJsonObject("tags") : null;
+                if (tags == null) continue;
+
+                for (String key : new String[]{"level","level:ref"}) {
+                    Set<Integer> lv = parseLevelsSet(optString(tags, key));
+                    for (int v : lv) if (v >= 0) unionNonNegLevels.add(v);
+                }
+
+                Integer minL = parseFirstInt(optString(tags, "min_level"));
+                if (minL == null) minL = parseFirstInt(optString(tags, "building:min_level"));
+                Integer maxL = parseFirstInt(optString(tags, "max_level"));
+                if (maxL == null) maxL = parseFirstInt(optString(tags, "building:max_level"));
+                if (minL != null && maxL != null) {
+                    int a = Math.min(minL, maxL), b = Math.max(minL, maxL);
+                    for (int v = a; v <= b; v++) if (v >= 0) unionNonNegLevels.add(v);
+                }
+
+                Double h = parseMeters(optString(tags, "height"));
+                if (h == null) h = parseMeters(optString(tags, "building:height"));
+                if (h != null && h > 0) maxHeightMeters = Math.max(maxHeightMeters, h);
+            }
+        } catch (Exception ignore) {}
+
+        if (!unionNonNegLevels.isEmpty()) {
+            int levels = unionNonNegLevels.size();
+            if (levels > 0) {
+                out.addProperty("building:levels", levels);
+                return out;
+            }
+        }
+
+        if (maxHeightMeters > 0) {
+            out.addProperty("height", (int)Math.round(maxHeightMeters));
+            return out;
+        }
+        return buildingTags;
+    }
+
+
+    private JsonObject augmentHeightFromInteriorUsingHints(
+            JsonObject buildingTags, Set<Long> buildingFill, List<JsonObject> hints,
+            double centerLat, double centerLng, double east, double west, double north, double south,
+            int sizeMeters, int centerX, int centerZ) {
+        
+        if (buildingTags == null) buildingTags = new JsonObject();
+        if (hasStructuralHeight(buildingTags)) return buildingTags;
+
+        JsonObject out = buildingTags.deepCopy();
+        Set<Integer> unionNonNegLevels = new HashSet<>();
+        double maxHeightMeters = -1;
+
+        for (JsonObject e : hints) {
+            String t = optString(e, "type");
+            boolean inside = "node".equals(t)
+                ? isNodeInside(e, buildingFill, centerLat, centerLng, east, west, north, south, sizeMeters, centerX, centerZ)
+                : "way".equals(t) && isWayMostlyInside(e, buildingFill, centerLat, centerLng, east, west, north, south, sizeMeters, centerX, centerZ);
+            
+            if (!inside) continue;
+
+            JsonObject tags = (e.has("tags") && e.get("tags").isJsonObject()) ? e.getAsJsonObject("tags") : null;
+            if (tags == null) continue;
+
+            for (String key : new String[]{"level", "level:ref"}) {
+                Set<Integer> lv = parseLevelsSet(optString(tags, key));
+                for (int v : lv) if (v >= 0) unionNonNegLevels.add(v);
+            }
+
+            Integer minL = parseFirstInt(optString(tags, "min_level"));
+            if (minL == null) minL = parseFirstInt(optString(tags, "building:min_level"));
+            Integer maxL = parseFirstInt(optString(tags, "max_level"));
+            if (maxL == null) maxL = parseFirstInt(optString(tags, "building:max_level"));
+            if (minL != null && maxL != null) {
+                int a = Math.min(minL, maxL), b = Math.max(minL, maxL);
+                for (int v = a; v <= b; v++) if (v >= 0) unionNonNegLevels.add(v);
+            }
+
+            Double h = parseMeters(optString(tags, "height"));
+            if (h == null) h = parseMeters(optString(tags, "building:height"));
+            if (h != null && h > 0) maxHeightMeters = Math.max(maxHeightMeters, h);
+        }
+
+        if (!unionNonNegLevels.isEmpty()) {
+            int levels = unionNonNegLevels.size();
+            if (levels > 0) {
+                out.addProperty("building:levels", levels);
+                return out;
+            }
+        }
+
+        if (maxHeightMeters > 0) {
+            out.addProperty("height", (int)Math.round(maxHeightMeters));
+            return out;
+        }
+
+        return buildingTags;
+    }
+
+
 
     private String parseRoofShape(JsonObject tags) {
         String s = optString(tags, "roof:shape");
@@ -2985,7 +3557,26 @@ private boolean isNodeInside(JsonObject node, Set<Long> buildingFill,
     private void snapshotGround(int minX, int maxX, int minZ, int maxZ) {
         groundSnapshot.clear();
 
-        // 1) Если есть terrainGrid в coords — СТРОГО используем его как источник рельефа.
+        // 0) store.grid — самый быстрый и точный
+        try {
+            if (store != null && store.grid != null) {
+                for (int z = minZ; z <= maxZ; z++) {
+                    for (int x = minX; x <= maxX; x++) {
+                        int gy = store.grid.inBounds(x, z) ? store.grid.groundY(x, z) : Integer.MIN_VALUE;
+                        if (gy == Integer.MIN_VALUE) {
+                            gy = level.getHeight(Heightmap.Types.MOTION_BLOCKING_NO_LEAVES, x, z) - 1;
+                        }
+                        groundSnapshot.put(BlockPos.asLong(x, 0, z), gy);
+                    }
+                }
+                broadcast(level, "terrainGrid (store) → snapshotGround: использую высоты из грида.");
+                return;
+            }
+        } catch (Throwable t) {
+            broadcast(level, "store.grid недоступен — пробую coords.terrainGrid → heightmap.");
+        }
+
+        // 1) coords.terrainGrid
         try {
             if (coords != null && coords.has("terrainGrid")) {
                 JsonObject g = coords.getAsJsonObject("terrainGrid");
@@ -2999,26 +3590,23 @@ private boolean isNodeInside(JsonObject node, Set<Long> buildingFill,
                     for (int x = minX; x <= maxX; x++) {
                         int ix = x - gridMinX, iz = z - gridMinZ;
                         int y = Integer.MIN_VALUE;
-
                         if (ix >= 0 && ix < w && iz >= 0 && iz < h) {
-                            // значение из грида — это верх рельефа (Y)
                             y = data.get(iz * w + ix).getAsInt();
                         }
-                        // Вышли за пределы грида? Фолбэк на нормальный heightmap, а не «верхний не-air»
                         if (y == Integer.MIN_VALUE) {
                             y = level.getHeight(Heightmap.Types.MOTION_BLOCKING_NO_LEAVES, x, z) - 1;
                         }
                         groundSnapshot.put(BlockPos.asLong(x, 0, z), y);
                     }
                 }
-                broadcast(level, "terrainGrid → snapshotGround: использую высоты рельефа из грида.");
+                broadcast(level, "coords.terrainGrid → snapshotGround: использую высоты из грида.");
                 return;
             }
         } catch (Throwable t) {
-            broadcast(level, "terrainGrid недоступен/бит — откат к heightmap.");
+            broadcast(level, "coords.terrainGrid недоступен/бит — откат к heightmap.");
         }
 
-        // 2) Нет грида — берём высоту из heightmap (земля), а НЕ «самый верхний блок».
+        // 2) чистый heightmap
         for (int z = minZ; z <= maxZ; z++) {
             for (int x = minX; x <= maxX; x++) {
                 int y = level.getHeight(Heightmap.Types.MOTION_BLOCKING_NO_LEAVES, x, z) - 1;
@@ -3027,7 +3615,16 @@ private boolean isNodeInside(JsonObject node, Set<Long> buildingFill,
         }
     }
 
+
     private int terrainYFromCoordsOrWorld(int x, int z, Integer hintY) {
+        // 0) из store.grid (предпочтительно)
+        try {
+            if (store != null && store.grid != null && store.grid.inBounds(x, z)) {
+                int gy = store.grid.groundY(x, z);
+                if (gy != Integer.MIN_VALUE) return gy;
+            }
+        } catch (Throwable ignore) {}
+
         // 1) из coords.terrainGrid
         try {
             if (coords != null && coords.has("terrainGrid")) {
@@ -3048,14 +3645,15 @@ private boolean isNodeInside(JsonObject node, Set<Long> buildingFill,
         Integer snap = groundSnapshot.get(BlockPos.asLong(x, 0, z));
         if (snap != null) return snap;
 
-        // 3) строго: НИ-ЧЕ-ГО из мира
+        // 3) строго: НИЧЕГО из мира
         if (STRICT_TERRAIN) {
             return (hintY != null) ? hintY : Integer.MIN_VALUE;
         }
 
-        // 4) нестрого: корректный heightmap (земля), не «верхний блок»
+        // 4) нестрого: корректный heightmap
         return level.getHeight(Heightmap.Types.MOTION_BLOCKING_NO_LEAVES, x, z) - 1;
     }
+
 
     private static String optString(JsonObject o, String k) {
         try { return (o != null && o.has(k) && !o.get(k).isJsonNull()) ? o.get(k).getAsString() : null; }
@@ -3358,6 +3956,21 @@ private boolean isNodeInside(JsonObject node, Set<Long> buildingFill,
                 level.setBlock(pos, facade.defaultBlockState(), 3);
             }
         }
+
+        // === ВХОДЫ/ПРОХОДЫ ===
+        // Сначала окна, потом режем проходы, затем ставим двери — чтобы окна не «заделали» проём
+        applyWindows(edge, fill, tags, minOffset, facadeBlocks, yBaseSurf, /*totalHeight=*/facadeBlocks + roofBlocks, facadeId);
+
+        if (passages != null && !passages.isEmpty()) {
+            int buildingTotal = Math.max(1, facadeBlocks + roofBlocks);
+            carvePassages(fill, passages, minOffset, buildingTotal, yBaseSurf);
+            dressPassagesAsStoneSleeve(fill, passages, minOffset, buildingTotal, yBaseSurf);
+        }
+
+        if (entrances != null && !entrances.isEmpty()) {
+            placeDoorsOnEntrances(edge, fill, entrances, minOffset, yBaseSurf);
+        }
+
 
         // --- ОКНА: пробиваем окна в стенах (см. блок «ЛОГИКА ОКОН» внизу файла)
         applyWindows(edge, fill, tags, minOffset, facadeBlocks, yBaseSurf, /*totalHeight=*/facadeBlocks + roofBlocks, facadeId);

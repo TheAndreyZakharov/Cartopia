@@ -1,5 +1,8 @@
 package com.cartopia.builder;
 
+import com.cartopia.store.FeatureStream;
+import com.cartopia.store.GenerationStore;
+import com.cartopia.store.TerrainGridStore;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
@@ -20,14 +23,22 @@ public class TunnelGenerator {
 
     private final ServerLevel level;
     private final JsonObject coords;
+    private final GenerationStore store;       // может быть null
+    private final TerrainGridStore grid;       // может быть null
 
     // Все позиции блоков, поставленных ЭТИМ генератором в текущем запуске.
     private final Set<Long> placedByTunnel = new HashSet<>();
 
-    public TunnelGenerator(ServerLevel level, JsonObject coords) {
+    // для быстрого доступа к состояниям — переиспользуемый mpos
+    private final BlockPos.MutableBlockPos mpos = new BlockPos.MutableBlockPos();
+
+    public TunnelGenerator(ServerLevel level, JsonObject coords, GenerationStore store) {
         this.level = level;
         this.coords = coords;
+        this.store = store;
+        this.grid = (store != null) ? store.grid : null;
     }
+    public TunnelGenerator(ServerLevel level, JsonObject coords) { this(level, coords, null); }
 
     // --- широковещалка ---
     private static void broadcast(ServerLevel level, String msg) {
@@ -81,10 +92,14 @@ public class TunnelGenerator {
 
     // ==== публичный запуск ====
     public void generate() {
-        broadcast(level, "🚇 Тоннели: глубина всегда 7 ниже рельефа, ступень=1 блок, порталы x4 + каменные ограждения…");
+        broadcast(level, "🚇 Тоннели: глубина 7 ниже рельефа, ступень=1 блок, порталы с ободком…");
 
-        if (coords == null || !coords.has("features")) {
-            broadcast(level, "В coords нет features — пропускаю TunnelGenerator.");
+        if (coords == null) {
+            broadcast(level, "coords == null — пропускаю TunnelGenerator.");
+            return;
+        }
+        if (!coords.has("center") || !coords.has("bbox")) {
+            broadcast(level, "Нет center/bbox — пропускаю TunnelGenerator.");
             return;
         }
 
@@ -115,14 +130,97 @@ public class TunnelGenerator {
         final int minZ = Math.min(a[1], b[1]);
         final int maxZ = Math.max(a[1], b[1]);
 
+        Block railBlock   = resolveBlock("minecraft:rail");
+        Block stoneBricks = resolveBlock("minecraft:stone_bricks");
+
+        // ===== РЕЖИМ 1: есть store → стримим NDJSON =====
+        if (store != null) {
+            long approxTotal = 0;
+            try {
+                JsonObject idx = store.indexJsonObject();
+                if (idx != null && idx.has("features_count")) approxTotal = Math.max(0, idx.get("features_count").getAsLong());
+            } catch (Throwable ignore) {}
+
+            long scanned = 0;
+            int nextPctMark = 5;
+
+            try (FeatureStream fs = store.featureStream()) {
+                for (JsonObject e : fs) {
+                    scanned++;
+
+                    if (!"way".equals(optString(e, "type"))) continue;
+
+                    JsonObject tags = (e.has("tags") && e.get("tags").isJsonObject())
+                            ? e.getAsJsonObject("tags") : null;
+                    if (tags == null) continue;
+
+                    if (isHighwayTunnel(tags)) {
+                        JsonArray geom = e.getAsJsonArray("geometry");
+                        if (geom == null || geom.size() < 2) continue;
+
+                        String highway = optString(tags, "highway");
+                        String aeroway = optString(tags, "aeroway");
+                        String styleKey = (highway != null) ? highway : (aeroway != null ? "aeroway:" + aeroway : "");
+                        RoadStyle style = ROAD_MATERIALS.getOrDefault(styleKey, new RoadStyle("stone", 4));
+                        Block deckBlock = resolveBlock(style.blockId);
+
+                        List<int[]> pts = new ArrayList<>(geom.size());
+                        for (int i = 0; i < geom.size(); i++) {
+                            JsonObject p = geom.get(i).getAsJsonObject();
+                            pts.add(latlngToBlock(p.get("lat").getAsDouble(), p.get("lon").getAsDouble(),
+                                    centerLat, centerLng, east, west, north, south, sizeMeters, centerX, centerZ));
+                        }
+
+                        int mainDepth = computeMainDepth(tags);
+                        paintTunnelDeckWithRamps(pts, style.width, deckBlock, mainDepth, RAMP_STEPS,
+                                minX, maxX, minZ, maxZ, stoneBricks);
+
+                    } else if (isRailTunnel(tags)) {
+                        JsonArray geom = e.getAsJsonArray("geometry");
+                        if (geom == null || geom.size() < 2) continue;
+
+                        List<int[]> pts = new ArrayList<>(geom.size());
+                        for (int i = 0; i < geom.size(); i++) {
+                            JsonObject p = geom.get(i).getAsJsonObject();
+                            pts.add(latlngToBlock(p.get("lat").getAsDouble(), p.get("lon").getAsDouble(),
+                                    centerLat, centerLng, east, west, north, south, sizeMeters, centerX, centerZ));
+                        }
+
+                        int mainDepth = computeMainDepth(tags);
+                        Block baseBlock = resolveBlock("minecraft:gray_concrete");
+                        paintRailsInTunnelWithRamps(pts, mainDepth, RAMP_STEPS,
+                                minX, maxX, minZ, maxZ, baseBlock, railBlock, stoneBricks);
+                    }
+
+                    if (approxTotal > 0) {
+                        int pct = (int)Math.round(100.0 * Math.min(scanned, approxTotal) / (double)approxTotal);
+                        if (pct >= nextPctMark) {
+                            broadcast(level, "Тоннели: ~" + pct + "%");
+                            nextPctMark = Math.min(100, nextPctMark + 5);
+                        }
+                    } else if (scanned % 10000 == 0) {
+                        broadcast(level, "Тоннели: обработано элементов ≈ " + scanned);
+                    }
+                }
+            } catch (Exception ex) {
+                broadcast(level, "Ошибка чтения features NDJSON: " + ex.getMessage());
+            }
+
+            broadcast(level, "Тоннели готовы.");
+            return;
+        }
+
+        // ===== РЕЖИМ 2: фоллбэк на старый JSON в памяти =====
+        if (!coords.has("features") || !coords.get("features").isJsonObject()) {
+            broadcast(level, "В coords нет features — пропускаю TunnelGenerator.");
+            return;
+        }
+
         JsonArray elements = coords.getAsJsonObject("features").getAsJsonArray("elements");
         if (elements == null || elements.size() == 0) {
             broadcast(level, "OSM elements пуст — пропускаю тоннели.");
             return;
         }
-
-        Block railBlock = resolveBlock("minecraft:rail");
-        Block stoneBricks = resolveBlock("minecraft:stone_bricks");
 
         int totalWays = 0;
         for (JsonElement el : elements) {
@@ -135,7 +233,7 @@ public class TunnelGenerator {
 
         int processed = 0;
 
-        // === 1) Дорожные/аэродромные подземные участки (ПОЛОТНО дороги под землёй) ===
+        // 1) дорожные/аэродромные тоннели
         for (JsonElement el : elements) {
             JsonObject e = el.getAsJsonObject();
             JsonObject tags = (e.has("tags") && e.get("tags").isJsonObject()) ? e.getAsJsonObject("tags") : null;
@@ -159,8 +257,7 @@ public class TunnelGenerator {
                         centerLat, centerLng, east, west, north, south, sizeMeters, centerX, centerZ));
             }
 
-            int mainDepth = computeMainDepth(tags); // всегда 7
-
+            int mainDepth = computeMainDepth(tags);
             paintTunnelDeckWithRamps(pts, style.width, deckBlock, mainDepth, RAMP_STEPS,
                     minX, maxX, minZ, maxZ, stoneBricks);
 
@@ -171,13 +268,13 @@ public class TunnelGenerator {
             }
         }
 
-        // === 2) Чисто железнодорожные подземные участки (только если ЖД сами подземные) ===
+        // 2) чисто железнодорожные тоннели
         for (JsonElement el : elements) {
             JsonObject e = el.getAsJsonObject();
             JsonObject tags = (e.has("tags") && e.get("tags").isJsonObject()) ? e.getAsJsonObject("tags") : null;
             if (tags == null) continue;
             if (!"way".equals(optString(e,"type"))) continue;
-            if (!isRailTunnel(tags)) continue; // строго по своим подземным тегам
+            if (!isRailTunnel(tags)) continue;
 
             JsonArray geom = e.getAsJsonArray("geometry");
             if (geom == null || geom.size() < 2) continue;
@@ -189,8 +286,7 @@ public class TunnelGenerator {
                         centerLat, centerLng, east, west, north, south, sizeMeters, centerX, centerZ));
             }
 
-            int mainDepth = computeMainDepth(tags); // всегда 7
-
+            int mainDepth = computeMainDepth(tags);
             Block baseBlock = resolveBlock("minecraft:gray_concrete");
             paintRailsInTunnelWithRamps(pts, mainDepth, RAMP_STEPS,
                     minX, maxX, minZ, maxZ, baseBlock, railBlock, stoneBricks);
@@ -207,7 +303,6 @@ public class TunnelGenerator {
 
     // ====== ОТБОР ======
 
-    // значения covered, характерные для проходов/аркад под крышей здания
     private static final Set<String> COVERED_VALUES = new HashSet<>(Arrays.asList(
             "yes","arcade","colonnade","gallery","veranda","canopy","roof"
     ));
@@ -221,17 +316,16 @@ public class TunnelGenerator {
         return false;
     }
 
-    /** Любой «тоннель», связанный со зданиями/интерьерами — пропускаем в этом генераторе. */
     private static boolean isBuildingLinkedPassage(JsonObject tags) {
         String t = optString(tags, "tunnel");
         if (t != null) {
             String tl = t.toLowerCase(Locale.ROOT);
             if (tl.contains("building_passage") || tl.equals("building")) return true;
         }
-        if (truthyOrText(tags, "indoor")) return true; // indoor=yes
+        if (truthyOrText(tags, "indoor")) return true;
         String loc = optString(tags, "location");
-        if (loc != null && loc.toLowerCase(Locale.ROOT).contains("indoor")) return true; // location=indoor(s)
-        if (hasAnyCovered(tags)) return true; // covered=yes/arcade/…
+        if (loc != null && loc.toLowerCase(Locale.ROOT).contains("indoor")) return true;
+        if (hasAnyCovered(tags)) return true;
         return false;
     }
 
@@ -243,7 +337,6 @@ public class TunnelGenerator {
         return !(v.equals("no") || v.equals("false") || v.equals("0"));
     }
 
-    // Парсинг любых чисел внутри значения тега (учитывает "-1;-2", " -1 ; 0 " и т.п.)
     private static final Pattern INT_PATTERN = Pattern.compile("[-+]?\\d+");
 
     private static Integer mostNegativeIntFromTag(JsonObject tags, String key) {
@@ -260,9 +353,8 @@ public class TunnelGenerator {
         return min;
     }
 
-    // «тоннелеподобность»: tunnel=*, layer<0, level<0, location=underground/below_ground. bridge исключаем.
     private static boolean isTunnelLike(JsonObject tags) {
-        if (truthyOrText(tags, "bridge")) return false;           // мосты исключаем
+        if (truthyOrText(tags, "bridge")) return false;
         if (truthyOrText(tags, "tunnel")) return true;
         Integer layerNeg = mostNegativeIntFromTag(tags, "layer");
         if (layerNeg != null && layerNeg < 0) return true;
@@ -279,7 +371,7 @@ public class TunnelGenerator {
     private static boolean isHighwayTunnel(JsonObject tags) {
         boolean isLine = tags.has("highway") || tags.has("aeroway");
         if (!isLine) return false;
-        if (isBuildingLinkedPassage(tags)) return false; // игнорим «зданийные»
+        if (isBuildingLinkedPassage(tags)) return false;
         return isTunnelLike(tags);
     }
 
@@ -288,18 +380,17 @@ public class TunnelGenerator {
         if (r == null) return false;
         r = r.trim().toLowerCase(Locale.ROOT);
         if (!(r.equals("rail") || r.equals("tram") || r.equals("light_rail"))) return false;
-        if (isBuildingLinkedPassage(tags)) return false; //  игнорим «зданийные»
+        if (isBuildingLinkedPassage(tags)) return false;
         return isTunnelLike(tags);
     }
 
-    /** Главная глубина тоннеля — ВСЕГДА 7 блоков ниже поверхности, независимо от тегов. */
+    /** Главная глубина тоннеля — ВСЕГДА 7 блоков ниже поверхности. */
     private int computeMainDepth(JsonObject tags) {
         return DEFAULT_DEPTH;
     }
 
-    // ====== РЕНДЕР ТОННЕЛЕЙ (НИЖЕ рельефа) ======
+    // ====== РЕНДЕР ТОННЕЛЕЙ ======
 
-    /** Полотно тоннеля: 7-ступенчатые спуски/подъёмы, БЕЗ бортиков, с очисткой порталов и каменным «ободком». */
     private void paintTunnelDeckWithRamps(List<int[]> pts, int width, Block deckBlock,
                                           int mainDepth, int rampSteps,
                                           int minX, int maxX, int minZ, int maxZ,
@@ -335,7 +426,7 @@ public class TunnelGenerator {
 
                 int localDepth = rampOffsetForIndex(idx, totalLen, mainDepth, rampSteps);
 
-                int ySurfCenter = findTopNonAirNearIgnoringTunnel(x, z, yHint);
+                int ySurfCenter = surfaceY(x, z, yHint);
                 if (ySurfCenter == Integer.MIN_VALUE) { idx++; continue; }
 
                 int targetDeckY = clampInt(ySurfCenter - localDepth, worldMin, worldMax);
@@ -344,14 +435,10 @@ public class TunnelGenerator {
                 if (lastStepTops.size() == 3) lastStepTops.removeFirst();
                 lastStepTops.addLast(yDeck);
 
-                boolean clearEdge = nearStart || nearEnd;
-
-
-                // ==== РУКАВ вдоль полотна (каменный кирпич) ====
-                final int wallHeight = 5;            // итого 5 в высоту
+                final int wallHeight = 5;
                 final int yRoof = yDeck + wallHeight - 1;
 
-                // боковые стены на 1 клетку шире полотна (только слева и справа)
+                // боковые стены
                 if (horizontalMajor) {
                     int zL = z - (half + 1);
                     int zR = z + (half + 1);
@@ -364,14 +451,15 @@ public class TunnelGenerator {
                     placeWallColumnCapped(xR, z, yDeck, wallHeight, yHint, minX, maxX, minZ, maxZ, rimBlock);
                 }
 
-                // крыша: сплошняком над областью дорожного полотна (без «носов» спереди/сзади)
+                // крыша над полотном
                 for (int w = -half; w <= half; w++) {
                     int rx = horizontalMajor ? x : x + w;
                     int rz = horizontalMajor ? z + w : z;
                     placeBlockCapped(rx, rz, yRoof, yHint, minX, maxX, minZ, maxZ, rimBlock);
                 }
 
-                // поперечник полотна
+                // полотно и очистка порталов
+                boolean clearEdge = nearStart || nearEnd;
                 for (int w = -half; w <= half; w++) {
                     int xx = horizontalMajor ? x : x + w;
                     int zz = horizontalMajor ? z + w : z;
@@ -380,31 +468,28 @@ public class TunnelGenerator {
                     setTunnelBlock(xx, yDeck, zz, deckBlock);
 
                     if (clearEdge) {
-                        clearTerrainAboveColumn(xx, zz, yDeck, yHint); // портал
+                        clearTerrainAboveColumn(xx, zz, yDeck, yHint);
                     }
                 }
 
-                // каменный «ободок» по периметру портала (кроме стороны захода)
-                // строим короб только на крайних 3 ступенях
+                // каменный «ободок» в крайних трёх ступенях
                 boolean rimZone = (fromStart <= RIM_BUILD_STEPS) || (fromEnd <= RIM_BUILD_STEPS);
                 if (rimZone) {
-                    // «внутрь тоннеля»: от начала идём по +dir, от конца — по -dir
                     int inDirX = (fromStart <= RIM_BUILD_STEPS) ? dirX : -dirX;
                     int inDirZ = (fromStart <= RIM_BUILD_STEPS) ? dirZ : -dirZ;
 
-                    // высота самой высокой из последних/текущей ступени
                     int stepTopMax = lastStepTops.stream().mapToInt(v -> v).max().orElse(yDeck);
 
                     buildPerimeterWallsAndRoof(
                             x, z, half, horizontalMajor,
                             inDirX, inDirZ,
-                            /*stepTopMax=*/stepTopMax,
+                            stepTopMax,
                             minX, maxX, minZ, maxZ,
                             rimBlock
                     );
                 }
 
-                // свет в крыше каждые 10 блоков (после короба, чтобы нас не перезаписало)
+                // свет в крыше
                 if (idx % 10 == 0) {
                     placeRoofLightNearCenter(
                             x, z, horizontalMajor, half, yRoof, yHint,
@@ -420,7 +505,6 @@ public class TunnelGenerator {
         }
     }
 
-    /** ЖД в тоннеле: база + rail на +1; те же спуски. С порталами и «ободком». */
     private void paintRailsInTunnelWithRamps(List<int[]> pts, int mainDepth, int rampSteps,
                                              int minX, int maxX, int minZ, int maxZ,
                                              Block baseBlock, Block railBlock,
@@ -443,7 +527,6 @@ public class TunnelGenerator {
             int dirZ = Integer.signum(z2 - z1);
             boolean horizontalMajor = Math.abs(x2 - x1) >= Math.abs(z2 - z1);
 
-
             List<int[]> seg = bresenhamLine(x1, z1, x2, z2);
 
             for (int pi = 0; pi < seg.size(); pi++) {
@@ -459,7 +542,7 @@ public class TunnelGenerator {
 
                 int localDepth = rampOffsetForIndex(idx, totalLen, mainDepth, rampSteps);
 
-                int ySurf = findTopNonAirNearIgnoringTunnel(x, z, yHint);
+                int ySurf = surfaceY(x, z, yHint);
                 if (ySurf == Integer.MIN_VALUE) { idx++; continue; }
 
                 int targetBaseY = clampInt(ySurf - localDepth, worldMin, worldMax - 1);
@@ -469,8 +552,6 @@ public class TunnelGenerator {
                 if (lastRailTops.size() == 3) lastRailTops.removeFirst();
                 lastRailTops.addLast(stepTopHere);
 
-
-                // ==== РУКАВ вдоль ЖД (каменный кирпич) ====
                 final int wallHeight = 5;
                 final int yRoof = yBase + wallHeight - 1;
 
@@ -487,7 +568,7 @@ public class TunnelGenerator {
                     placeWallColumnCapped(xR, z, yBase, wallHeight, yHint, minX, maxX, minZ, maxZ, rimBlock);
                 }
 
-                // крыша: над самим путём (ширина 1)
+                // крыша (ширина 1)
                 placeBlockCapped(x, z, yRoof, yHint, minX, maxX, minZ, maxZ, rimBlock);
 
                 setTunnelBlock(x, yBase,     z, baseBlock);
@@ -505,18 +586,17 @@ public class TunnelGenerator {
                     int stepTopMax = lastRailTops.stream().mapToInt(v -> v).max().orElse(stepTopHere);
 
                     buildPerimeterWallsAndRoof(
-                            x, z, /*half=*/0, horizontalMajor,
+                            x, z, 0, horizontalMajor,
                             inDirX, inDirZ,
-                            /*stepTopMax=*/stepTopMax,
+                            stepTopMax,
                             minX, maxX, minZ, maxZ,
                             rimBlock
                     );
                 }
-                
-                // свет в крыше каждые 10 блоков (ширина крыши = 1, потому half=0)
+
                 if (idx % 10 == 0) {
                     placeRoofLightNearCenter(
-                            x, z, horizontalMajor, /*half=*/0, yRoof, yHint,
+                            x, z, horizontalMajor, 0, yRoof, yHint,
                             minX, maxX, minZ, maxZ,
                             Blocks.GLOWSTONE
                     );
@@ -539,12 +619,11 @@ public class TunnelGenerator {
             Block rimBlock
     ) {
         final int worldMax = level.getMaxBuildHeight() - 1;
-        int h1 = Math.min(worldMax, stepTopMax + 1); // 1-й ярус стены
-        int h2 = Math.min(worldMax, stepTopMax + 2); // 2-й ярус стены
-        int h3 = Math.min(worldMax, stepTopMax + 3); // 3-й ярус стены
-        int h4 = h3; // крыша
+        int h1 = Math.min(worldMax, stepTopMax + 1);
+        int h2 = Math.min(worldMax, stepTopMax + 2);
+        int h3 = Math.min(worldMax, stepTopMax + 3);
+        int h4 = h3;
 
-        // Боковые стены: по обе стороны ширины, вдоль длины 0..RIM_LENGTH-1
         for (int i = 0; i < RIM_LENGTH; i++) {
             int cx = x + inDirX * i;
             int cz = z + inDirZ * i;
@@ -567,11 +646,9 @@ public class TunnelGenerator {
                 placeRimBlock(xr, cz, h1, minX, maxX, minZ, maxZ, rimBlock);
                 placeRimBlock(xr, cz, h2, minX, maxX, minZ, maxZ, rimBlock);
                 placeRimBlock(xr, cz, h3, minX, maxX, minZ, maxZ, rimBlock);
-
             }
         }
 
-        // Задняя (внутренняя) стена на отступе i = RIM_LENGTH (поперёк ширины)
         int bx = x + inDirX * RIM_LENGTH;
         int bz = z + inDirZ * RIM_LENGTH;
         for (int w = -half; w <= half; w++) {
@@ -582,7 +659,6 @@ public class TunnelGenerator {
             placeRimBlock(wx, wz, h3, minX, maxX, minZ, maxZ, rimBlock);
         }
 
-        // Крыша: над прямоугольником ширина×RIM_LENGTH на высоте h3
         for (int i = 0; i < RIM_LENGTH; i++) {
             int cx = x + inDirX * i;
             int cz = z + inDirZ * i;
@@ -594,11 +670,10 @@ public class TunnelGenerator {
         }
     }
 
-    /** Ставит rimBlock на точной высоте (x,y,z) и помечает как "наш". */
     private void placeRimBlock(int x, int z, int y,
-                            int minX, int maxX, int minZ, int maxZ, Block rimBlock) {
+                               int minX, int maxX, int minZ, int maxZ, Block rimBlock) {
         if (x < minX || x > maxX || z < minZ || z > maxZ) return;
-        level.setBlock(new BlockPos(x, y, z), rimBlock.defaultBlockState(), 3);
+        level.setBlock(mpos.set(x, y, z), rimBlock.defaultBlockState(), 3);
         placedByTunnel.add(BlockPos.asLong(x, y, z));
     }
 
@@ -614,7 +689,6 @@ public class TunnelGenerator {
         return L;
     }
 
-    /** Симметричные спуски/подъёмы: каждые RAMP_SPAN блоков увеличиваем/уменьшаем ступень. */
     private int rampOffsetForIndex(int idx, int totalLen, int mainOffset, int rampSteps) {
         if (mainOffset <= 0) return 0;
 
@@ -628,7 +702,18 @@ public class TunnelGenerator {
         return baseOffset + step;
     }
 
-    // ====== ПОИСК РЕЛЬЕФА / УСТАНОВКА БЛОКОВ / ОЧИСТКА ======
+    // ====== РЕЛЬЕФ / УСТАНОВКА / ОЧИСТКА ======
+
+    /** Высота поверхности: сперва из mmap-гряда, иначе — поиск сверху вниз, игнорируя наши же блоки. */
+    private int surfaceY(int x, int z, Integer hintY) {
+        try {
+            if (grid != null && grid.inBounds(x, z)) {
+                int y = grid.groundY(x, z);
+                if (y != Integer.MIN_VALUE) return y;
+            }
+        } catch (Throwable ignore) {}
+        return findTopNonAirNearIgnoringTunnel(x, z, hintY);
+    }
 
     private int findTopNonAirNearIgnoringTunnel(int x, int z, Integer hintY) {
         final int worldMin = level.getMinBuildHeight();
@@ -639,36 +724,36 @@ public class TunnelGenerator {
             int to   = Math.max(worldMin, hintY - 16);
             for (int y = from; y >= to; y--) {
                 long key = BlockPos.asLong(x, y, z);
-                if (placedByTunnel.contains(key)) continue; // наши блоки считаем воздухом
-                if (!level.getBlockState(new BlockPos(x, y, z)).isAir()) return y;
+                if (placedByTunnel.contains(key)) continue;
+                if (!level.getBlockState(mpos.set(x, y, z)).isAir()) return y;
             }
         }
         for (int y = worldMax; y >= worldMin; y--) {
             long key = BlockPos.asLong(x, y, z);
             if (placedByTunnel.contains(key)) continue;
-            if (!level.getBlockState(new BlockPos(x, y, z)).isAir()) return y;
+            if (!level.getBlockState(mpos.set(x, y, z)).isAir()) return y;
         }
         return Integer.MIN_VALUE;
     }
 
     /** Ставит блок и запоминает как «наш». */
     private void setTunnelBlock(int x, int y, int z, Block block) {
-        level.setBlock(new BlockPos(x, y, z), block.defaultBlockState(), 3);
+        level.setBlock(mpos.set(x, y, z), block.defaultBlockState(), 3);
         placedByTunnel.add(BlockPos.asLong(x, y, z));
     }
 
-    /** Очищает рельеф над (x,z) от поверхности до (yBottomInclusive+1), НЕ трогая rail-блоки (останавливаемся). */
+    /** Чистим столбец над (x,z) от поверхности до (yBottomInclusive+1), не трогая rail-блоки. */
     private void clearTerrainAboveColumn(int x, int z, int yBottomInclusive, Integer yHint) {
         final int worldMax = level.getMaxBuildHeight() - 1;
-        int ySurf = findTopNonAirNearIgnoringTunnel(x, z, yHint);
+        int ySurf = surfaceY(x, z, yHint);
         if (ySurf == Integer.MIN_VALUE) return;
 
         for (int y = Math.min(worldMax, ySurf); y > yBottomInclusive; y--) {
-            Block b = level.getBlockState(new BlockPos(x, y, z)).getBlock();
+            Block b = level.getBlockState(mpos.set(x, y, z)).getBlock();
             if (b == Blocks.RAIL || b == Blocks.POWERED_RAIL || b == Blocks.DETECTOR_RAIL || b == Blocks.ACTIVATOR_RAIL) {
                 break; // не удаляем рельсы и всё, что ниже них
             }
-            level.setBlock(new BlockPos(x, y, z), Blocks.AIR.defaultBlockState(), 3);
+            level.setBlock(mpos.set(x, y, z), Blocks.AIR.defaultBlockState(), 3);
         }
     }
 
@@ -723,28 +808,25 @@ public class TunnelGenerator {
         return pts;
     }
 
-    // --- helpers для «лесенки» ---
     private static int clampInt(int v, int lo, int hi) {
         return Math.max(lo, Math.min(hi, v));
     }
-    /** Ограничиваем изменение высоты: не более чем на ±maxStep от prevY. */
     private static int stepClamp(int prevY, int targetY, int maxStep) {
-        if (prevY == Integer.MIN_VALUE) return targetY; // первый шаг — без ограничений
+        if (prevY == Integer.MIN_VALUE) return targetY;
         if (targetY > prevY + maxStep) return prevY + maxStep;
         if (targetY < prevY - maxStep) return prevY - maxStep;
         return targetY;
     }
 
-    /** Вертикальная колонна стены, но не выше (ySurf-1). Ставим всё, что помещается. */
     private void placeWallColumnCapped(int x, int z, int yStart, int height,
-                                    Integer yHint,
-                                    int minX, int maxX, int minZ, int maxZ,
-                                    Block wallBlock) {
+                                       Integer yHint,
+                                       int minX, int maxX, int minZ, int maxZ,
+                                       Block wallBlock) {
         if (x < minX || x > maxX || z < minZ || z > maxZ) return;
         final int worldMin = level.getMinBuildHeight();
         final int worldMax = level.getMaxBuildHeight() - 1;
 
-        int ySurf = findTopNonAirNearIgnoringTunnel(x, z, yHint);
+        int ySurf = surfaceY(x, z, yHint);
         if (ySurf == Integer.MIN_VALUE) return;
 
         int yTopWanted  = yStart + height - 1;
@@ -756,17 +838,16 @@ public class TunnelGenerator {
         }
     }
 
-    /** Ставим одиночный блок только если целевая высота ≤ (ySurf-1). Иначе пропускаем. */
     private void placeBlockCapped(int x, int z, int y,
-                                Integer yHint,
-                                int minX, int maxX, int minZ, int maxZ,
-                                Block block) {
+                                  Integer yHint,
+                                  int minX, int maxX, int minZ, int maxZ,
+                                  Block block) {
         if (x < minX || x > maxX || z < minZ || z > maxZ) return;
         final int worldMin = level.getMinBuildHeight();
         final int worldMax = level.getMaxBuildHeight() - 1;
         if (y < worldMin || y > worldMax) return;
 
-        int ySurf = findTopNonAirNearIgnoringTunnel(x, z, yHint);
+        int ySurf = surfaceY(x, z, yHint);
         if (ySurf == Integer.MIN_VALUE) return;
 
         if (y <= ySurf - 1) {
@@ -774,11 +855,9 @@ public class TunnelGenerator {
         }
     }
 
-    /** Ставим свет в крыше по центру; если нельзя — ищем ближайшеe место к центру на той же высоте. */
     private void placeRoofLightNearCenter(int x, int z, boolean horizontalMajor, int half, int yRoof,
-                                        Integer yHint, int minX, int maxX, int minZ, int maxZ,
-                                        Block lightBlock) {
-        // порядок смещений поперёк полотна: 0, +1, -1, +2, -2, ...
+                                          Integer yHint, int minX, int maxX, int minZ, int maxZ,
+                                          Block lightBlock) {
         for (int d = 0; d <= half; d++) {
             int[] offs = (d == 0) ? new int[]{0} : new int[]{d, -d};
             for (int o : offs) {
@@ -786,15 +865,13 @@ public class TunnelGenerator {
                 int rz = horizontalMajor ? z + o : z;
                 if (rx < minX || rx > maxX || rz < minZ || rz > maxZ) continue;
 
-                int ySurf = findTopNonAirNearIgnoringTunnel(rx, rz, yHint);
+                int ySurf = surfaceY(rx, rz, yHint);
                 if (ySurf == Integer.MIN_VALUE) continue;
                 if (yRoof <= ySurf - 1) {
                     setTunnelBlock(rx, yRoof, rz, lightBlock);
-                    return; // поставили — выходим
+                    return;
                 }
             }
         }
-        // места нет — ничего не ставим
     }
-
 }

@@ -1,5 +1,8 @@
 package com.cartopia.builder;
 
+import com.cartopia.store.FeatureStream;
+import com.cartopia.store.GenerationStore;
+import com.cartopia.store.TerrainGridStore;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
@@ -14,14 +17,29 @@ import net.minecraftforge.registries.ForgeRegistries;
 
 import java.util.*;
 
+/**
+ * RailGenerator — теперь умеет работать в двух режимах:
+ * 1) ПРЕДПОЧТИТЕЛЬНО: из сайдкаров (features/elements.ndjson + terrain/* через GenerationStore)
+ * 2) Фоллбэк: как раньше — из coords.features.elements и coords.terrainGrid, если store не передан
+ */
 public class RailGenerator {
 
     private final ServerLevel level;
     private final JsonObject coords;
+    private final GenerationStore store;      // может быть null
+    private final TerrainGridStore grid;      // может быть null
 
-    public RailGenerator(ServerLevel level, JsonObject coords) {
+    /** Новый конструктор — с доступом к стору. */
+    public RailGenerator(ServerLevel level, JsonObject coords, GenerationStore store) {
         this.level = level;
         this.coords = coords;
+        this.store = store;
+        this.grid = (store != null) ? store.grid : null;
+    }
+
+    /** Старый конструктор — оставляем для совместимости (будет работать по-старому). */
+    public RailGenerator(ServerLevel level, JsonObject coords) {
+        this(level, coords, null);
     }
 
     private static void broadcast(ServerLevel level, String msg) {
@@ -38,14 +56,19 @@ public class RailGenerator {
     public void generate() {
         broadcast(level, "🚆 Генерация железных дорог…");
 
-        if (coords == null || !coords.has("features")) {
-            broadcast(level, "В coords нет features — пропускаю RailGenerator.");
+        if (coords == null) {
+            broadcast(level, "coords == null — пропускаю RailGenerator.");
             return;
         }
 
         // Геопривязка и границы области генерации (в блоках)
         JsonObject center = coords.getAsJsonObject("center");
         JsonObject bbox   = coords.getAsJsonObject("bbox");
+
+        if (center == null || bbox == null) {
+            broadcast(level, "Нет center/bbox в coords — пропускаю RailGenerator.");
+            return;
+        }
 
         final double centerLat = center.get("lat").getAsDouble();
         final double centerLng = center.get("lng").getAsDouble();
@@ -70,14 +93,105 @@ public class RailGenerator {
         final int minZ = Math.min(a[1], b[1]);
         final int maxZ = Math.max(a[1], b[1]);
 
+        Block cobble = resolveBlock("minecraft:cobblestone");
+        Block rail   = resolveBlock("minecraft:rail");
+
+        // === РЕЖИМ 1: есть store ⇒ читаем features построчно из NDJSON
+        if (store != null) {
+            long approxTotal = 0;
+            try {
+                JsonObject idx = store.indexJsonObject();
+                if (idx != null && idx.has("features_count")) {
+                    approxTotal = Math.max(0, idx.get("features_count").getAsLong());
+                }
+            } catch (Throwable ignore) {}
+
+            long scanned = 0;
+            long builtRails = 0;
+            int nextPctMark = 5; // будем обновлять прогресс примерно каждые 5%
+
+            try (FeatureStream fs = store.featureStream()) {
+                for (JsonObject e : fs) {
+                    scanned++;
+
+                    JsonObject tags = (e.has("tags") && e.get("tags").isJsonObject())
+                            ? e.getAsJsonObject("tags") : null;
+                    if (tags == null) continue;
+                    if (!isRailCandidate(tags)) continue;
+                    if (!"way".equals(optString(e,"type"))) continue;
+
+                    JsonArray geom = e.has("geometry") && e.get("geometry").isJsonArray()
+                            ? e.getAsJsonArray("geometry") : null;
+                    if (geom == null || geom.size() < 2) continue;
+
+                    String type = optString(tags, "railway");
+                    boolean isSubway = "subway".equals(type);
+
+                    // Мосты/тоннели — здесь не строим (их рисуют Bridge/TunnelGenerator)
+                    if (!isSubway && (isElevatedLike(tags) || isUndergroundLike(tags))) {
+                        continue;
+                    }
+
+                    // Идём по сегментам
+                    Integer prevRailBaseY = null;
+                    Integer yHintTop = null;
+                    int prevX = Integer.MIN_VALUE, prevZ = Integer.MIN_VALUE;
+
+                    for (int i=0; i<geom.size(); i++) {
+                        JsonObject p = geom.get(i).getAsJsonObject();
+                        double lat = p.get("lat").getAsDouble();
+                        double lon = p.get("lon").getAsDouble();
+                        int[] xz = latlngToBlock(lat, lon, centerLat, centerLng, east, west, north, south, sizeMeters, centerX, centerZ);
+                        int x = xz[0], z = xz[1];
+
+                        if (prevX != Integer.MIN_VALUE) {
+                            if (isSubway) {
+                                paintSubwaySegment(prevX, z1(prevZ), x, z, minX, maxX, minZ, maxZ, cobble, rail);
+                            } else {
+                                prevRailBaseY = paintSurfaceRailSegment(prevX, z1(prevZ), x, z,
+                                        minX, maxX, minZ, maxZ, cobble, rail, prevRailBaseY, yHintTop);
+                            }
+                        }
+
+                        // hint — приблизительно верх колонки рядом с точкой
+                        yHintTop = findTopNonAirNearSkippingRails(x, z, yHintTop);
+                        prevX = x; prevZ = z;
+                    }
+
+                    builtRails++;
+
+                    // Прогресс (примерно): считаем от общего числа фич по индексу
+                    if (approxTotal > 0) {
+                        int pct = (int)Math.round(100.0 * Math.min(scanned, approxTotal) / (double)approxTotal);
+                        if (pct >= nextPctMark) {
+                            broadcast(level, "Рельсы: ~" + pct + "%");
+                            nextPctMark = Math.min(100, nextPctMark + 5);
+                        }
+                    } else {
+                        // Если нет approxTotal — даём апдейты по шагу в 10к просмотренных элементов
+                        if (scanned % 10000 == 0) {
+                            broadcast(level, "Рельсы: обработано элементов ≈ " + scanned);
+                        }
+                    }
+                }
+            } catch (Exception ex) {
+                broadcast(level, "Ошибка при чтении features NDJSON: " + ex.getMessage());
+            }
+
+            broadcast(level, "Рельсы готовы (построено цепочек: " + builtRails + ").");
+            return;
+        }
+
+        // === РЕЖИМ 2 (фоллбэк): как раньше — из coords.features.elements
+        if (!coords.has("features") || !coords.get("features").isJsonObject()) {
+            broadcast(level, "В coords нет features — пропускаю RailGenerator.");
+            return;
+        }
         JsonArray elements = coords.getAsJsonObject("features").getAsJsonArray("elements");
         if (elements == null || elements.size() == 0) {
             broadcast(level, "OSM elements пуст — пропускаю рельсы.");
             return;
         }
-
-        Block cobble = resolveBlock("minecraft:cobblestone");
-        Block rail   = resolveBlock("minecraft:rail");
 
         int totalRails = 0;
         for (JsonElement el : elements) {
@@ -105,13 +219,11 @@ public class RailGenerator {
             String type = optString(tags, "railway");
             boolean isSubway = "subway".equals(type);
 
-            // Если это мост/тоннель — здесь не строим (их рисуют Bridge/TunnelGenerator по их правилам)
             if (!isSubway && (isElevatedLike(tags) || isUndergroundLike(tags))) {
                 processed++;
                 continue;
             }
 
-            // Идём по сегментам
             Integer prevRailBaseY = null;
             Integer yHintTop = null;
             int prevX = Integer.MIN_VALUE, prevZ = Integer.MIN_VALUE;
@@ -127,13 +239,11 @@ public class RailGenerator {
                     if (isSubway) {
                         paintSubwaySegment(prevX, z1(prevZ), x, z, minX, maxX, minZ, maxZ, cobble, rail);
                     } else {
-                        // обычные surface-рельсы, сглаживаем, чтобы не «ныряли» в порталы тоннелей
                         prevRailBaseY = paintSurfaceRailSegment(prevX, z1(prevZ), x, z,
                                 minX, maxX, minZ, maxZ, cobble, rail, prevRailBaseY, yHintTop);
                     }
                 }
 
-                // обновляем hint приблизительно на поверхность рядом с конечной точкой отрезка
                 yHintTop = findTopNonAirNearSkippingRails(x, z, yHintTop);
                 prevX = x; prevZ = z;
             }
@@ -147,7 +257,7 @@ public class RailGenerator {
 
         broadcast(level, "Рельсы готовы.");
     }
-    
+
     // --- обычные (surface) рельсы: базовый Y = верхний не-air блок колонки; сглаживание по ±1 ---
     private Integer paintSurfaceRailSegment(int x1, int z1, int x2, int z2,
                                             int minX, int maxX, int minZ, int maxZ,
@@ -161,15 +271,9 @@ public class RailGenerator {
             int x = pt[0], z = pt[1];
             if (x < minX || x > maxX || z < minZ || z > maxZ) continue;
 
-            // <<< КЛЮЧЕВОЕ: берем ровно Y рельефа из SurfaceGenerator
-            int yBase = terrainYFromCoordsOrWorld(x, z, yHintTop);
+            // КЛЮЧЕВОЕ: сначала пытаемся взять Y из mmap grid сторы; если нет — как раньше
+            int yBase = terrainYViaStoreOrWorld(x, z, yHintTop);
             if (yBase < worldMin || yBase + 1 > worldMax) continue;
-
-            level.setBlock(new BlockPos(x, yBase,     z), cobble.defaultBlockState(), 3);
-            level.setBlock(new BlockPos(x, yBase + 1, z), railBlock.defaultBlockState(), 3);
-
-            yHintTop = yBase;        // можно так, чисто для ускорения фоллбэка
-            prevRailBaseY = yBase;   // не влияет на высоту, но пусть возвращается
 
             BlockPos basePos = new BlockPos(x, yBase, z);
             BlockPos railPos = basePos.above();
@@ -180,6 +284,9 @@ public class RailGenerator {
             if (!isRailBlock(level.getBlockState(railPos).getBlock())) {
                 level.setBlock(railPos, railBlock.defaultBlockState(), 3);
             }
+
+            yHintTop = yBase;        // ускорение фоллбэка
+            prevRailBaseY = yBase;
         }
         return prevRailBaseY;
     }
@@ -286,11 +393,9 @@ public class RailGenerator {
         return pts;
     }
 
-    // маленький хелпер, чтобы не путаться в сигнатурах
     private static int z1(int z) { return z; }
 
     private static boolean isUndergroundLike(JsonObject tags) {
-        // tunnel=*, layer<0, level<0, location=underground/below_ground
         if (isTunnel(tags)) return true;
         String layer = optString(tags, "layer");
         if (layer != null && layer.matches(".*-\\d+.*")) return true;
@@ -305,7 +410,6 @@ public class RailGenerator {
     }
 
     private static boolean isElevatedLike(JsonObject tags) {
-        // bridge-like без явного bridge: layer>0, level>0, bridge:structure=*, location=overground
         if (isBridge(tags)) return true;
         String layer = optString(tags, "layer");
         if (layer != null && layer.matches(".*\\b[1-9]\\d*.*")) return true;
@@ -317,23 +421,16 @@ public class RailGenerator {
         return false;
     }
 
-    private int terrainYFromCoordsOrWorld(int x, int z, Integer hintY) {
+    /**
+     * Сначала пробуем взять Y из TerrainGridStore (mmap), иначе — фоллбэк сканом мира.
+     */
+    private int terrainYViaStoreOrWorld(int x, int z, Integer hintY) {
         try {
-            if (coords != null && coords.has("terrainGrid")) {
-                JsonObject g = coords.getAsJsonObject("terrainGrid");
-                int minX = g.get("minX").getAsInt();
-                int minZ = g.get("minZ").getAsInt();
-                int w    = g.get("width").getAsInt();
-                int h    = g.get("height").getAsInt();
-                int ix = x - minX, iz = z - minZ;
-                if (ix >= 0 && ix < w && iz >= 0 && iz < h) {
-                    JsonArray data = g.getAsJsonArray("data");
-                    int idx = iz * w + ix;
-                    return data.get(idx).getAsInt();
-                }
+            if (grid != null && grid.inBounds(x, z)) {
+                int y = grid.groundY(x, z);
+                if (y != Integer.MIN_VALUE) return y;
             }
         } catch (Throwable ignore) {}
-        // fallback (на всякий) — как раньше
         return findTopNonAirNearSkippingRails(x, z, hintY);
     }
 

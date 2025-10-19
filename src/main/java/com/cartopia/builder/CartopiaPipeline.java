@@ -27,6 +27,16 @@ public class CartopiaPipeline {
     public static void run(ServerLevel level, File coordsJsonFile, File demTifFile, File landcoverTifFileOrNull) throws Exception {
         broadcast(level, "Загружаю координаты/параметры…");
 
+        // === Подготовка сайдкаров (стрим-режим) ===
+        com.cartopia.store.GenerationStore store = null;
+        try {
+            store = com.cartopia.store.GenerationStore.prepare(coordsJsonFile.getParentFile(), coordsJsonFile);
+            broadcast(level, "Подготовил сайдкары: features NDJSON и terrain grid (если есть).");
+        } catch (Exception splitErr) {
+            broadcast(level, "Внимание: не удалось подготовить сайдкары: " + splitErr.getMessage());
+            // store останется null — генераторы уйдут в fallback на coords.json
+        }
+
         String json = Files.readString(coordsJsonFile.toPath(), StandardCharsets.UTF_8);
         JsonObject coords = JsonParser.parseString(json).getAsJsonObject();
 
@@ -48,7 +58,7 @@ public class CartopiaPipeline {
 
             // ===== РЕЛЬЕФ И ЕГО РАСКРАСКА, ДОРОГИ, ЖД =====
             // Рельеф
-            SurfaceGenerator surface = new SurfaceGenerator(level, coords, demTifFile, landcoverTifFileOrNull);
+            SurfaceGenerator surface = new SurfaceGenerator(level, coords, demTifFile, landcoverTifFileOrNull, store);
             surface.generate();
             broadcast(level, "Поверхность готова.");
             // Сразу поднимаем всех игроков этого мира на безопасную поверхность
@@ -56,12 +66,12 @@ public class CartopiaPipeline {
             CartopiaSurfaceSpawn.adjustAllPlayersAsync(level);
             // Дороги
             broadcast(level, "Старт генерации дорог…");
-            RoadGenerator roads = new RoadGenerator(level, coords);
+            RoadGenerator roads = new RoadGenerator(level, coords, store);
             roads.generate();
             broadcast(level, "Дороги готовы.");
             // Рельсы
             broadcast(level, "Старт генерации рельсов…");
-            RailGenerator rails = new RailGenerator(level, coords);
+            RailGenerator rails = new RailGenerator(level, coords, store);
             rails.generate();
             broadcast(level, "Рельсы готовы.");
 // Пирсы, причалы, швартовые
@@ -84,12 +94,12 @@ public class CartopiaPipeline {
             // ===== МОСТЫ / ТУННЕЛИ =====
             // Мосты/эстакады (без тоннелей)
             broadcast(level, "Старт генерации мостов/эстакад…");
-            BridgeGenerator bridges = new BridgeGenerator(level, coords);
+            BridgeGenerator bridges = new BridgeGenerator(level, coords, store);
             bridges.generate();
             broadcast(level, "Мосты/эстакады готовы.");
             // Тоннели и подземные переходы (дороги и ЖД по логике «как мост, но вниз»)
             broadcast(level, "Старт генерации тоннелей/подземных переходов…");
-            TunnelGenerator tunnels = new TunnelGenerator(level, coords);
+            TunnelGenerator tunnels = new TunnelGenerator(level, coords, store);
             tunnels.generate();
             broadcast(level, "Тоннели/подземные переходы готовы.");
 // Здания на мостах?
@@ -103,7 +113,7 @@ public class CartopiaPipeline {
             // ===== ЗДАНИЯ =====
             // Здания
             broadcast(level, "Старт генерации зданий…");
-            BuildingGenerator buildings = new BuildingGenerator(level, coords);
+            BuildingGenerator buildings = new BuildingGenerator(level, coords, store);
             buildings.generate();
             broadcast(level, "Здания готовы.");
 // Башни - Товерс - Трубы и тд
@@ -119,12 +129,12 @@ public class CartopiaPipeline {
             // ===== ОСВЕЩЕНИЕ =====
             // Дорожные фонари
             broadcast(level, "Старт расстановки дорожных фонарей…");
-            RoadLampGenerator roadLamps = new RoadLampGenerator(level, coords);
+            RoadLampGenerator roadLamps = new RoadLampGenerator(level, coords, store);
             roadLamps.generate();
             broadcast(level, "Дорожные фонари готовы.");
             // Фонари вдоль рельсов
             broadcast(level, "Старт расстановки фонарей вдоль рельсов…");
-            RailLampGenerator railLamps = new RailLampGenerator(level, coords);
+            RailLampGenerator railLamps = new RailLampGenerator(level, coords, store);
             railLamps.generate();
             broadcast(level, "Фонари вдоль рельсов готовы.");
 // Фонари в зонах аэропортов, портов и тд
@@ -151,6 +161,7 @@ public class CartopiaPipeline {
 // Поля с посевами - по цветам
 // Ветряки
 // Маяки
+// breakwater как утёсы
 // Фонтаны
 // Источники воды, колодцы, с питьевой водой
 // Пожарные гидранты
@@ -209,6 +220,7 @@ public class CartopiaPipeline {
             level.save(null, true, false);
             broadcast(level, "Generation finished.");
         } catch (Exception e) {
+            // твой текущий catch остаётся как есть…
             String cls = e.getClass().getSimpleName();
             String msg = e.getMessage();
             Throwable cause = e.getCause();
@@ -220,6 +232,8 @@ public class CartopiaPipeline {
             e.printStackTrace();
             System.err.println("[Cartopia] --- STACKTRACE END ---");
             throw e;
+        } finally {
+            try { if (store != null) store.close(); } catch (Exception ignore) {}
         }
     }
 }
