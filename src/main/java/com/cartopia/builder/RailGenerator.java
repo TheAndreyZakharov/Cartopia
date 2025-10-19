@@ -117,7 +117,7 @@ public class RailGenerator {
                     JsonObject tags = (e.has("tags") && e.get("tags").isJsonObject())
                             ? e.getAsJsonObject("tags") : null;
                     if (tags == null) continue;
-                    if (!isRailCandidate(tags)) continue;
+                    if (!isRailLike(tags)) continue;
                     if (!"way".equals(optString(e,"type"))) continue;
 
                     JsonArray geom = e.has("geometry") && e.get("geometry").isJsonArray()
@@ -198,7 +198,7 @@ public class RailGenerator {
             JsonObject e = el.getAsJsonObject();
             JsonObject tags = e.has("tags") && e.get("tags").isJsonObject() ? e.getAsJsonObject("tags") : null;
             if (tags == null) continue;
-            if (!isRailCandidate(tags)) continue;
+            if (!isRailLike(tags)) continue;
             if (!"way".equals(optString(e,"type"))) continue;
             if (!e.has("geometry") || !e.get("geometry").isJsonArray()) continue;
             if (e.getAsJsonArray("geometry").size() < 2) continue;
@@ -210,14 +210,13 @@ public class RailGenerator {
             JsonObject e = el.getAsJsonObject();
             JsonObject tags = e.has("tags") && e.get("tags").isJsonObject() ? e.getAsJsonObject("tags") : null;
             if (tags == null) continue;
-            if (!isRailCandidate(tags)) continue;
+            if (!isRailLike(tags)) continue;
             if (!"way".equals(optString(e,"type"))) continue;
 
             JsonArray geom = e.getAsJsonArray("geometry");
             if (geom == null || geom.size() < 2) continue;
 
-            String type = optString(tags, "railway");
-            boolean isSubway = "subway".equals(type);
+            boolean isSubway = "subway".equals(normalizedRailKind(tags));
 
             if (!isSubway && (isElevatedLike(tags) || isUndergroundLike(tags))) {
                 processed++;
@@ -329,6 +328,7 @@ public class RailGenerator {
         return (b != null ? b : Blocks.STONE);
     }
 
+    @SuppressWarnings("unused")
     private static boolean isRailCandidate(JsonObject tags) {
         String r = optString(tags, "railway");
         if (r == null) return false;
@@ -352,6 +352,62 @@ public class RailGenerator {
     private static String optString(JsonObject o, String k) {
         try { return o.has(k) && !o.get(k).isJsonNull() ? o.get(k).getAsString() : null; }
         catch (Throwable ignore) { return null; }
+    }
+
+    private static String normalizedRailKind(JsonObject tags) {
+        String r = optString(tags, "railway");
+        String v = (r == null ? "" : r.trim().toLowerCase(Locale.ROOT));
+
+        // активные
+        if (v.equals("rail") || v.equals("tram") || v.equals("light_rail") || v.equals("subway")) return v;
+
+        // стройка / план
+        if (v.equals("construction") || v.equals("proposed")) {
+            String k = v; // "construction" или "proposed"
+            String t1 = optString(tags, k);
+            String t2 = optString(tags, k + ":railway");
+            String t  = (t2 != null ? t2 : (t1 != null ? t1 : "")).trim().toLowerCase(Locale.ROOT);
+            if (t.equals("rail") || t.equals("tram") || t.equals("light_rail") || t.equals("subway")) return t;
+        }
+
+        // заброшенные / выведенные из эксплуатации
+        if (v.equals("disused") || v.equals("abandoned")) {
+            String d1 = optString(tags, "disused:railway");
+            if (d1 != null) {
+                String t = d1.trim().toLowerCase(Locale.ROOT);
+                if (t.equals("rail") || t.equals("tram") || t.equals("light_rail") || t.equals("subway")) return t;
+            }
+            // не указали вид — считаем обычной колеёй
+            return "rail";
+        }
+
+        // вторичные формы (лейблы сбоку)
+        String d2 = optString(tags, "disused:railway");
+        if (d2 != null) {
+            String t = d2.trim().toLowerCase(Locale.ROOT);
+            if (t.equals("rail") || t.equals("tram") || t.equals("light_rail") || t.equals("subway")) return t;
+        }
+        String a2 = optString(tags, "abandoned:railway");
+        if (a2 != null) {
+            String t = a2.trim().toLowerCase(Locale.ROOT);
+            if (t.equals("rail") || t.equals("tram") || t.equals("light_rail") || t.equals("subway")) return t;
+        }
+        String rc = optString(tags, "railway:construction");
+        if (rc != null) {
+            String t = rc.trim().toLowerCase(Locale.ROOT);
+            if (t.equals("rail") || t.equals("tram") || t.equals("light_rail") || t.equals("subway")) return t;
+        }
+        String rp = optString(tags, "railway:proposed");
+        if (rp != null) {
+            String t = rp.trim().toLowerCase(Locale.ROOT);
+            if (t.equals("rail") || t.equals("tram") || t.equals("light_rail") || t.equals("subway")) return t;
+        }
+
+        return "";
+    }
+
+    private static boolean isRailLike(JsonObject tags) {
+        return !normalizedRailKind(tags).isEmpty();
     }
 
     private static int[] latlngToBlock(double lat, double lng,
