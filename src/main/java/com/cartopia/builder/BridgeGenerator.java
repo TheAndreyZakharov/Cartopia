@@ -158,9 +158,43 @@ public class BridgeGenerator {
                 if (idx != null && idx.has("features_count")) approxTotal = Math.max(0, idx.get("features_count").getAsLong());
             } catch (Throwable ignore) {}
 
-            // 1) Area-мосты (multipolygon и замкнутые way с man_made=bridge)
-            generateAreaBridgesStreaming(centerLat, centerLng, east, west, north, south,
-                    sizeMeters, centerX, centerZ, minX, maxX, minZ, maxZ, approxTotal);
+            // ---- 1-й проход: собираем максимальные целевые оффсеты на концах путей ----
+            Map<Long, Integer> endpointMaxOffset = new HashMap<>();
+            try (FeatureStream fs = store.featureStream()) {
+                for (JsonObject e : fs) {
+                    if (!"way".equals(optString(e, "type"))) continue;
+                    JsonObject tags = (e.has("tags") && e.get("tags").isJsonObject()) ? e.getAsJsonObject("tags") : null;
+                    if (tags == null) continue;
+                    if (!isBridgeLike(tags)) continue;
+
+                    boolean isRoad = tags.has("highway") || tags.has("aeroway");
+                    boolean isRailWay = isRailLike(tags);
+                    if (!isRoad && !isRailWay) continue;
+
+                    JsonArray geom = e.has("geometry") && e.get("geometry").isJsonArray() ? e.getAsJsonArray("geometry") : null;
+                    if (geom == null || geom.size() < 2) continue;
+
+                    List<int[]> pts = new ArrayList<>(geom.size());
+                    for (int i = 0; i < geom.size(); i++) {
+                        JsonObject p = geom.get(i).getAsJsonObject();
+                        pts.add(latlngToBlock(p.get("lat").getAsDouble(), p.get("lon").getAsDouble(),
+                                centerLat, centerLng, east, west, north, south, sizeMeters, centerX, centerZ));
+                    }
+
+                    int lengthBlocks = approxPathLengthBlocks(pts);
+                    int mainOffset   = computeMainOffset(tags, lengthBlocks);
+
+                    int[] first = pts.get(0);
+                    int[] last  = pts.get(pts.size() - 1);
+                    long k1 = packXZ(first[0], first[1]);
+                    long k2 = packXZ(last[0],  last[1]);
+
+                    Integer prev1 = endpointMaxOffset.get(k1);
+                    if (prev1 == null || mainOffset > prev1) endpointMaxOffset.put(k1, mainOffset);
+                    Integer prev2 = endpointMaxOffset.get(k2);
+                    if (prev2 == null || mainOffset > prev2) endpointMaxOffset.put(k2, mainOffset);
+                }
+            } catch (Exception ignore) {}
 
             // 2) Линейные мосты: highway/railway
             long scanned = 0;
@@ -192,7 +226,6 @@ public class BridgeGenerator {
 
                     String highway = optString(tags, "highway");
                     String aeroway = optString(tags, "aeroway");
-                    String r = optString(tags, "railway");
 
                     if (highway != null || aeroway != null) {
                         // Дорожной мост (может содержать railway — тогда положим рельсы поверх)
@@ -204,10 +237,15 @@ public class BridgeGenerator {
 
                         Block deckBlock = resolveBlock(style.blockId);
                         if (mainOffset >= DEFAULT_OFFSET) {
-                            paintBridgeDeckWithRamps(pts, style.width, deckBlock, mainOffset, RAMP_STEPS,
+                            int[] first = pts.get(0);
+                            int[] last  = pts.get(pts.size() - 1);
+                            int startTarget = endpointMaxOffset.getOrDefault(packXZ(first[0], first[1]), mainOffset);
+                            int endTarget   = endpointMaxOffset.getOrDefault(packXZ(last[0],  last[1]),  mainOffset);
+
+                            paintBridgeDeckWithRamps(pts, style.width, deckBlock, startTarget, endTarget, RAMP_STEPS,
                                     minX, maxX, minZ, maxZ, stoneBricks, stoneBrickWall, stoneBricks);
                             if (hasRailway(tags)) {
-                                paintRailsWithRamps(pts, mainOffset, RAMP_STEPS,
+                                paintRailsWithRamps(pts, startTarget, endTarget, RAMP_STEPS,
                                         minX, maxX, minZ, maxZ, cobble, rail, stoneBricks, stoneBrickWall, stoneBricks);
                             }
                         } else {
@@ -218,13 +256,18 @@ public class BridgeGenerator {
                                         minX, maxX, minZ, maxZ, cobble, rail, stoneBricks, stoneBrickWall, stoneBricks);
                             }
                         }
-                    } else if (r != null && isRailCore(r)) {
+                    } else if (isRailLike(tags)) {
                         // Чисто железнодорожный мост
                         int lengthBlocks = approxPathLengthBlocks(pts);
                         int mainOffset   = computeMainOffset(tags, lengthBlocks);
 
                         if (mainOffset >= DEFAULT_OFFSET) {
-                            paintRailsWithRamps(pts, mainOffset, RAMP_STEPS,
+                            int[] first = pts.get(0);
+                            int[] last  = pts.get(pts.size() - 1);
+                            int startTarget = endpointMaxOffset.getOrDefault(packXZ(first[0], first[1]), mainOffset);
+                            int endTarget   = endpointMaxOffset.getOrDefault(packXZ(last[0],  last[1]),  mainOffset);
+
+                            paintRailsWithRamps(pts, startTarget, endTarget, RAMP_STEPS,
                                     minX, maxX, minZ, maxZ, cobble, rail, stoneBricks, stoneBrickWall, stoneBricks);
                         } else {
                             paintRailsFollowRelief(pts, mainOffset,
@@ -246,6 +289,10 @@ public class BridgeGenerator {
                 broadcast(level, "Ошибка при чтении features NDJSON (линейные): " + ex.getMessage());
             }
 
+            // 3) Area-мосты (multipolygon и замкнутые way с man_made=bridge)
+            generateAreaBridgesStreaming(centerLat, centerLng, east, west, north, south,
+                    sizeMeters, centerX, centerZ, minX, maxX, minZ, maxZ, approxTotal);
+
             broadcast(level, "Мосты готовы.");
             return;
         }
@@ -261,10 +308,6 @@ public class BridgeGenerator {
             return;
         }
 
-        // area-мосты
-        generateAreaBridges(elements, centerLat, centerLng, east, west, north, south,
-                sizeMeters, centerX, centerZ, minX, maxX, minZ, maxZ);
-
         int totalWays = 0;
         for (JsonElement el : elements) {
             JsonObject e = el.getAsJsonObject();
@@ -272,6 +315,44 @@ public class BridgeGenerator {
             if (t == null) continue;
             if (!"way".equals(optString(e,"type"))) continue;
             if (isHighwayBridge(t) || isRailBridge(t)) totalWays++;
+        }
+
+        // ---- 1-й проход (fallback): собираем максимальные целевые оффсеты концов ----
+        Map<Long, Integer> endpointMaxOffsetFB = new HashMap<>();
+        for (JsonElement el : elements) {
+            JsonObject e = el.getAsJsonObject();
+            if (!"way".equals(optString(e,"type"))) continue;
+
+            JsonObject tags = (e.has("tags") && e.get("tags").isJsonObject()) ? e.getAsJsonObject("tags") : null;
+            if (tags == null) continue;
+            if (!isBridgeLike(tags)) continue;
+
+            boolean isRoad = tags.has("highway") || tags.has("aeroway");
+            boolean isRailWay = isRailLike(tags);
+            if (!isRoad && !isRailWay) continue;
+
+            JsonArray geom = e.getAsJsonArray("geometry");
+            if (geom == null || geom.size() < 2) continue;
+
+            List<int[]> pts = new ArrayList<>();
+            for (int i=0; i<geom.size(); i++) {
+                JsonObject p = geom.get(i).getAsJsonObject();
+                pts.add(latlngToBlock(p.get("lat").getAsDouble(), p.get("lon").getAsDouble(),
+                        centerLat, centerLng, east, west, north, south, sizeMeters, centerX, centerZ));
+            }
+
+            int lengthBlocks = approxPathLengthBlocks(pts);
+            int mainOffset = computeMainOffset(tags, lengthBlocks);
+
+            int[] first = pts.get(0);
+            int[] last  = pts.get(pts.size()-1);
+            long k1 = packXZ(first[0], first[1]);
+            long k2 = packXZ(last[0],  last[1]);
+
+            Integer prev1 = endpointMaxOffsetFB.get(k1);
+            if (prev1 == null || mainOffset > prev1) endpointMaxOffsetFB.put(k1, mainOffset);
+            Integer prev2 = endpointMaxOffsetFB.get(k2);
+            if (prev2 == null || mainOffset > prev2) endpointMaxOffsetFB.put(k2, mainOffset);
         }
 
         int processed = 0;
@@ -304,10 +385,15 @@ public class BridgeGenerator {
 
             Block deckBlock = resolveBlock(style.blockId);
             if (mainOffset >= DEFAULT_OFFSET) {
-                paintBridgeDeckWithRamps(pts, style.width, deckBlock, mainOffset, RAMP_STEPS,
+                int[] first = pts.get(0);
+                int[] last  = pts.get(pts.size()-1);
+                int startTarget = endpointMaxOffsetFB.getOrDefault(packXZ(first[0], first[1]), mainOffset);
+                int endTarget   = endpointMaxOffsetFB.getOrDefault(packXZ(last[0],  last[1]),  mainOffset);
+
+                paintBridgeDeckWithRamps(pts, style.width, deckBlock, startTarget, endTarget, RAMP_STEPS,
                         minX, maxX, minZ, maxZ, stoneBricks, stoneBrickWall, stoneBricks);
                 if (hasRailway(tags)) {
-                    paintRailsWithRamps(pts, mainOffset, RAMP_STEPS,
+                    paintRailsWithRamps(pts, startTarget, endTarget, RAMP_STEPS,
                             minX, maxX, minZ, maxZ, cobble, rail, stoneBricks, stoneBrickWall, stoneBricks);
                 }
             } else {
@@ -348,7 +434,12 @@ public class BridgeGenerator {
             int mainOffset = computeMainOffset(tags, lengthBlocks);
 
             if (mainOffset >= DEFAULT_OFFSET) {
-                paintRailsWithRamps(pts, mainOffset, RAMP_STEPS,
+                int[] first = pts.get(0);
+                int[] last  = pts.get(pts.size()-1);
+                int startTarget = endpointMaxOffsetFB.getOrDefault(packXZ(first[0], first[1]), mainOffset);
+                int endTarget   = endpointMaxOffsetFB.getOrDefault(packXZ(last[0],  last[1]),  mainOffset);
+
+                paintRailsWithRamps(pts, startTarget, endTarget, RAMP_STEPS,
                         minX, maxX, minZ, maxZ, cobble, rail, stoneBricks, stoneBrickWall, stoneBricks);
             } else {
                 paintRailsFollowRelief(pts, mainOffset,
@@ -361,6 +452,10 @@ public class BridgeGenerator {
                 broadcast(level, "Мосты: ~" + pct + "%");
             }
         }
+
+        // area-мосты
+        generateAreaBridges(elements, centerLat, centerLng, east, west, north, south,
+                sizeMeters, centerX, centerZ, minX, maxX, minZ, maxZ);
 
         broadcast(level, "Мосты готовы.");
     }
@@ -394,19 +489,37 @@ public class BridgeGenerator {
         return isBridgeLike(tags);
     }
     private static boolean isRailBridge(JsonObject tags) {
-        String r = optString(tags, "railway");
-        if (r == null) return false;
-        if (!isRailCore(r)) return false;
-        return isBridgeLike(tags);
+        return isRailLike(tags) && isBridgeLike(tags);
     }
-    private static boolean isRailCore(String r) {
-        String x = r.trim().toLowerCase(Locale.ROOT);
-        return x.equals("rail") || x.equals("tram") || x.equals("light_rail");
+    private static boolean isRailLike(JsonObject tags) {
+        String r = optString(tags, "railway");
+        String v = (r == null ? "" : r.trim().toLowerCase(Locale.ROOT));
+
+        // обычные активные
+        if (v.equals("rail") || v.equals("tram") || v.equals("light_rail")) return true;
+
+        // неактивные – рисуем как обычные
+        if (v.equals("disused") || v.equals("abandoned")) return true;
+
+        // construction/proposed — смотрим, что именно строят/планируют
+        if (v.equals("construction") || v.equals("proposed")) {
+            String k = v; // "construction" или "proposed"
+            String t = optString(tags, k);
+            String t2 = optString(tags, k + ":railway"); // иногда пишут так
+            String kind = (t2 != null ? t2 : (t != null ? t : "")).trim().toLowerCase(Locale.ROOT);
+            if (kind.equals("rail") || kind.equals("tram") || kind.equals("light_rail")) return true;
+        }
+
+        // редкий вариант: disused:railway=rail
+        String dr = optString(tags, "disused:railway");
+        if (dr != null) {
+            String kind = dr.trim().toLowerCase(Locale.ROOT);
+            if (kind.equals("rail") || kind.equals("tram") || kind.equals("light_rail")) return true;
+        }
+        return false;
     }
     private static boolean hasRailway(JsonObject tags) {
-        String r = optString(tags, "railway");
-        if (r == null) return false;
-        return isRailCore(r);
+        return isRailLike(tags);
     }
     private static boolean truthyOrText(JsonObject tags, String key) {
         String v = optString(tags, key);
@@ -479,8 +592,39 @@ public class BridgeGenerator {
         }
     }
 
+    // ===== АСИММЕТРИЧНЫЕ РАМПЫ (подъёмы к более высокому концу) =====
+
+    private static int approxPathLengthBlocks(List<int[]> pts) {
+        int L = 0;
+        for (int i = 1; i < pts.size(); i++) {
+            int dx = Math.abs(pts.get(i)[0] - pts.get(i-1)[0]);
+            int dz = Math.abs(pts.get(i)[1] - pts.get(i-1)[1]);
+            L += Math.max(dx, dz);
+        }
+        return L;
+    }
+
+    // Асимметричная рампа: у начала и конца свои целевые оффсеты; ближайший край «ведёт» ступень.
+    private static int rampOffsetForIndexAsym(int idx, int totalLen,
+                                              int startTarget, int endTarget,
+                                              int rampSteps) {
+        if (startTarget <= 0 && endTarget <= 0) return 0;
+        final int SPAN = 2; // длина ступени
+        int rampStart = Math.min(rampSteps, Math.max(0, startTarget));
+        int rampEnd   = Math.min(rampSteps, Math.max(0, endTarget));
+        int fromStart = (idx / SPAN) + 1;
+        int fromEnd   = ((totalLen - 1 - idx) / SPAN) + 1;
+        if (fromStart <= fromEnd) {
+            int step = Math.min(rampStart, fromStart);
+            return Math.max(0, (startTarget - rampStart) + step);
+        } else {
+            int step = Math.min(rampEnd, fromEnd);
+            return Math.max(0, (endTarget - rampEnd) + step);
+        }
+    }
+
     private void paintBridgeDeckWithRamps(List<int[]> pts, int width, Block deckBlock,
-                                          int mainOffset, int rampSteps,
+                                          int startTargetOffset, int endTargetOffset, int rampSteps,
                                           int minX, int maxX, int minZ, int maxZ,
                                           Block curbBlock, Block wallBlock, Block supportBlock) {
         final int worldMin = level.getMinBuildHeight();
@@ -503,7 +647,7 @@ public class BridgeGenerator {
                 if (si > 1 && pi == 0) continue;
 
                 int x = seg.get(pi)[0], z = seg.get(pi)[1];
-                int localOffset = rampOffsetForIndex(idx, totalLen, mainOffset, rampSteps);
+                int localOffset = rampOffsetForIndexAsym(idx, totalLen, startTargetOffset, endTargetOffset, rampSteps);
 
                 int ySurfCenter = surfaceY(x, z, yHint);
                 if (ySurfCenter == Integer.MIN_VALUE) { idx++; continue; }
@@ -604,7 +748,7 @@ public class BridgeGenerator {
         }
     }
 
-    private void paintRailsWithRamps(List<int[]> pts, int mainOffset, int rampSteps,
+    private void paintRailsWithRamps(List<int[]> pts, int startTargetOffset, int endTargetOffset, int rampSteps,
                                      int minX, int maxX, int minZ, int maxZ,
                                      Block cobble, Block railBlock,
                                      Block curbBlock, Block wallBlock, Block supportBlock) {
@@ -631,7 +775,7 @@ public class BridgeGenerator {
                 int x = seg.get(pi)[0], z = seg.get(pi)[1];
                 if (x < minX || x > maxX || z < minZ || z > maxZ) { idx++; continue; }
 
-                int localOffset = rampOffsetForIndex(idx, totalLen, mainOffset, rampSteps);
+                int localOffset = rampOffsetForIndexAsym(idx, totalLen, startTargetOffset, endTargetOffset, rampSteps);
 
                 int ySurf = surfaceY(x, z, yHint);
                 if (ySurf != Integer.MIN_VALUE) {
@@ -679,9 +823,7 @@ public class BridgeGenerator {
         int nextPctMark = 5;
         long scanned = 0;
 
-        @SuppressWarnings("unused")
         Block deckBlock = resolveBlock("minecraft:gray_concrete");
-        @SuppressWarnings("unused")
         final int offset = SHORT_OFFSET;
 
         try (FeatureStream fs = store.featureStream()) {
@@ -718,7 +860,7 @@ public class BridgeGenerator {
                             else if ("inner".equals(role)) inners.add(ring);
                         }
                         if (!outers.isEmpty()) {
-                            //paintAreaBridgeFill(outers, inners, deckBlock, offset, minX, maxX, minZ, maxZ);
+                            paintAreaBridgeFill(outers, inners, deckBlock, offset, minX, maxX, minZ, maxZ);
                             made++;
                         }
                     }
@@ -737,11 +879,9 @@ public class BridgeGenerator {
                         List<int[]> outer = toBlockRing(geom, centerLat, centerLng, east, west, north, south,
                                 sizeMeters, centerX, centerZ);
                         if (outer.size() >= 3) {
-                            @SuppressWarnings("unused")
                             List<List<int[]>> outers = Collections.singletonList(outer);
-                            @SuppressWarnings("unused")
                             List<List<int[]>> inners = Collections.emptyList();
-                            //paintAreaBridgeFill(outers, inners, deckBlock, offset, minX, maxX, minZ, maxZ);
+                            paintAreaBridgeFill(outers, inners, deckBlock, offset, minX, maxX, minZ, maxZ);
                             made++;
                         }
                     }
@@ -768,9 +908,7 @@ public class BridgeGenerator {
                                      int sizeMeters, int centerX, int centerZ,
                                      int minX, int maxX, int minZ, int maxZ) {
         int made = 0;
-        @SuppressWarnings("unused")
         Block deckBlock = resolveBlock("minecraft:gray_concrete");
-        @SuppressWarnings("unused")
         final int offset = SHORT_OFFSET;
 
         for (JsonElement el : elements) {
@@ -807,7 +945,7 @@ public class BridgeGenerator {
                     }
                 }
                 if (!outers.isEmpty()) {
-                    //paintAreaBridgeFill(outers, inners, deckBlock, offset, minX, maxX, minZ, maxZ);
+                    paintAreaBridgeFill(outers, inners, deckBlock, offset, minX, maxX, minZ, maxZ);
                     made++;
                 }
                 continue;
@@ -824,11 +962,9 @@ public class BridgeGenerator {
                     List<int[]> outer = toBlockRing(geom, centerLat, centerLng, east, west, north, south,
                             sizeMeters, centerX, centerZ);
                     if (outer.size() >= 3) {
-                        @SuppressWarnings("unused")
                         List<List<int[]>> outers = Collections.singletonList(outer);
-                        @SuppressWarnings("unused")
                         List<List<int[]>> inners = Collections.emptyList();
-                        //paintAreaBridgeFill(outers, inners, deckBlock, offset, minX, maxX, minZ, maxZ);
+                        paintAreaBridgeFill(outers, inners, deckBlock, offset, minX, maxX, minZ, maxZ);
                         made++;
                     }
                 }
@@ -838,27 +974,7 @@ public class BridgeGenerator {
         if (made > 0) broadcast(level, "Зонные мосты: построено " + made + " шт. (+1 над рельефом).");
     }
 
-    // ====== ПОМОЩНИКИ ДЛИНЫ / OFFSET ======
-
-    private static int approxPathLengthBlocks(List<int[]> pts) {
-        int L = 0;
-        for (int i = 1; i < pts.size(); i++) {
-            int dx = Math.abs(pts.get(i)[0] - pts.get(i-1)[0]);
-            int dz = Math.abs(pts.get(i)[1] - pts.get(i-1)[1]);
-            L += Math.max(dx, dz);
-        }
-        return L;
-    }
-    private static int rampOffsetForIndex(int idx, int totalLen, int mainOffset, int rampSteps) {
-        if (mainOffset <= 0) return 0;
-        final int SPAN = 2; // длина ступени
-        final int rampHeight = Math.min(rampSteps, mainOffset);
-        final int baseOffset = Math.max(0, mainOffset - rampHeight);
-        int fromStart = (idx / SPAN) + 1;
-        int fromEnd   = ((totalLen - 1 - idx) / SPAN) + 1;
-        int step = Math.min(rampHeight, Math.min(fromStart, fromEnd));
-        return baseOffset + step;
-    }
+    // ====== УТИЛИТЫ РЕЛЬЕФА/БЛОКОВ ======
 
     private void placeSupportPairIfNeeded(int idx, int period,
                                           int cx, int cz, boolean horizontalMajor, int half,
@@ -1096,7 +1212,6 @@ public class BridgeGenerator {
         return inside;
     }
 
-    @SuppressWarnings("unused")
     private void paintAreaBridgeFill(List<List<int[]>> outers, List<List<int[]>> inners,
                                      Block deckBlock, int offset,
                                      int minX, int maxX, int minZ, int maxZ) {
@@ -1132,11 +1247,20 @@ public class BridgeGenerator {
                 if (ySurf == Integer.MIN_VALUE) continue;
 
                 int yDeck = clampInt(ySurf + offset, worldMin, worldMax);
+                // если выше (или на этом уровне) уже стоит наш линейный мост/бордюры/лампы — пропускаем
+                if (hasBridgeAboveHere(x, z, yDeck)) {
+                    continue;
+                }
                 setBridgeBlock(x, yDeck, z, deckBlock);
                 yHint = ySurf;
                 placed++;
             }
         }
         if (placed > 0) broadcast(level, "Area-мост: залито " + placed + " блоков настила.");
+    }
+
+    private boolean hasBridgeAboveHere(int x, int z, int yDeck) {
+        YRange r = placedColumnRanges.get(packXZ(x, z));
+        return r != null && r.valid() && r.max >= yDeck; // сверху уже что-то от нас стоит
     }
 }
