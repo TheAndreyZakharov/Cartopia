@@ -396,6 +396,7 @@ public class RoadLampGenerator {
         placedByRoadLamps.add(BlockPos.asLong(x, y, z));
     }
 
+    @SuppressWarnings("unused")
     /** Верхний не-air, считая блоки наших ламп как «воздух», чтобы не ставить лампы на лампы. */
     private int findTopNonAirNearSkippingRoadLamps(int x, int z, Integer hintY) {
         final int worldMin = level.getMinBuildHeight();
@@ -426,77 +427,66 @@ public class RoadLampGenerator {
     }
 
     private void placeRoadLamp(int edgeX, int edgeZ, Integer hintY,
-                               boolean horizontalMajor, int towardCenterSign,
-                               int minX, int maxX, int minZ, int maxZ) {
+                            boolean horizontalMajor, int towardCenterSign,
+                            int minX, int maxX, int minZ, int maxZ) {
         if (edgeX < minX || edgeX > maxX || edgeZ < minZ || edgeZ > maxZ) return;
 
         final int worldMin = level.getMinBuildHeight();
         final int worldMax = level.getMaxBuildHeight() - 1;
 
-        // Берём фактический рельеф, игнорируя ранее поставленные лампы
-        int ySurfEdge = findTopNonAirNearSkippingRoadLamps(edgeX, edgeZ, hintY);
-        if (ySurfEdge == Integer.MIN_VALUE) return;
-
-        // === НОВОЕ: строгая привязка к groundY + запрет воды ===
+        // *** ТОЛЬКО рельеф ***
         Integer gridY = terrainGroundY(edgeX, edgeZ);
-        if (gridY == null) return;                    // нет данных — ничего не ставим
-        if (isWaterCell(edgeX, edgeZ)) return;        // в воде не ставим
-        if (ySurfEdge != gridY) return;               // верхний непустой блок ≠ groundY → не ставим
+        if (gridY == null) return;             // без сетки — не ставим
+        if (isWaterCell(edgeX, edgeZ)) return; // в воде — не ставим
 
-        // НИКОГДА не ставим на дорожное полотно и запрещённые бетоны
+        // база ровно на рельефе
+        int y0 = gridY + 1;
+        if (y0 > worldMax) return;
+
+        // запрещённые основания: полотно дороги (кроме камня) и "дорожные" бетоны
         Block under = level.getBlockState(new BlockPos(edgeX, gridY, edgeZ)).getBlock();
         if ((isRoadLikeBlock(under) && !isStone(under)) || isForbiddenConcrete(under)) return;
-
-        // База колонны
-        int y0 = gridY + 1; // строго над рельефом
-        if (y0 > worldMax) return;
 
         long baseKey = BlockPos.asLong(edgeX, y0, edgeZ);
         if (roadLampBases.contains(baseKey)) return;
         if (!level.getBlockState(new BlockPos(edgeX, y0, edgeZ)).isAir()) return;
 
-        // Верх колонны
-        int yTop = Math.min(y0 + ROAD_LAMP_COLUMN_WALLS - 1, worldMax);
+        int yTop  = Math.min(y0 + ROAD_LAMP_COLUMN_WALLS - 1, worldMax);
         int ySlab = yTop + 1;
         if (ySlab > worldMax) return;
 
         int sx = horizontalMajor ? 0 : towardCenterSign;
         int sz = horizontalMajor ? towardCenterSign : 0;
 
-        int gx = edgeX + 2 * sx;
+        int gx = edgeX + 2 * sx; // точка glowstone
         int gz = edgeZ + 2 * sz;
         int gy = ySlab - 1;
 
-        // === Предохранитель от перезаписи любых блоков ===
+        // --- Сухой прогон: все клетки конструкции должны быть воздухом
         for (int y = y0; y <= yTop; y++) {
             if (!level.getBlockState(new BlockPos(edgeX, y, edgeZ)).isAir()) return;
         }
-        if (!level.getBlockState(new BlockPos(edgeX,                 ySlab, edgeZ                )).isAir()) return;
-        if (!level.getBlockState(new BlockPos(edgeX + 1 * sx,        ySlab, edgeZ + 1 * sz       )).isAir()) return;
-        if (!level.getBlockState(new BlockPos(edgeX + 2 * sx,        ySlab, edgeZ + 2 * sz       )).isAir()) return;
+        if (!level.getBlockState(new BlockPos(edgeX,              ySlab, edgeZ             )).isAir()) return;
+        if (!level.getBlockState(new BlockPos(edgeX + 1 * sx,     ySlab, edgeZ + 1 * sz    )).isAir()) return;
+        if (!level.getBlockState(new BlockPos(edgeX + 2 * sx,     ySlab, edgeZ + 2 * sz    )).isAir()) return;
         if (gy >= worldMin && gy <= worldMax && gx >= minX && gx <= maxX && gz >= minZ && gz <= maxZ) {
             if (!level.getBlockState(new BlockPos(gx, gy, gz)).isAir()) return;
         }
 
-        // Колонна
+        // --- Постановка
         for (int y = y0; y <= yTop; y++) {
             BlockPos pos = new BlockPos(edgeX, y, edgeZ);
             level.setBlock(pos, Blocks.ANDESITE_WALL.defaultBlockState(), 3);
             placedByRoadLamps.add(BlockPos.asLong(edgeX, y, edgeZ));
         }
-
-        // Полублоки
         placeBottomSlab(edgeX,              ySlab, edgeZ,              Blocks.SMOOTH_STONE_SLAB);
         placeBottomSlab(edgeX + 1 * sx,     ySlab, edgeZ + 1 * sz,     Blocks.SMOOTH_STONE_SLAB);
         placeBottomSlab(edgeX + 2 * sx,     ySlab, edgeZ + 2 * sz,     Blocks.SMOOTH_STONE_SLAB);
 
-        // Светокамень
         if (gy >= worldMin && gy <= worldMax && gx >= minX && gx <= maxX && gz >= minZ && gz <= maxZ) {
-            BlockPos gpos = new BlockPos(gx, gy, gz);
-            level.setBlock(gpos, Blocks.GLOWSTONE.defaultBlockState(), 3);
+            level.setBlock(new BlockPos(gx, gy, gz), Blocks.GLOWSTONE.defaultBlockState(), 3);
             placedByRoadLamps.add(BlockPos.asLong(gx, gy, gz));
         }
-
         roadLampBases.add(baseKey);
     }
 

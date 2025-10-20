@@ -98,13 +98,12 @@ public class RailLampGenerator {
                 for (JsonObject e : fs) {
                     JsonObject tags = (e.has("tags") && e.get("tags").isJsonObject()) ? e.getAsJsonObject("tags") : null;
                     if (tags == null) continue;
-                    if (!isRailCandidate(tags)) continue;
+                    if (!isRailLike(tags)) continue;
                     if (!"way".equals(optString(e,"type"))) continue;
                     if (!e.has("geometry") || !e.get("geometry").isJsonArray()) continue;
                     if (e.getAsJsonArray("geometry").size() < 2) continue;
                     // surface only
-                    String type = optString(tags, "railway");
-                    boolean isSubway = "subway".equals(type);
+                    boolean isSubway = "subway".equals(normalizedRailKind(tags));
                     if (isSubway) continue;
                     if (isElevatedLike(tags) || isUndergroundLike(tags)) continue;
                     totalRails++;
@@ -122,14 +121,13 @@ public class RailLampGenerator {
                 for (JsonObject e : fs) {
                     JsonObject tags = (e.has("tags") && e.get("tags").isJsonObject()) ? e.getAsJsonObject("tags") : null;
                     if (tags == null) continue;
-                    if (!isRailCandidate(tags)) continue;
+                    if (!isRailLike(tags)) continue;
                     if (!"way".equals(optString(e,"type"))) continue;
 
                     JsonArray geom = e.getAsJsonArray("geometry");
                     if (geom == null || geom.size() < 2) continue;
 
-                    String type = optString(tags, "railway");
-                    boolean isSubway = "subway".equals(type);
+                    boolean isSubway = "subway".equals(normalizedRailKind(tags));
 
                     // только surface рельсы
                     if (isSubway || isElevatedLike(tags) || isUndergroundLike(tags)) {
@@ -196,7 +194,7 @@ public class RailLampGenerator {
             JsonObject e = el.getAsJsonObject();
             JsonObject tags = e.has("tags") && e.get("tags").isJsonObject() ? e.getAsJsonObject("tags") : null;
             if (tags == null) continue;
-            if (!isRailCandidate(tags)) continue;
+            if (!isRailLike(tags)) continue;
             if (!"way".equals(optString(e,"type"))) continue;
             if (!e.has("geometry") || !e.get("geometry").isJsonArray()) continue;
             if (e.getAsJsonArray("geometry").size() < 2) continue;
@@ -213,14 +211,13 @@ public class RailLampGenerator {
             JsonObject e = el.getAsJsonObject();
             JsonObject tags = e.has("tags") && e.get("tags").isJsonObject() ? e.getAsJsonObject("tags") : null;
             if (tags == null) continue;
-            if (!isRailCandidate(tags)) continue;
+            if (!isRailLike(tags)) continue;
             if (!"way".equals(optString(e,"type"))) continue;
 
             JsonArray geom = e.getAsJsonArray("geometry");
             if (geom == null || geom.size() < 2) continue;
 
-            String type = optString(tags, "railway");
-            boolean isSubway = "subway".equals(type);
+            boolean isSubway = "subway".equals(normalizedRailKind(tags));
             if (isSubway || isElevatedLike(tags) || isUndergroundLike(tags)) {
                 processed++;
                 continue;
@@ -336,10 +333,66 @@ public class RailLampGenerator {
 
     // === УТИЛИТЫ / ФИЛЬТРЫ (как было) ===
 
+    @SuppressWarnings("unused")
     private static boolean isRailCandidate(JsonObject tags) {
         String r = optString(tags, "railway");
         if (r == null) return false;
         return r.equals("rail") || r.equals("tram") || r.equals("light_rail") || r.equals("subway");
+    }
+
+    private static String normalizedRailKind(JsonObject tags) {
+        String r = optString(tags, "railway");
+        String v = (r == null ? "" : r.trim().toLowerCase(Locale.ROOT));
+
+        // активные
+        if (v.equals("rail") || v.equals("tram") || v.equals("light_rail") || v.equals("subway")) return v;
+
+        // стройка / план
+        if (v.equals("construction") || v.equals("proposed")) {
+            String k = v; // "construction" или "proposed"
+            String t1 = optString(tags, k);
+            String t2 = optString(tags, k + ":railway");
+            String t  = (t2 != null ? t2 : (t1 != null ? t1 : "")).trim().toLowerCase(Locale.ROOT);
+            if (t.equals("rail") || t.equals("tram") || t.equals("light_rail") || t.equals("subway")) return t;
+        }
+
+        // заброшенные / выведенные
+        if (v.equals("disused") || v.equals("abandoned")) {
+            String d1 = optString(tags, "disused:railway");
+            if (d1 != null) {
+                String t = d1.trim().toLowerCase(Locale.ROOT);
+                if (t.equals("rail") || t.equals("tram") || t.equals("light_rail") || t.equals("subway")) return t;
+            }
+            return "rail";
+        }
+
+        // вторичные ключи
+        String d2 = optString(tags, "disused:railway");
+        if (d2 != null) {
+            String t = d2.trim().toLowerCase(Locale.ROOT);
+            if (t.equals("rail") || t.equals("tram") || t.equals("light_rail") || t.equals("subway")) return t;
+        }
+        String a2 = optString(tags, "abandoned:railway");
+        if (a2 != null) {
+            String t = a2.trim().toLowerCase(Locale.ROOT);
+            if (t.equals("rail") || t.equals("tram") || t.equals("light_rail") || t.equals("subway")) return t;
+        }
+        String rc = optString(tags, "railway:construction");
+        if (rc != null) {
+            String t = rc.trim().toLowerCase(Locale.ROOT);
+            if (t.equals("rail") || t.equals("tram") || t.equals("light_rail") || t.equals("subway")) return t;
+        }
+        String rp = optString(tags, "railway:proposed");
+        if (rp != null) {
+            String t = rp.trim().toLowerCase(Locale.ROOT);
+            if (t.equals("rail") || t.equals("tram") || t.equals("light_rail") || t.equals("subway")) return t;
+        }
+
+        return "";
+    }
+
+    private static boolean isRailLike(JsonObject tags) {
+        return !normalizedRailKind(tags).isEmpty();
     }
 
     private static boolean isBridge(JsonObject tags) {
@@ -544,28 +597,22 @@ public class RailLampGenerator {
 
     /** Пытается поставить фонарь в точке; возвращает true, если получилось. */
     private boolean tryPlaceRailLampAt(int edgeX, int edgeZ, Integer hintY,
-                                       boolean horizontalMajor, int towardCenterSign,
-                                       int minX, int maxX, int minZ, int maxZ) {
+                                    boolean horizontalMajor, int towardCenterSign,
+                                    int minX, int maxX, int minZ, int maxZ) {
         if (edgeX < minX || edgeX > maxX || edgeZ < minZ || edgeZ > maxZ) return false;
 
         final int worldMin = level.getMinBuildHeight();
         final int worldMax = level.getMaxBuildHeight() - 1;
 
-        // Верхний не-air в мире (рельсы/детали фонаря считаем "воздухом" только для поиска поверхности)
-        int ySurfEdge = findTopNonAirNearSkippingRails(edgeX, edgeZ, hintY);
-        if (ySurfEdge == Integer.MIN_VALUE) return false;
-
-        // === Жёсткая привязка к grid: нужна согласованность с groundY и запрет на воду
+        // *** ТОЛЬКО groundY из гридов + запрет воды ***
         Integer gridY = terrainGroundYFromAny(edgeX, edgeZ);
-        if (gridY == null) return false;             // нет данных — пропуск
+        if (gridY == null) return false;
         if (isWaterCellByAny(edgeX, edgeZ)) return false;
-        if (Math.abs(ySurfEdge - gridY) > 1) return false;       // конфликт с рельефом — пропуск
 
-        // Нельзя ставить на дорожные серый/белый/жёлтый бетоны
+        // запрещённые основания (дорожные бетоны)
         Block under = level.getBlockState(new BlockPos(edgeX, gridY, edgeZ)).getBlock();
         if (isGrayConcrete(under)) return false;
 
-        // База колонны строго на groundY+1
         int y0 = gridY + 1;
         if (y0 > worldMax) return false;
 
@@ -580,7 +627,7 @@ public class RailLampGenerator {
         int gz = edgeZ + sz;
         int gy = ySlab - 1;
 
-        // === "Сухой прогон": ничего не ставим, если где-то не воздух ===
+        // --- Сухой прогон на воздух (ничего не перетираем)
         for (int y = y0; y <= yTop; y++) {
             if (!level.getBlockState(new BlockPos(edgeX, y, edgeZ)).isAir()) return false;
         }
@@ -590,7 +637,7 @@ public class RailLampGenerator {
             if (!level.getBlockState(new BlockPos(gx, gy, gz)).isAir()) return false;
         }
 
-        // === Постановка (все проверки пройдены) ===
+        // --- Постановка
         for (int y = y0; y <= yTop; y++) {
             level.setBlock(new BlockPos(edgeX, y, edgeZ), Blocks.ANDESITE_WALL.defaultBlockState(), 3);
         }
@@ -599,7 +646,6 @@ public class RailLampGenerator {
         if (gy >= worldMin && gy <= worldMax && gx >= minX && gx <= maxX && gz >= minZ && gz <= maxZ) {
             level.setBlock(new BlockPos(gx, gy, gz), Blocks.GLOWSTONE.defaultBlockState(), 3);
         }
-
         return true;
     }
 }
