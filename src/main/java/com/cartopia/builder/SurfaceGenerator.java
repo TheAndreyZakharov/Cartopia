@@ -408,9 +408,24 @@ public class SurfaceGenerator {
                     }
                 }
 
-                if (bestMat != null && !"water".equals(surface.get(k))) {
-                    surface.put(k, bestMat);
-                    lockedOSM.add(k); // лочим OSM-сушу, чтобы сглаживание её не трогало
+                // Разрешаем перекрывать ТОЛЬКО OLM-воду. OSM/морскую воду не трогаем.
+                if (bestMat != null) {
+                    String cur = surface.get(k);
+
+                    if ("water".equals(cur)) {
+                        // если вода именно из OLM (и не защищена), даём OSM-зоне её перекрыть
+                        if (waterFromOLM.contains(k)) {
+                            surface.put(k, bestMat);
+                            lockedOSM.add(k);
+                            waterFromOLM.remove(k); // это место больше не считается OLM-вода
+                            // waterProtected тут не трогаем — теперь это суша от OSM
+                        }
+                        // иначе (OSM- или морская вода) — оставляем как есть
+                    } else {
+                        // обычный случай: текущая клетка не вода — кладём материал OSM
+                        surface.put(k, bestMat);
+                        lockedOSM.add(k);
+                    }
                 }
             }
         }
