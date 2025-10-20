@@ -74,7 +74,11 @@ public class CartopiaPipeline {
             RailGenerator rails = new RailGenerator(level, coords, store);
             rails.generate();
             broadcast(level, "Рельсы готовы.");
-// Пирсы, причалы, швартовые
+            // Пирсы
+            broadcast(level, "Старт генерации пирсов…");
+            PierGenerator piers = new PierGenerator(level, coords, store);
+            piers.generate();
+            broadcast(level, "Пирсы готовы.");
 
 
 
