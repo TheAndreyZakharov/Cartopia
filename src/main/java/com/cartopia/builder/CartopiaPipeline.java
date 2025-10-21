@@ -55,7 +55,6 @@ public class CartopiaPipeline {
         try {
 
 
-
             // ===== РЕЛЬЕФ И ЕГО РАСКРАСКА, ДОРОГИ, ЖД =====
             // Рельеф
             SurfaceGenerator surface = new SurfaceGenerator(level, coords, demTifFile, landcoverTifFileOrNull, store);
@@ -90,6 +89,8 @@ public class CartopiaPipeline {
 // Жд переезды
 // Вертолетные площадки
 // Парковки авто
+// Перекрестки - стоп линии
+// Разделительные полосы у соединенных дорог - кнопки
 
 
 
@@ -165,7 +166,7 @@ public class CartopiaPipeline {
 // Поля с посевами - по цветам
 // Ветряки
 // Маяки
-// breakwater как утёсы
+// breakwater волнорезы как утёсы - ширина 2, высота +1, +2 над водой
 // Фонтаны
 // Источники воды, колодцы, с питьевой водой
 // Пожарные гидранты

@@ -156,6 +156,15 @@ public class SurfaceGenerator {
         ZONE_MATERIALS.put("man_made=pier","stone");
         ZONE_MATERIALS.put("man_made=breakwater","stone");
         ZONE_MATERIALS.put("power=substation","stone");
+
+        // --- Wetlands / болота и пр. ---
+        ZONE_MATERIALS.put("natural=wetland",     "muddy_mangrove_roots");
+        ZONE_MATERIALS.put("natural=marsh",       "muddy_mangrove_roots");
+        ZONE_MATERIALS.put("natural=bog",         "muddy_mangrove_roots");
+        ZONE_MATERIALS.put("natural=fen",         "muddy_mangrove_roots");
+        ZONE_MATERIALS.put("natural=tidalflat",   "muddy_mangrove_roots"); //можно вернуть sandstone
+        // на всякий случай (редкие теги)
+        ZONE_MATERIALS.put("landuse=wetland",     "muddy_mangrove_roots");
     }
 
     /** OLM: класс → блок */
@@ -192,7 +201,7 @@ public class SurfaceGenerator {
         LANDCOVER_CLASS_TO_BLOCK.put(182, "muddy_mangrove_roots"); // Marsh
         LANDCOVER_CLASS_TO_BLOCK.put(183, "muddy_mangrove_roots"); // Flooded flat
         LANDCOVER_CLASS_TO_BLOCK.put(184, "sandstone");          // Saline
-        LANDCOVER_CLASS_TO_BLOCK.put(185, "mangrove_log");       // Mangrove
+        LANDCOVER_CLASS_TO_BLOCK.put(185, "muddy_mangrove_roots");       // Mangrove
         LANDCOVER_CLASS_TO_BLOCK.put(186, "muddy_mangrove_roots"); // Salt marsh
         LANDCOVER_CLASS_TO_BLOCK.put(187, "sandstone");          // Tidal flat
         LANDCOVER_CLASS_TO_BLOCK.put(190, "moss_block");         // Impervious (города)
@@ -365,13 +374,21 @@ public class SurfaceGenerator {
 
         System.out.println("[Cartopia] ОSM зон для покраски: " + zones.size());
 
+        // Дырки (inners) у НЕводных площадей — будем уважать их при покраске «прочих зон»
+        List<ZonePoly> nonWaterHoles = new ArrayList<>();
+        for (ZonePoly zp : zones) {
+            if (zp.isHole && !"water".equals(zp.material)) {
+                nonWaterHoles.add(zp);
+            }
+        }
+
         // Сначала — вода (outer минус inner), затем прочее.
         for (int x=minX; x<=maxX; x++) {
             for (int z=minZ; z<=maxZ; z++) {
                 RectLL cell = cellRectLatLon(x, z, centerLat, centerLng, east, west, north, south, sizeMeters, centerX, centerZ);
                 long k = key(x,z);
 
-                // Вода из OSM имеет приоритет, но уважает inner-дырки
+                // Кандидат на воду из OSM (outer без дырки). ПОКА не пишем, даём шанс неводным OSM-площадям перекрыть воду.
                 boolean inWaterOuter = false, inWaterHole = false;
                 for (ZonePoly zp : zones) {
                     if (!"water".equals(zp.material) || zp.isHole) continue;
@@ -384,12 +401,15 @@ public class SurfaceGenerator {
                         if (!rectsOverlap(cell.minLat, cell.maxLat, cell.minLon, cell.maxLon, zp.minLat, zp.maxLat, zp.minLon, zp.maxLon)) continue;
                         if (rectIntersectsPolygon(cell, zp.lats, zp.lons)) { inWaterHole = true; break; }
                     }
-                    if (!inWaterHole) {
-                        surface.put(k, "water");
-                        waterProtected.add(k);   // воду из OSM не трогаем и не учитываем
-                        waterFromOLM.remove(k);
-                        continue; // вода победила
-                    }
+                }
+                boolean candidateOSMWater = inWaterOuter && !inWaterHole;
+
+                // Попадает ли клетка в ЛЮБУЮ inner-дырку НЕводной площади (например, пруд как inner в парке)?
+                boolean inNonWaterHole = false;
+                for (ZonePoly hole : nonWaterHoles) {
+                    if (!rectsOverlap(cell.minLat, cell.maxLat, cell.minLon, cell.maxLon,
+                                    hole.minLat, hole.maxLat, hole.minLon, hole.maxLon)) continue;
+                    if (rectIntersectsPolygon(cell, hole.lats, hole.lons)) { inNonWaterHole = true; break; }
                 }
 
                 // Прочие зоны: не затираем воду
@@ -408,24 +428,18 @@ public class SurfaceGenerator {
                     }
                 }
 
-                // Разрешаем перекрывать ТОЛЬКО OLM-воду. OSM/морскую воду не трогаем.
-                if (bestMat != null) {
-                    String cur = surface.get(k);
-
-                    if ("water".equals(cur)) {
-                        // если вода именно из OLM (и не защищена), даём OSM-зоне её перекрыть
-                        if (waterFromOLM.contains(k)) {
-                            surface.put(k, bestMat);
-                            lockedOSM.add(k);
-                            waterFromOLM.remove(k); // это место больше не считается OLM-вода
-                            // waterProtected тут не трогаем — теперь это суша от OSM
-                        }
-                        // иначе (OSM- или морская вода) — оставляем как есть
-                    } else {
-                        // обычный случай: текущая клетка не вода — кладём материал OSM
-                        surface.put(k, bestMat);
-                        lockedOSM.add(k);
-                    }
+                // Новое правило: если есть НЕводная OSM-площадь, она перекрывает ЛЮБУЮ воду (OLM, OSM и подложку по seaLevel).
+                if (bestMat != null && !inNonWaterHole) {
+                    surface.put(k, bestMat);
+                    lockedOSM.add(k);
+                    // если раньше клетка была водой любого происхождения — снимаем «водные» метки
+                    waterFromOLM.remove(k);
+                    waterProtected.remove(k);
+                } else if (candidateOSMWater) {
+                    // не нашлось неводной OSM-площади — тогда ставим OSM-воду и защищаем её
+                    surface.put(k, "water");
+                    waterProtected.add(k);
+                    waterFromOLM.remove(k);
                 }
             }
         }
@@ -1374,11 +1388,34 @@ public class SurfaceGenerator {
 
     private static MatMatch materialAndKeyForTags(JsonObject tags) {
         if (tags == null) return null;
+
+        // вода — как было
         if ("riverbank".equals(optString(tags, "waterway"))) return new MatMatch("water", "waterway=riverbank");
         if ("water".equals(optString(tags, "natural")))      return new MatMatch("water", "natural=water");
         if ("reservoir".equals(optString(tags, "landuse")))  return new MatMatch("water", "landuse=reservoir");
         if (tags.has("water"))                                return new MatMatch("water", "water=*");
 
+        // --- NEW: любые wetlands считаем болотом (грязные мангровые корни)
+        String nat = optString(tags, "natural");
+        if ("wetland".equals(nat)) {
+            return new MatMatch("muddy_mangrove_roots", "natural=wetland");
+        }
+        String wet = optString(tags, "wetland");
+        if (wet != null) {
+            String w = wet.toLowerCase(Locale.ROOT).replace('-', '_');
+            switch (w) {
+                case "marsh": case "swamp": case "bog": case "fen":
+                case "mire": case "reedbed": case "wet_meadow":
+                case "saltmarsh": case "salt_marsh": case "string_bog":
+                case "mangrove": // хотим тоже в muddy roots
+                case "tidalflat": // если предпочитаешь песок: верни "sandstone"
+                    return new MatMatch("muddy_mangrove_roots", "wetland=" + wet);
+            }
+            // по умолчанию любые неизвестные подтипы — тоже болото
+            return new MatMatch("muddy_mangrove_roots", "wetland=" + wet);
+        }
+
+        // дальше — как было: точные сопоставления key=value
         for (Map.Entry<String,String> m : ZONE_MATERIALS.entrySet()) {
             String kv = m.getKey();
             int k = kv.indexOf('=');
@@ -1446,11 +1483,19 @@ public class SurfaceGenerator {
                     boolean isWaterArea = "water".equals(mat)
                             || "riverbank".equals(optString(tags, "waterway"))
                             || "river".equals(optString(tags, "water"));
+
                     for (double[][] r : outers) {
                         if (isWaterArea) out.add(new ZonePoly(r[0], r[1], "water", false, tagKV));
                         else if (mat != null) out.add(new ZonePoly(r[0], r[1], mat, false, tagKV));
                     }
-                    if (isWaterArea) {
+
+                    if (!isWaterArea) {
+                        for (double[][] h : inners) {
+                            // помечаем как "дырку" у любой неводной площади
+                            out.add(new ZonePoly(h[0], h[1], "void", true, tagKV));
+                        }
+                    } else {
+                        // как было для водных relation — inner как water-дыры
                         for (double[][] h : inners) {
                             out.add(new ZonePoly(h[0], h[1], "water", true, tagKV));
                         }
@@ -1597,9 +1642,13 @@ public class SurfaceGenerator {
                         out.add(new ZonePoly(r[0], r[1], mat, false, tagKV));
                     }
                 }
-                if (isWaterArea) {
+                if (!isWaterArea) {
                     for (double[][] h : inners) {
-                        out.add(new ZonePoly(h[0], h[1], "water", true, tagKV));
+                        out.add(new ZonePoly(h[0], h[1], "void", true, tagKV)); // inner у НЕводных
+                    }
+                } else {
+                    for (double[][] h : inners) {
+                        out.add(new ZonePoly(h[0], h[1], "water", true, tagKV)); // как было
                     }
                 }
 
