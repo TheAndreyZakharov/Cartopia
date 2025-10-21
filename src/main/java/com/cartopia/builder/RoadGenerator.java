@@ -183,8 +183,10 @@ public class RoadGenerator {
                         : (aeroway != null ? "aeroway:" + aeroway : "");
                 RoadStyle style = ROAD_MATERIALS.getOrDefault(styleKey, new RoadStyle("stone", 4));
 
+
                 int widthBlocks = widthFromTagsOrDefault(tags, style.width);
                 Block roadBlock = resolveBlock(style.blockId);
+                roadBlock = pickRoadBlockFromSurface(tags, roadBlock);
 
                 // Переводим lat/lon в блоки и красим сегменты Брезенхэмом
                 int prevX = Integer.MIN_VALUE, prevZ = Integer.MIN_VALUE;
@@ -256,6 +258,7 @@ public class RoadGenerator {
 
             int widthBlocks = widthFromTagsOrDefault(tags, style.width);
             Block roadBlock = resolveBlock(style.blockId);
+            roadBlock = pickRoadBlockFromSurface(tags, roadBlock);
 
             int prevX = Integer.MIN_VALUE, prevZ = Integer.MIN_VALUE;
             Integer lastYHint = null;
@@ -458,5 +461,48 @@ public class RoadGenerator {
             } catch (Exception ignore) { }
         }
         return Math.max(1, def);
+    }
+
+    private Block pickRoadBlockFromSurface(JsonObject tags, Block fallback) {
+        // смотрим явные материалы/поверхности дороги
+        String[] keys = new String[] { "surface", "material" };
+        String val = null;
+        for (String k : keys) {
+            String v = optString(tags, k);
+            if (v != null && !v.isBlank()) { val = v.trim().toLowerCase(Locale.ROOT); break; }
+        }
+        if (val == null) return fallback;
+
+        // дерево -> еловые доски (как в мостах)
+        Set<String> WOODY = Set.of("wood","wooden","boards","board","boardwalk","planks","timber");
+        for (String tok : val.split("[;,/\\s]+")) {
+            if (WOODY.contains(tok)) return Blocks.SPRUCE_PLANKS;
+        }
+
+        // металл -> chiseled_stone_bricks
+        Set<String> METALLIC = Set.of(
+            "metal","metallic","steel","iron","metal_grid","metal_grate","grate","grating","grid",
+            "chequer_plate","tread_plate",
+            "металл","сталь","железо","решётка","решетка"
+        );
+        for (String tok : val.split("[;,/\\s]+")) {
+            if (METALLIC.contains(tok)) return Blocks.CHISELED_STONE_BRICKS;
+        }
+
+        // брусчатка  -> булыжник
+        Set<String> BRUSCHATKA = Set.of(
+            // OSM-классика
+            "sett","setts","stone_setts","granite_setts","basalt_setts","sandstone_setts",
+            "paving_stones","paving-stones","paving_stone","paving-stone",
+            "cobblestone","cobblestones","cobbled","cobbles","cobble",
+            "cobblestone:flattened","unhewn_cobblestone",
+            // русские варианты
+            "брусчатка","булыжник","булыжная","булыжное","булыжной","гранитная_брусчатка"
+        );
+        for (String tok : val.split("[;,/\\s]+")) {
+            if (BRUSCHATKA.contains(tok)) return Blocks.COBBLESTONE;
+        }
+
+        return fallback; // иначе — как сказал стиль дороги
     }
 }

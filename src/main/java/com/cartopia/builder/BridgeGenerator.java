@@ -236,6 +236,7 @@ public class BridgeGenerator {
                         int mainOffset   = computeMainOffset(tags, lengthBlocks);
 
                         Block deckBlock = resolveBlock(style.blockId);
+                        deckBlock = pickDeckBlockForBridge(tags, deckBlock);
                         if (mainOffset >= DEFAULT_OFFSET) {
                             int[] first = pts.get(0);
                             int[] last  = pts.get(pts.size() - 1);
@@ -384,6 +385,7 @@ public class BridgeGenerator {
             int mainOffset = computeMainOffset(tags, lengthBlocks);
 
             Block deckBlock = resolveBlock(style.blockId);
+            deckBlock = pickDeckBlockForBridge(tags, deckBlock);
             if (mainOffset >= DEFAULT_OFFSET) {
                 int[] first = pts.get(0);
                 int[] last  = pts.get(pts.size()-1);
@@ -823,7 +825,6 @@ public class BridgeGenerator {
         int nextPctMark = 5;
         long scanned = 0;
 
-        Block deckBlock = resolveBlock("minecraft:gray_concrete");
         final int offset = SHORT_OFFSET;
 
         try (FeatureStream fs = store.featureStream()) {
@@ -860,6 +861,7 @@ public class BridgeGenerator {
                             else if ("inner".equals(role)) inners.add(ring);
                         }
                         if (!outers.isEmpty()) {
+                            Block deckBlock = pickDeckBlockForBridge(tags, resolveBlock("minecraft:gray_concrete"));
                             paintAreaBridgeFill(outers, inners, deckBlock, offset, minX, maxX, minZ, maxZ);
                             made++;
                         }
@@ -881,6 +883,7 @@ public class BridgeGenerator {
                         if (outer.size() >= 3) {
                             List<List<int[]>> outers = Collections.singletonList(outer);
                             List<List<int[]>> inners = Collections.emptyList();
+                            Block deckBlock = pickDeckBlockForBridge(tags, resolveBlock("minecraft:gray_concrete"));
                             paintAreaBridgeFill(outers, inners, deckBlock, offset, minX, maxX, minZ, maxZ);
                             made++;
                         }
@@ -908,7 +911,6 @@ public class BridgeGenerator {
                                      int sizeMeters, int centerX, int centerZ,
                                      int minX, int maxX, int minZ, int maxZ) {
         int made = 0;
-        Block deckBlock = resolveBlock("minecraft:gray_concrete");
         final int offset = SHORT_OFFSET;
 
         for (JsonElement el : elements) {
@@ -945,6 +947,7 @@ public class BridgeGenerator {
                     }
                 }
                 if (!outers.isEmpty()) {
+                    Block deckBlock = pickDeckBlockForBridge(tags, resolveBlock("minecraft:gray_concrete"));
                     paintAreaBridgeFill(outers, inners, deckBlock, offset, minX, maxX, minZ, maxZ);
                     made++;
                 }
@@ -964,6 +967,7 @@ public class BridgeGenerator {
                     if (outer.size() >= 3) {
                         List<List<int[]>> outers = Collections.singletonList(outer);
                         List<List<int[]>> inners = Collections.emptyList();
+                        Block deckBlock = pickDeckBlockForBridge(tags, resolveBlock("minecraft:gray_concrete"));
                         paintAreaBridgeFill(outers, inners, deckBlock, offset, minX, maxX, minZ, maxZ);
                         made++;
                     }
@@ -1232,6 +1236,12 @@ public class BridgeGenerator {
         bz0 = Math.max(bz0, minZ); bz1 = Math.min(bz1, maxZ);
         if (bx0 > bx1 || bz0 > bz1) return;
 
+        // если над центральной линией полигона уже есть мост — этот area-мост целиком пропускаем
+        if (centerlineHasExistingBridge(outers, inners, offset, bx0, bx1, bz0, bz1)) {
+            broadcast(level, "Area-мост: пропуск — над центральной линией уже есть мост.");
+            return;
+        }
+
         int placed = 0;
         for (int x = bx0; x <= bx1; x++) {
             Integer yHint = null;
@@ -1259,8 +1269,113 @@ public class BridgeGenerator {
         if (placed > 0) broadcast(level, "Area-мост: залито " + placed + " блоков настила.");
     }
 
+    private boolean centerlineHasExistingBridge(List<List<int[]>> outers, List<List<int[]>> inners,
+                                                int offset,
+                                                int bx0, int bx1, int bz0, int bz1) {
+        // выбираем «длинную» ось bbox как направление центральной линии
+        boolean horizontalMajor = (bx1 - bx0) >= (bz1 - bz0);
+
+        if (horizontalMajor) {
+            int zc = (bz0 + bz1) >> 1;  // центральная Z
+            Integer yHint = null;
+            for (int x = bx0; x <= bx1; x++) {
+                boolean inside = false;
+                for (List<int[]> outer : outers) { if (pointInPolygon(x, zc, outer)) { inside = true; break; } }
+                if (!inside) continue;
+                for (List<int[]> inner : inners) { if (pointInPolygon(x, zc, inner)) { inside = false; break; } }
+                if (!inside) continue;
+
+                int ySurf = surfaceY(x, zc, yHint);
+                if (ySurf == Integer.MIN_VALUE) continue;
+
+                int yDeck = clampInt(ySurf + offset, level.getMinBuildHeight(), level.getMaxBuildHeight() - 1);
+                if (hasBridgeAboveHere(x, zc, yDeck)) return true;
+
+                yHint = ySurf;
+            }
+        } else {
+            int xc = (bx0 + bx1) >> 1;  // центральная X
+            Integer yHint = null;
+            for (int z = bz0; z <= bz1; z++) {
+                boolean inside = false;
+                for (List<int[]> outer : outers) { if (pointInPolygon(xc, z, outer)) { inside = true; break; } }
+                if (!inside) continue;
+                for (List<int[]> inner : inners) { if (pointInPolygon(xc, z, inner)) { inside = false; break; } }
+                if (!inside) continue;
+
+                int ySurf = surfaceY(xc, z, yHint);
+                if (ySurf == Integer.MIN_VALUE) continue;
+
+                int yDeck = clampInt(ySurf + offset, level.getMinBuildHeight(), level.getMaxBuildHeight() - 1);
+                if (hasBridgeAboveHere(xc, z, yDeck)) return true;
+
+                yHint = ySurf;
+            }
+        }
+        return false;
+    }
+
     private boolean hasBridgeAboveHere(int x, int z, int yDeck) {
+        // 1) быстрый путь — то, что уже поставили в этом прогоне
         YRange r = placedColumnRanges.get(packXZ(x, z));
-        return r != null && r.valid() && r.max >= yDeck; // сверху уже что-то от нас стоит
+        if (r != null && r.valid() && r.max >= yDeck) return true;
+
+        // 2) fallback: заглянем в мир (если "верхний" мост был ранее)
+        final int worldMax = level.getMaxBuildHeight() - 1;
+        final int scanMaxY = Math.min(worldMax, yDeck + 12); // достаточно небольшого окна
+        for (int y = yDeck; y <= scanMaxY; y++) {
+            var st = level.getBlockState(mpos.set(x, y, z));
+            if (st.isAir()) continue;
+            Block b = st.getBlock();
+            // настилы/дорожные блоки + стенки/рельсы/плиты — считаем маркерами моста
+            if (isRoadLikeBlock(b)) return true;
+            if (b == Blocks.ANDESITE_WALL || b == Blocks.STONE_BRICK_WALL || b == Blocks.RAIL) return true;
+            if (b instanceof SlabBlock) return true;
+        }
+        return false;
+    }
+
+    private Block pickDeckBlockForBridge(JsonObject tags, Block fallback) {
+        // смотрим явные материалы/поверхности моста
+        String[] keys = new String[] { "surface", "deck:surface", "bridge:surface", "material" };
+        String val = null;
+        for (String k : keys) {
+            String v = optString(tags, k);
+            if (v != null && !v.isBlank()) { val = v.trim().toLowerCase(Locale.ROOT); break; }
+        }
+        if (val == null) return fallback;
+
+        // дерево -> еловые доски
+        Set<String> WOODY = Set.of("wood","wooden","boards","board","boardwalk","planks","timber");
+        for (String tok : val.split("[;,/\\s]+")) {
+            if (WOODY.contains(tok)) return Blocks.SPRUCE_PLANKS;
+        }
+
+        // металл -> chiseled_stone_bricks
+        Set<String> METALLIC = Set.of(
+            "metal","metallic","steel","iron","metal_grid","metal_grate","grate","grating","grid",
+            "chequer_plate","tread_plate",
+            "металл","сталь","железо","решётка","решетка"
+        );
+        for (String tok : val.split("[;,/\\s]+")) {
+            if (METALLIC.contains(tok)) return Blocks.CHISELED_STONE_BRICKS;
+        }
+
+        // брусчатка -> булыжник
+        Set<String> BRUSCHATKA = Set.of(
+            // OSM-классика
+            "sett","setts","stone_setts","granite_setts","basalt_setts","sandstone_setts",
+            "paving_stones","paving-stones","paving_stone","paving-stone",
+            "cobblestone","cobblestones","cobbled","cobbles","cobble",
+            "cobblestone:flattened","unhewn_cobblestone",
+            // русские варианты
+            "брусчатка","булыжник","булыжная","булыжное","булыжной","гранитная_брусчатка"
+        );
+        for (String tok : val.split("[;,/\\s]+")) {
+            if (BRUSCHATKA.contains(tok)) return Blocks.COBBLESTONE;
+        }
+
+        // всё остальное — как у дороги
+        return fallback;
     }
 }
