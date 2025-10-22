@@ -94,7 +94,11 @@ public class CartopiaPipeline {
             StopMarkingGenerator busStops = new StopMarkingGenerator(level, coords, store);
             busStops.generate();
             broadcast(level, "Разметка остановок готова.");
-// Жд переезды
+            // ЖД переезды — стоп-линии
+            broadcast(level, "Старт стоп-линий у ЖД-переездов…");
+            RailStopLineGenerator rxl = new RailStopLineGenerator(level, coords, store);
+            rxl.generate();
+            broadcast(level, "Стоп-линии у ЖД-переездов готовы.");
 // Вертолетные площадки
 // Парковки авто
 // Перекрестки - стоп линии
