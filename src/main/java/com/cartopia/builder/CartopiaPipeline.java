@@ -99,7 +99,11 @@ public class CartopiaPipeline {
             RailStopLineGenerator rxl = new RailStopLineGenerator(level, coords, store);
             rxl.generate();
             broadcast(level, "Стоп-линии у ЖД-переездов готовы.");
-// Вертолетные площадки
+            // Вертолётные площадки
+            broadcast(level, "Старт генерации вертолётных площадок…");
+            HelipadGenerator helipads = new HelipadGenerator(level, coords, store);
+            helipads.generate();
+            broadcast(level, "Вертолётные площадки готовы.");
 // Парковки авто
 // Перекрестки - стоп линии
 // Разделительные полосы у соединенных дорог - кнопки
