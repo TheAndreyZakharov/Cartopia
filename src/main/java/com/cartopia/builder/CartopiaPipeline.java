@@ -89,7 +89,11 @@ public class CartopiaPipeline {
             CrosswalkGenerator crosswalks = new CrosswalkGenerator(level, coords, store);
             crosswalks.generate();
             broadcast(level, "Пешеходные переходы готовы.");
-// Остановки общественного транспорта
+            // Разметка 1.17 у остановок (ёлочка)
+            broadcast(level, "Старт разметки остановок (1.17)...");
+            StopMarkingGenerator busStops = new StopMarkingGenerator(level, coords, store);
+            busStops.generate();
+            broadcast(level, "Разметка остановок готова.");
 // Жд переезды
 // Вертолетные площадки
 // Парковки авто
