@@ -505,4 +505,15 @@ public class RoadGenerator {
 
         return fallback; // иначе — как сказал стиль дороги
     }
+
+    // === вспомогательные методы для других генераторов ===
+    public static boolean hasRoadMaterial(String key) {
+        return ROAD_MATERIALS.containsKey(key);
+    }
+
+    public static int getRoadWidth(String key) {
+        RoadStyle style = ROAD_MATERIALS.get(key);
+        return (style != null ? style.width : 12);
+    }
+
 }
