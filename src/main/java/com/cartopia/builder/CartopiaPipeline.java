@@ -104,8 +104,11 @@ public class CartopiaPipeline {
             HelipadGenerator helipads = new HelipadGenerator(level, coords, store);
             helipads.generate();
             broadcast(level, "Вертолётные площадки готовы.");
-// Парковки авто
-// Перекрестки - стоп линии
+            // Парковочные места
+            broadcast(level, "Старт разметки парковочных мест…");
+            ParkingStallGenerator stalls = new ParkingStallGenerator(level, coords, store);
+            stalls.generate();
+            broadcast(level, "Парковочные места готовы.");
 // Разделительные полосы у соединенных дорог - кнопки
 
 
