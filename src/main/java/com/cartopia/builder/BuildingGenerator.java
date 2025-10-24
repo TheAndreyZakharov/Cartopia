@@ -2442,6 +2442,181 @@ public class BuildingGenerator {
         }
     }
 
+    // Максимальная высота "верха здания" с учётом крыши по всему пятну fill
+    private int computeMaxRoofTopY(Set<Long> fill, int minOffset, int facadeBlocks, int roofBlocks, int fallbackSurfY) {
+        final int worldMax = worldTopCap();
+        int maxY = Integer.MIN_VALUE;
+        for (long k : fill) {
+            int x = BlockPos.getX(k), z = BlockPos.getZ(k);
+            int yTopWall = localWallTopYAt(x, z, minOffset, facadeBlocks, fallbackSurfY);
+            int yTop = Math.min(worldMax, yTopWall + Math.max(1, roofBlocks));
+            if (yTop > maxY) maxY = yTop;
+        }
+        if (maxY == Integer.MIN_VALUE) {
+            maxY = fallbackSurfY + 1 + Math.max(0, minOffset) + Math.max(1, facadeBlocks) + Math.max(1, roofBlocks);
+        }
+        return maxY;
+    }
+
+    // Построить вогнутую тарелку (параболоидную "чашу") из гладкого кварца
+    // и для каждого блока КРАЕВОГО КОЛЬЦА опустить «ножку» вниз
+    // до первого встретившегося не-воздуха (или до уровня поверхности).
+    private void buildConcaveDish(int cx, int baseY, int cz, int diameter, Block material, int fallbackSurfY) {
+        if (diameter < 5) return;
+        final int worldMax = worldTopCap();
+
+        int R = Math.max(2, diameter / 2);
+        int R2 = R * R;
+        // k ≈ 1 / (8 * (f/D));  k=0.32 → d ≈ 0.16·D (f/D ≈ 0.39)
+        int depth = Math.max(3, (int)Math.round(R * 0.32)); // реалистичная «средняя» глубина
+
+        // Запомним кромку (периметр) чаши: x, y-на-высоте-чаши, z
+        int hMin = Integer.MAX_VALUE;
+        java.util.List<int[]> bottom = new java.util.ArrayList<>();
+
+        for (int x = cx - R; x <= cx + R; x++) {
+            for (int z = cz - R; z <= cz + R; z++) {
+                int dx = x - cx, dz = z - cz;
+                int r2 = dx*dx + dz*dz;
+                if (r2 > R2) continue;
+
+                double t = r2 / (double) R2;        // 0 в центре → 1 у края
+                int h = (int)Math.round(depth * t); // насколько край выше центра
+                int y = Math.min(worldMax, baseY + h);
+
+                // Ставим блок чаши
+                net.minecraft.core.BlockPos pos = new net.minecraft.core.BlockPos(x, y, z);
+                level.setBlock(pos, material.defaultBlockState(), 3);
+
+                // Кандидат в «дно» — минимальная высота (обычно h==0)
+                // Если хотите чуть шире «дно» (не 1 блок), замените сравнение на (h <= hMin + 1)
+                if (h < hMin) {
+                    hMin = h;
+                    bottom.clear();
+                }
+                if (h == hMin) {
+                    bottom.add(new int[]{x, y, z});
+                }
+            }
+        }
+
+        // Для каждого блока кромки тянем «ножку» ВНИЗ до первого препятствия.
+        // «Препятствие» — любой не-воздух; если нет — упираемся в поверхность из грида/снапшота.
+        // Для каждого блока ДНА (центр) тянем «ножку» ВНИЗ до первого препятствия.
+        for (int[] p : bottom) {
+            int x = p[0], yTopToFill = p[1] - 1, z = p[2];
+
+            int ySurf = terrainYFromCoordsOrWorld(x, z, fallbackSurfY);
+            if (ySurf == Integer.MIN_VALUE) ySurf = fallbackSurfY;
+
+            int yObstacle = Integer.MIN_VALUE;
+            for (int yy = yTopToFill; yy >= ySurf + 1; yy--) {
+                if (!level.getBlockState(new net.minecraft.core.BlockPos(x, yy, z)).isAir()) {
+                    yObstacle = yy;
+                    break;
+                }
+            }
+            if (yObstacle == Integer.MIN_VALUE) yObstacle = ySurf;
+
+            for (int yy = yObstacle + 1; yy <= yTopToFill; yy++) {
+                net.minecraft.core.BlockPos p2 = new net.minecraft.core.BlockPos(x, yy, z);
+                if (level.getBlockState(p2).isAir()) {
+                    level.setBlock(p2, material.defaultBlockState(), 3);
+                }
+            }
+        }
+    }
+
+    // Оптический купол из гладкого кварца поверх здания.
+    // Высота купола H берётся по той же формуле, что глубина чаши: H ≈ 0.32·R (R — «радиус» по Чебышёву).
+    // После построения купола тянем "юбку" ВНИЗ по ВНЕШНЕМУ контуру (edgeOfFill) до первого препятствия.
+    private void buildOpticalDome(Set<Long> fill, int minOffset, int facadeBlocks, int fallbackSurfY) {
+        if (fill == null || fill.isEmpty()) return;
+        final int worldMax = worldTopCap();
+
+        // Геометрия в плане
+        double[] c = centerOf(fill); double cx = c[0], cz = c[1];
+        double R = maxChebyshevR(fill, cx, cz);
+        int domeH = Math.max(3, (int)Math.round(R * 0.32)); // «та же формула», что и для тарелки
+
+        // Периметр здания (внешняя граница купола)
+        Set<Long> edge = edgeOfFill(fill);
+
+        // Накапливаем верх купола на периметре для последующей «юбки»
+        java.util.Map<Long, Integer> edgeDomeTopY = new java.util.HashMap<>();
+
+        // 1) Сам купол (параболический профиль по r в L∞-норме)
+        for (long k : fill) {
+            int x = BlockPos.getX(k), z = BlockPos.getZ(k);
+            double r = Math.max(Math.abs(x - cx), Math.abs(z - cz)) / R; // 0..1
+            double cap = Math.max(0.0, 1.0 - r*r);
+            int dh = Math.max(1, (int)Math.round(cap * domeH));
+
+            int yBaseTop = localWallTopYAt(x, z, minOffset, facadeBlocks, fallbackSurfY);
+            int yTop = Math.min(worldMax, yBaseTop + dh);
+
+            for (int y = yBaseTop + 1; y <= yTop; y++) {
+                level.setBlock(new BlockPos(x, y, z), Blocks.SMOOTH_QUARTZ.defaultBlockState(), 3);
+            }
+
+            if (edge.contains(k)) {
+                edgeDomeTopY.put(k, yTop);
+            }
+        }
+
+        // 2) "Юбка": с ВНЕШНЕГО контура купола вниз до первого препятствия/поверхности
+        for (long k : edge) {
+            Integer yDomeTop = edgeDomeTopY.get(k);
+            if (yDomeTop == null) continue; // на всякий случай
+
+            int x = BlockPos.getX(k), z = BlockPos.getZ(k);
+            int yTopToFill = yDomeTop - 1; // не перезаписываем самый верхний блок купола
+
+            int ySurf = terrainYFromCoordsOrWorld(x, z, fallbackSurfY);
+            if (ySurf == Integer.MIN_VALUE) ySurf = fallbackSurfY;
+
+            int yObstacle = Integer.MIN_VALUE;
+            for (int yy = yTopToFill; yy >= ySurf + 1; yy--) {
+                if (!level.getBlockState(new BlockPos(x, yy, z)).isAir()) { yObstacle = yy; break; }
+            }
+            if (yObstacle == Integer.MIN_VALUE) yObstacle = ySurf;
+
+            for (int yy = yObstacle + 1; yy <= yTopToFill; yy++) {
+                BlockPos p = new BlockPos(x, yy, z);
+                if (level.getBlockState(p).isAir()) {
+                    level.setBlock(p, Blocks.SMOOTH_QUARTZ.defaultBlockState(), 3);
+                }
+            }
+        }
+    }
+
+
+    // Обёртка: вычислить центр, диаметр и вызвать buildConcaveDish чуть выше крыши
+    private void maybePlaceRadioDish(Set<Long> fill, JsonObject tags, int minOffset, int facadeBlocks, int roofBlocks, int fallbackSurfY) {
+        if (fill == null || fill.isEmpty()) return;
+
+        // центр здания в плане
+        int[] bb = bounds(fill);
+        int cx = (bb[0] + bb[2]) / 2;
+        int cz = (bb[1] + bb[3]) / 2;
+
+        // базовый уровень — ЧУТЬ выше самой высокой точки крыши, чтобы "сидело" на крыше
+        int yRoofTopMax = computeMaxRoofTopY(fill, minOffset, facadeBlocks, roofBlocks, fallbackSurfY);
+        int baseY = yRoofTopMax + 1;
+
+        int diameter = parseDishDiameterBlocks(tags, fill);
+        if (diameter < 5) return;
+
+        buildConcaveDish(cx, baseY, cz, diameter, Blocks.SMOOTH_QUARTZ, fallbackSurfY);
+    }
+
+    // Обёртка: если здание — оптический телескоп, ставим купол
+    private void maybePlaceOpticalDome(Set<Long> fill, JsonObject tags, int minOffset, int facadeBlocks, int fallbackSurfY) {
+        if (fill == null || fill.isEmpty()) return;
+        if (!isOpticalTelescopeBuilding(tags)) return;
+        buildOpticalDome(fill, minOffset, facadeBlocks, fallbackSurfY);
+    }
+
     // ====== СБОР ДАННЫХ ИЗ OSM ======
 
     private static boolean isBuildingPart(JsonObject tags) {
@@ -2454,6 +2629,40 @@ public class BuildingGenerator {
         String b = optString(tags, "building");
         String mm = optString(tags, "man_made");
         return "roof".equalsIgnoreCase(String.valueOf(b)) || "canopy".equalsIgnoreCase(String.valueOf(mm));
+    }
+
+    // Радио-телескоп по тегам: man_made=telescope или building=telescope/observatory.
+    // Если telescope:type отсутствует — считаем radio по умолчанию.
+    // Если есть telescope:type=radio — тоже ставим.
+    private boolean isRadioTelescopeBuilding(JsonObject tags) {
+        if (tags == null) return false;
+        String mm = normalize(optString(tags, "man_made"));
+        String b  = normalize(optString(tags, "building"));
+        boolean isTelescopeObj = "telescope".equals(mm) || "telescope".equals(b) || "observatory".equals(b);
+        if (!isTelescopeObj) return false;
+
+        String ttype = normalize(
+            optString(tags, "telescope:type"),
+            optString(tags, "telescope")  // иногда пишут просто telescope=radio
+        );
+        if (ttype == null || ttype.isBlank()) return true; // тип не указан → считаем radio
+        return "radio".equals(ttype) || "radio_telescope".equals(ttype) || "radiotelescope".equals(ttype);
+    }
+
+    // Оптический телескоп по тегам
+    private boolean isOpticalTelescopeBuilding(JsonObject tags) {
+        if (tags == null) return false;
+        String mm = normalize(optString(tags, "man_made"));
+        String b  = normalize(optString(tags, "building"));
+        boolean isTelescopeObj = "telescope".equals(mm) || "telescope".equals(b) || "observatory".equals(b);
+        if (!isTelescopeObj) return false;
+
+        String ttype = normalize(
+            optString(tags, "telescope:type"),
+            optString(tags, "telescope") // иногда пишут просто telescope=optical
+        );
+        if (ttype == null || ttype.isBlank()) return false; // без типа по умолчанию оставляем radio
+        return ttype.contains("optical") || "optics".equals(ttype) || "light".equals(ttype);
     }
 
     private List<int[]> collectEntrances(JsonArray elements,
@@ -2678,89 +2887,107 @@ public class BuildingGenerator {
         return Math.max(1, fallbackFacadeBlocks) + Math.max(1, roofBlocks);
     }
 
-// Есть ли у здания уже структурные ключи высоты/этажей?
-private boolean hasStructuralHeight(JsonObject tags) {
-    if (tags == null) return false;
-    for (String k : STRUCTURAL_HEIGHT_KEYS) {
-        if (hasNonBlank(tags, k)) return true;
+    // Диаметр тарелки в блоках: берём из тегов, иначе вычисляем от габаритов здания.
+    // Поддерживаем ключи: dish:diameter, telescope:diameter, diameter (в метрах → блоках).
+    private int parseDishDiameterBlocks(JsonObject tags, Set<Long> fill) {
+        Double dTag = parseMeters(optString(tags, "dish:diameter"));
+        if (dTag == null) dTag = parseMeters(optString(tags, "telescope:diameter"));
+        if (dTag == null) dTag = parseMeters(optString(tags, "diameter"));
+
+        int[] bb = bounds(fill);
+        int minDim = Math.min(bb[2] - bb[0] + 1, bb[3] - bb[1] + 1);
+        // По размеру здания — ~60% меньшей стороны, но не меньше 6 блоков
+        int byBbox = Math.max(6, (int)Math.round(0.60 * minDim));
+
+        int dia = (dTag != null && dTag > 0) ? (int)Math.round(dTag) : byBbox;
+        // Оставляем по 1 блоку отступа от края крыши
+        dia = Math.min(dia, Math.max(5, minDim - 2));
+        return Math.max(5, dia);
     }
-    return false;
-}
 
-// Парсинг строки level: "1", "0;1;2", "1-9", "1-3;5;7-8" → множество целых уровней
-private Set<Integer> parseLevelsSet(String s) {
-    Set<Integer> out = new HashSet<>();
-    if (s == null) return out;
-    s = s.trim().toLowerCase(Locale.ROOT);
-    if (s.isEmpty()) return out;
+    // Есть ли у здания уже структурные ключи высоты/этажей?
+    private boolean hasStructuralHeight(JsonObject tags) {
+        if (tags == null) return false;
+        for (String k : STRUCTURAL_HEIGHT_KEYS) {
+            if (hasNonBlank(tags, k)) return true;
+        }
+        return false;
+    }
 
-    // разделители ; или , (на всякий случай)
-    String[] tokens = s.split("[;,]");
-    for (String t : tokens) {
-        t = t.trim();
-        if (t.isEmpty()) continue;
+    // Парсинг строки level: "1", "0;1;2", "1-9", "1-3;5;7-8" → множество целых уровней
+    private Set<Integer> parseLevelsSet(String s) {
+        Set<Integer> out = new HashSet<>();
+        if (s == null) return out;
+        s = s.trim().toLowerCase(Locale.ROOT);
+        if (s.isEmpty()) return out;
 
-        // диапазон вида "a-b"
-        java.util.regex.Matcher m = java.util.regex.Pattern
-                .compile("^\\s*([-+]?\\d+)\\s*-\\s*([-+]?\\d+)\\s*$")
-                .matcher(t);
-        if (m.matches()) {
+        // разделители ; или , (на всякий случай)
+        String[] tokens = s.split("[;,]");
+        for (String t : tokens) {
+            t = t.trim();
+            if (t.isEmpty()) continue;
+
+            // диапазон вида "a-b"
+            java.util.regex.Matcher m = java.util.regex.Pattern
+                    .compile("^\\s*([-+]?\\d+)\\s*-\\s*([-+]?\\d+)\\s*$")
+                    .matcher(t);
+            if (m.matches()) {
+                try {
+                    int a = Integer.parseInt(m.group(1));
+                    int b = Integer.parseInt(m.group(2));
+                    if (a <= b) {
+                        for (int v = a; v <= b; v++) out.add(v);
+                    } else {
+                        for (int v = a; v >= b; v--) out.add(v);
+                    }
+                } catch (Exception ignore) {}
+                continue;
+            }
+
+            // одиночное число
             try {
-                int a = Integer.parseInt(m.group(1));
-                int b = Integer.parseInt(m.group(2));
-                if (a <= b) {
-                    for (int v = a; v <= b; v++) out.add(v);
-                } else {
-                    for (int v = a; v >= b; v--) out.add(v);
-                }
-            } catch (Exception ignore) {}
-            continue;
+                int v = Integer.parseInt(t);
+                out.add(v);
+            } catch (Exception ignore) {
+                // игнорим ненumeric токены типа "mezzanine"
+            }
         }
-
-        // одиночное число
-        try {
-            int v = Integer.parseInt(t);
-            out.add(v);
-        } catch (Exception ignore) {
-            // игнорим ненumeric токены типа "mezzanine"
-        }
+        return out;
     }
-    return out;
-}
 
-// Большинство точек way внутри полигона здания?
-private boolean isWayMostlyInside(JsonObject way, Set<Long> buildingFill,
-                                  double centerLat, double centerLng,
-                                  double east, double west, double north, double south,
-                                  int sizeMeters, int centerX, int centerZ) {
-    if (way == null || !"way".equals(optString(way, "type"))) return false;
-    if (!way.has("geometry") || !way.get("geometry").isJsonArray()) return false;
-    JsonArray geom = way.getAsJsonArray("geometry");
-    if (geom.size() == 0) return false;
+    // Большинство точек way внутри полигона здания?
+    private boolean isWayMostlyInside(JsonObject way, Set<Long> buildingFill,
+                                    double centerLat, double centerLng,
+                                    double east, double west, double north, double south,
+                                    int sizeMeters, int centerX, int centerZ) {
+        if (way == null || !"way".equals(optString(way, "type"))) return false;
+        if (!way.has("geometry") || !way.get("geometry").isJsonArray()) return false;
+        JsonArray geom = way.getAsJsonArray("geometry");
+        if (geom.size() == 0) return false;
 
-    int inside = 0, total = 0;
-    for (JsonElement gp : geom) {
-        JsonObject p = gp.getAsJsonObject();
-        int[] xz = latlngToBlock(p.get("lat").getAsDouble(), p.get("lon").getAsDouble(),
+        int inside = 0, total = 0;
+        for (JsonElement gp : geom) {
+            JsonObject p = gp.getAsJsonObject();
+            int[] xz = latlngToBlock(p.get("lat").getAsDouble(), p.get("lon").getAsDouble(),
+                    centerLat, centerLng, east, west, north, south, sizeMeters, centerX, centerZ);
+            total++;
+            if (buildingFill.contains(BlockPos.asLong(xz[0], 0, xz[1]))) inside++;
+        }
+        // >50% точек внутри — считаем, что объект «принадлежит» зданию
+        return total > 0 && inside * 2 > total;
+    }
+
+    // Узел внутри полигона здания?
+    private boolean isNodeInside(JsonObject node, Set<Long> buildingFill,
+                                double centerLat, double centerLng,
+                                double east, double west, double north, double south,
+                                int sizeMeters, int centerX, int centerZ) {
+        if (node == null || !"node".equals(optString(node, "type"))) return false;
+        if (!node.has("lat") || !node.has("lon")) return false;
+        int[] xz = latlngToBlock(node.get("lat").getAsDouble(), node.get("lon").getAsDouble(),
                 centerLat, centerLng, east, west, north, south, sizeMeters, centerX, centerZ);
-        total++;
-        if (buildingFill.contains(BlockPos.asLong(xz[0], 0, xz[1]))) inside++;
+        return buildingFill.contains(BlockPos.asLong(xz[0], 0, xz[1]));
     }
-    // >50% точек внутри — считаем, что объект «принадлежит» зданию
-    return total > 0 && inside * 2 > total;
-}
-
-// Узел внутри полигона здания?
-private boolean isNodeInside(JsonObject node, Set<Long> buildingFill,
-                             double centerLat, double centerLng,
-                             double east, double west, double north, double south,
-                             int sizeMeters, int centerX, int centerZ) {
-    if (node == null || !"node".equals(optString(node, "type"))) return false;
-    if (!node.has("lat") || !node.has("lon")) return false;
-    int[] xz = latlngToBlock(node.get("lat").getAsDouble(), node.get("lon").getAsDouble(),
-            centerLat, centerLng, east, west, north, south, sizeMeters, centerX, centerZ);
-    return buildingFill.contains(BlockPos.asLong(xz[0], 0, xz[1]));
-}
 
     // Главная «фишка»: если у здания нет высоты/этажей — попытаться вывести их из внутренних объектов
     private JsonObject augmentHeightFromInteriorIfMissing(
@@ -3993,6 +4220,17 @@ private boolean isNodeInside(JsonObject node, Set<Long> buildingFill,
             case "saltbox"   -> buildRoofSaltbox (fill, minOffset, facadeBlocks, roofBlocks, roof, tags, false, yBaseSurf);
             default          -> buildRoofFlat    (fill, minOffset, facadeBlocks, roofBlocks, roof, false, yBaseSurf);
         }
+
+        // Оптический телескоп — купол из гладкого кварца на крыше 
+        if (!isPart && isOpticalTelescopeBuilding(tags)) {
+            maybePlaceOpticalDome(fill, tags, minOffset, facadeBlocks, yBaseSurf);
+        }
+
+        //  Радиотелескоп
+        if (!isPart && isRadioTelescopeBuilding(tags)) {
+            maybePlaceRadioDish(fill, tags, minOffset, facadeBlocks, roofBlocks, yBaseSurf);
+        }
+
 
         int buildingTotalForPassage = Math.max(1, facadeBlocks + Math.max(0, roofBlocks));
 
