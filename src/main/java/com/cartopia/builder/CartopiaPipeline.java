@@ -1,18 +1,15 @@
 package com.cartopia.builder;
 import com.cartopia.spawn.CartopiaSurfaceSpawn;
-
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import net.minecraft.network.chat.Component;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
-
 import java.io.File;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 
 public class CartopiaPipeline {
-
     private static void broadcast(ServerLevel level, String msg) {
         try {
             if (level.getServer() != null) {
@@ -23,10 +20,8 @@ public class CartopiaPipeline {
         } catch (Throwable ignore) {}
         System.out.println("[Cartopia] " + msg);
     }
-
     public static void run(ServerLevel level, File coordsJsonFile, File demTifFile, File landcoverTifFileOrNull) throws Exception {
         broadcast(level, "Загружаю координаты/параметры…");
-
         // === Подготовка сайдкаров (стрим-режим) ===
         com.cartopia.store.GenerationStore store = null;
         try {
@@ -36,23 +31,22 @@ public class CartopiaPipeline {
             broadcast(level, "Внимание: не удалось подготовить сайдкары: " + splitErr.getMessage());
             // store останется null — генераторы уйдут в fallback на coords.json
         }
-
         String json = Files.readString(coordsJsonFile.toPath(), StandardCharsets.UTF_8);
         JsonObject coords = JsonParser.parseString(json).getAsJsonObject();
-
         if (demTifFile == null) {
             throw new IllegalStateException("DEM файл = null");
         }
         broadcast(level, "DEM: " + demTifFile.getAbsolutePath() + " (" + demTifFile.length() + " байт)"
                 + (demTifFile.exists() ? "" : " [ФАЙЛ НЕ НАЙДЕН]"));
-
         if (landcoverTifFileOrNull != null) {
             broadcast(level, "OLM: " + landcoverTifFileOrNull.getAbsolutePath() + " (" + landcoverTifFileOrNull.length() + " байт)"
                     + (landcoverTifFileOrNull.exists() ? "" : " [ФАЙЛ НЕ НАЙДЕН]"));
         }
-
         broadcast(level, "Старт генерации поверхности (DEM + покраска) …");
         try {
+
+            
+
 
 
             // ===== РЕЛЬЕФ И ЕГО РАСКРАСКА, ДОРОГИ, ЖД =====
@@ -78,11 +72,6 @@ public class CartopiaPipeline {
             PierGenerator piers = new PierGenerator(level, coords, store);
             piers.generate();
             broadcast(level, "Пирсы готовы.");
-
-
-
-
-
             // ===== РАЗМЕТКА =====
             // Пешеходные переходы
             broadcast(level, "Старт разметки пешеходных переходов…");
@@ -109,12 +98,6 @@ public class CartopiaPipeline {
             ParkingStallGenerator stalls = new ParkingStallGenerator(level, coords, store);
             stalls.generate();
             broadcast(level, "Парковочные места готовы.");
-// Разделительные полосы у соединенных дорог - кнопки
-
-
-
-
-
             // ===== МОСТЫ / ТУННЕЛИ =====
             // Мосты/эстакады (без тоннелей)
             broadcast(level, "Старт генерации мостов/эстакад…");
@@ -126,10 +109,11 @@ public class CartopiaPipeline {
             TunnelGenerator tunnels = new TunnelGenerator(level, coords, store);
             tunnels.generate();
             broadcast(level, "Тоннели/подземные переходы готовы.");
-// Здания на мостах?
-// Формы мостов? Сводчатый, и тд
-// Корректно сделать взаимодействие со зданиями мостов и туннелей 
-
+            // Дорожная кнопочная разметка
+            broadcast(level, "Старт дорожной кнопочной разметки…");
+            RoadButtonMarkingGenerator roadButtons = new RoadButtonMarkingGenerator(level, coords, store);
+            roadButtons.generate();
+            broadcast(level, "Дорожная кнопочная разметка готова.");
 
 
 
@@ -140,13 +124,14 @@ public class CartopiaPipeline {
             BuildingGenerator buildings = new BuildingGenerator(level, coords, store);
             buildings.generate();
             broadcast(level, "Здания готовы.");
-// Башни - Товерс - Трубы и тд
+// Башни - Товерс - Трубы, chimney и тд
 // Бункеры
 // Общественные туалеты
 // Радиотелескопы
 // Оптические телескопы
 // Градирни и тп
 // Антенны
+// Арки - Припять
 
 
 
@@ -254,7 +239,6 @@ public class CartopiaPipeline {
             String causeStr = (cause == null ? "" : " | cause: " + cause.getClass().getSimpleName() +
                     (cause.getMessage() == null ? "" : (" - " + cause.getMessage())));
             broadcast(level, "Ошибка генерации: " + cls + (msg == null ? "" : (": " + msg)) + causeStr);
-
             System.err.println("[Cartopia] --- STACKTRACE START ---");
             e.printStackTrace();
             System.err.println("[Cartopia] --- STACKTRACE END ---");
