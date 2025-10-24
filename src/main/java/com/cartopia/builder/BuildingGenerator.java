@@ -4562,6 +4562,73 @@ private boolean isNodeInside(JsonObject node, Set<Long> buildingFill,
     // ============================ ЛОГИКА ОКОН ===================================
     // ============================================================================
 
+    /** Здания (building=*), где окна не ставим вообще. */
+    private static final Set<String> NO_WIN_BUILDING = new HashSet<>(Arrays.asList(
+            // инженерка/ёмкости/силосы/башни
+            "bunker", "tower", "silo", "storage_tank", "tank", "gasometer", "water_tower",
+            // узко-тех. постройки
+            "transformer_tower", "service",
+            // на всякий случай, если кто-то проставляет building=toilets
+            "toilets", "toilet"
+    ));
+
+    /** Инженерные сооружения (man_made=*), где окон не должно быть. */
+    private static final Set<String> NO_WIN_MANMADE = new HashSet<>(Arrays.asList(
+            "chimney", "mast", "antenna", "tower", "communications_tower",
+            "silo", "storage_tank", "gasometer", "water_tower"
+    ));
+
+    /** Санитарные объекты (amenity=*), где окон не ставим. */
+    private static final Set<String> NO_WIN_AMENITY = new HashSet<>(Arrays.asList(
+            "toilets", "toilet", "changing_rooms", "changing_room", "shower", "dressing_rooms", "dressing_room"
+    ));
+
+    /** Военные/укрытия, где окон не ставим. */
+    private static final Set<String> NO_WIN_MILITARY = new HashSet<>(Arrays.asList(
+            "bunker"
+    ));
+
+    /**
+     * Объект относится к категориям, где окна НЕ ставим:
+     * - культовые (isPlaceOfWorship)
+     * - инженерные/санитарные/укрытия
+     */
+    private boolean isNoWindowObject(JsonObject tags) {
+        if (tags == null) return false;
+
+        // 1) культовые — как было
+        if (isPlaceOfWorship(tags)) return true;
+
+        // 2) явные ключи
+        String building = normalize(optString(tags, "building"));
+        String manmade  = normalize(optString(tags, "man_made"));
+        String amenity  = normalize(optString(tags, "amenity"));
+        String military = normalize(optString(tags, "military"));
+
+        if (building != null) {
+            // башни: по умолчанию без окон; если хочешь разрешить только смотровые — сними исключение ниже
+            if (NO_WIN_BUILDING.contains(building)) return true;
+
+            // особый кейс: building=tower → оставим без окон
+            @SuppressWarnings("unused")
+            String towerType = normalize(optString(tags, "tower:type"));
+            if ("tower".equals(building)) {
+                // Версия «жестко без окон»:
+                return true;
+            }
+        }
+
+        if (manmade != null && NO_WIN_MANMADE.contains(manmade)) return true;
+        if (amenity != null && NO_WIN_AMENITY.contains(amenity)) return true;
+        if (military != null && NO_WIN_MILITARY.contains(military)) return true;
+
+        // Доп. эвристики (редкие синонимы/usage)
+        String usage = normalize(optString(tags, "building:use"), optString(tags, "building:usage"));
+        if (usage != null && (usage.contains("bunker") || usage.contains("tank") || usage.contains("silo"))) return true;
+
+        return false;
+    }
+
     /** Типы культовых зданий, где окна не ставим. */
     private static final Set<String> WORSHIP_TYPES = new HashSet<>(Arrays.asList(
             "church","cathedral","chapel","mosque","synagogue","temple","shrine","monastery","place_of_worship"
@@ -4585,7 +4652,7 @@ private boolean isNodeInside(JsonObject node, Set<Long> buildingFill,
     /** Важно: часть принадлежит родителю из «запрещённых»? Тогда окна не ставим и на части. */
     private boolean isForbiddenForWindows(JsonObject tagsOfThisObject, Set<Long> thisFill) {
         // 1) сам объект запрещён?
-        if (isPlaceOfWorship(tagsOfThisObject)) return true;
+        if (isNoWindowObject(tagsOfThisObject)) return true;
 
         // 2) если есть родительские оболочки, проверяем, лежит ли часть внутри культового родителя
         if (thisFill != null && !thisFill.isEmpty() && parentShells != null) {
@@ -4602,7 +4669,7 @@ private boolean isNodeInside(JsonObject node, Set<Long> buildingFill,
                 if (!overlaps) continue;
 
                 // если теги родителя — культовые, то запрещаем окна на части
-                if (isPlaceOfWorship(sh.tags)) return true;
+                if (isNoWindowObject(sh.tags)) return true;
             }
         }
         return false;
@@ -4669,3 +4736,7 @@ private boolean isNodeInside(JsonObject node, Set<Long> buildingFill,
     }
 
 }
+
+
+
+
