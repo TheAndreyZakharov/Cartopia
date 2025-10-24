@@ -2139,7 +2139,7 @@ public class BuildingGenerator {
         level.setBlock(new BlockPos(x, yBase + 2, z), stTop, 3);
     }
 
-    
+
 
     // ====== КРЫШИ ======
 
@@ -2942,17 +2942,30 @@ public class BuildingGenerator {
 
     /** Высота стен: приоритет уровней, затем height/roof:height отнимаем крыши при наличии */
     private int parseFacadeHeightBlocks(JsonObject tags) {
-        // 1) ЭТАЖИ — главный ориентир
+        // 1) ЭТАЖИ и МЕТРЫ — если оба есть, применяем правило «сильного расхождения»
         Integer levels = parseFirstInt(optString(tags, "building:levels"));
         if (levels == null) levels = parseFirstInt(optString(tags, "levels"));
         if (levels == null) levels = parseFirstInt(optString(tags, "building:levels:aboveground"));
+
+        Double totalH = parseMeters(optString(tags, "height"));
+        if (totalH == null) totalH = parseMeters(optString(tags, "building:height")); // синоним
+
         if (levels != null && levels > 0) {
+            // Если этажей <10 и метры как минимум в 2 раза больше, чем этажи*4 — слушаемся метров
+            if (totalH != null && totalH > 0 && levels < 10) {
+                int floorsBlocks = levels * LEVEL_HEIGHT;          // 4 блока на этаж
+                int totalMetersRounded = (int)Math.round(totalH);  // 1 м = 1 блок
+                if (totalMetersRounded >= floorsBlocks * 2) {
+                    int roof = parseRoofHeightBlocks(tags);
+                    int body = totalMetersRounded - roof;          // фасад без крыши
+                    return Math.max(1, body);
+                }
+            }
+            // Иначе — обычная трактовка по этажам
             return Math.max(1, levels * LEVEL_HEIGHT);
         }
 
         // 2) Если этажей нет — берём метры до верха крыши и вычитаем крышу
-        Double totalH = parseMeters(optString(tags, "height"));
-        if (totalH == null) totalH = parseMeters(optString(tags, "building:height")); // синоним
         if (totalH != null && totalH > 0) {
             int roof = parseRoofHeightBlocks(tags);
             int body = (int)Math.round(totalH) - roof;
@@ -2981,17 +2994,27 @@ public class BuildingGenerator {
     }
 
     private int parseTotalHeightBlocks(JsonObject tags, int fallbackFacadeBlocks, int roofBlocks) {
-        // ЭТАЖИ + крыша
         Integer levels = parseFirstInt(optString(tags, "building:levels"));
         if (levels == null) levels = parseFirstInt(optString(tags, "levels"));
         if (levels == null) levels = parseFirstInt(optString(tags, "building:levels:aboveground"));
+
+        Double totalMeters = parseMeters(optString(tags, "height"));
+        if (totalMeters == null) totalMeters = parseMeters(optString(tags, "building:height")); // синоним
+
         if (levels != null && levels > 0) {
+            // Если этажей <10 и метры как минимум в 2 раза больше, чем этажи*4 — слушаемся метров
+            if (totalMeters != null && totalMeters > 0 && levels < 10) {
+                int floorsBlocks = levels * LEVEL_HEIGHT;     // 4 блока на этаж
+                int tm = (int)Math.round(totalMeters);        // 1 м = 1 блок
+                if (tm >= floorsBlocks * 2) {
+                    return Math.max(1, tm);
+                }
+            }
+            // Иначе — классика: этажи + крыша
             return Math.max(1, levels * LEVEL_HEIGHT + Math.max(0, roofBlocks));
         }
 
         // Если этажей нет — берём полную высоту в метрах
-        Double totalMeters = parseMeters(optString(tags, "height"));
-        if (totalMeters == null) totalMeters = parseMeters(optString(tags, "building:height")); // синоним
         if (totalMeters != null && totalMeters > 0) {
             return Math.max(1, (int)Math.round(totalMeters));
         }
