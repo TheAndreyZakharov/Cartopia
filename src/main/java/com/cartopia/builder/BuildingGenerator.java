@@ -928,7 +928,7 @@ public class BuildingGenerator {
             minX, maxX, minZ, maxZ);
         
         // Соберём заранее узлы entrance=* и линии tunnel=building_passage
-        List<int[]> entrances = collectEntrances(elements, centerLat, centerLng, east, west, north, south, sizeMeters, centerX, centerZ);
+        List<int[]> entrances = collectEntrancesExtended(elements, centerLat, centerLng, east, west, north, south, sizeMeters, centerX, centerZ);
         List<List<int[]>> passages = collectPassages(elements, centerLat, centerLng, east, west, north, south, sizeMeters, centerX, centerZ);
 
         // === NEW: копим части, чтобы потом построить снизу вверх
@@ -1220,7 +1220,7 @@ public class BuildingGenerator {
         // ---------- Entrances / Passages ----------
         final List<int[]> entrances;
         try (FeatureStream fs = store.featureStream()) {
-            entrances = collectEntrances(fs, centerLat, centerLng, east, west, north, south, sizeMeters, centerX, centerZ);
+            entrances = collectEntrancesExtended(fs, centerLat, centerLng, east, west, north, south, sizeMeters, centerX, centerZ);
         } catch (Exception ex) {
             broadcast(level, "Ошибка чтения NDJSON (entrances): " + ex.getMessage());
             return;
@@ -1876,36 +1876,165 @@ public class BuildingGenerator {
         }
     }
 
-    // ====== ДВЕРИ ПО entrance=* ======
+    // POI, для которых хотим дверь на периметре здания
+    private boolean isCommercialOrPublicPoi(JsonObject tags) {
+        if (tags == null) return false;
+        String shop = normalize(optString(tags, "shop"));
+        if (shop != null) return true;
+
+        String amenity = normalize(optString(tags, "amenity"));
+        if (amenity != null) {
+            // базовый набор, при желании расширяй
+            Set<String> ok = new HashSet<>(Arrays.asList(
+                "cafe","restaurant","fast_food","bar","pub",
+                "pharmacy","clinic","doctors","dentist",
+                "bank","atm","post_office",
+                "library","theatre","cinema","arts_centre","marketplace"
+            ));
+            if (ok.contains(amenity)) return true;
+        }
+        String office = normalize(optString(tags, "office"));
+        if (office != null) return true;
+        String healthcare = normalize(optString(tags, "healthcare"));
+        if (healthcare != null) return true;
+        return false;
+    }
+
+    // Объединённый сбор: entrance=* + POI-якоря (НЕ stream)
+    private List<int[]> collectEntrancesExtended(JsonArray elements,
+                                                double centerLat, double centerLng,
+                                                double east, double west, double north, double south,
+                                                int sizeMeters, int centerX, int centerZ) {
+        // используем LinkedHashSet, чтобы сохранить порядок добавления и убрать дубли
+        java.util.Set<Long> acc = new java.util.LinkedHashSet<>();
+
+        for (JsonElement je : elements) {
+            JsonObject e = je.getAsJsonObject();
+            String type = optString(e, "type");
+            JsonObject tags = (e.has("tags") && e.get("tags").isJsonObject()) ? e.getAsJsonObject("tags") : null;
+            if (tags == null) continue;
+
+            // 1) entrance=*
+            if ("node".equals(type) && hasNonBlank(tags, "entrance")) {
+                double lat = e.get("lat").getAsDouble();
+                double lon = e.get("lon").getAsDouble();
+                int[] xz = latlngToBlock(lat, lon, centerLat, centerLng, east, west, north, south, sizeMeters, centerX, centerZ);
+                acc.add(BlockPos.asLong(xz[0], 0, xz[1]));
+            }
+
+            // 2) коммерческие/публичные POI (node/way)
+            if (isCommercialOrPublicPoi(tags)) {
+                if ("node".equals(type)) {
+                    double lat = e.get("lat").getAsDouble();
+                    double lon = e.get("lon").getAsDouble();
+                    int[] xz = latlngToBlock(lat, lon, centerLat, centerLng, east, west, north, south, sizeMeters, centerX, centerZ);
+                    acc.add(BlockPos.asLong(xz[0], 0, xz[1]));
+                } else if ("way".equals(type) && e.has("geometry") && e.get("geometry").isJsonArray()) {
+                    JsonArray geom = e.getAsJsonArray("geometry");
+                    if (geom.size() > 0) {
+                        int xMin=Integer.MAX_VALUE,xMax=Integer.MIN_VALUE,zMin=Integer.MAX_VALUE,zMax=Integer.MIN_VALUE;
+                        for (JsonElement gp : geom) {
+                            JsonObject p = gp.getAsJsonObject();
+                            int[] xz = latlngToBlock(p.get("lat").getAsDouble(), p.get("lon").getAsDouble(),
+                                    centerLat, centerLng, east, west, north, south, sizeMeters, centerX, centerZ);
+                            xMin=Math.min(xMin,xz[0]); xMax=Math.max(xMax,xz[0]);
+                            zMin=Math.min(zMin,xz[1]); zMax=Math.max(zMax,xz[1]);
+                        }
+                        if (xMin<=xMax && zMin<=zMax) {
+                            int cx = (xMin + xMax) >> 1;
+                            int cz = (zMin + zMax) >> 1;
+                            acc.add(BlockPos.asLong(cx, 0, cz));
+                        }
+                    }
+                }
+            }
+        }
+
+        java.util.List<int[]> out = new java.util.ArrayList<>(acc.size());
+        for (long k : acc) out.add(new int[]{BlockPos.getX(k), BlockPos.getZ(k)});
+        return out;
+    }
+
+    // Объединённый сбор: entrance=* + POI-якоря (STREAM, один проход по fs)
+    private List<int[]> collectEntrancesExtended(FeatureStream fs,
+                                                double centerLat, double centerLng,
+                                                double east, double west, double north, double south,
+                                                int sizeMeters, int centerX, int centerZ) {
+        java.util.Set<Long> acc = new java.util.LinkedHashSet<>();
+
+        for (JsonObject e : fs) {
+            String type = optString(e, "type");
+            JsonObject tags = (e.has("tags") && e.get("tags").isJsonObject()) ? e.getAsJsonObject("tags") : null;
+            if (tags == null) continue;
+
+            // 1) entrance=*
+            if ("node".equals(type) && hasNonBlank(tags, "entrance")) {
+                double lat = e.get("lat").getAsDouble();
+                double lon = e.get("lon").getAsDouble();
+                int[] xz = latlngToBlock(lat, lon, centerLat, centerLng, east, west, north, south, sizeMeters, centerX, centerZ);
+                acc.add(BlockPos.asLong(xz[0], 0, xz[1]));
+            }
+
+            // 2) коммерческие/публичные POI (node/way)
+            if (isCommercialOrPublicPoi(tags)) {
+                if ("node".equals(type)) {
+                    double lat = e.get("lat").getAsDouble();
+                    double lon = e.get("lon").getAsDouble();
+                    int[] xz = latlngToBlock(lat, lon, centerLat, centerLng, east, west, north, south, sizeMeters, centerX, centerZ);
+                    acc.add(BlockPos.asLong(xz[0], 0, xz[1]));
+                } else if ("way".equals(type) && e.has("geometry") && e.get("geometry").isJsonArray()) {
+                    JsonArray geom = e.getAsJsonArray("geometry");
+                    if (geom.size() > 0) {
+                        int xMin=Integer.MAX_VALUE,xMax=Integer.MIN_VALUE,zMin=Integer.MAX_VALUE,zMax=Integer.MIN_VALUE;
+                        for (JsonElement gp : geom) {
+                            JsonObject p = gp.getAsJsonObject();
+                            int[] xz = latlngToBlock(
+                                    p.get("lat").getAsDouble(), p.get("lon").getAsDouble(),
+                                    centerLat, centerLng, east, west, north, south, sizeMeters, centerX, centerZ);
+                            xMin=Math.min(xMin,xz[0]); xMax=Math.max(xMax,xz[0]);
+                            zMin=Math.min(zMin,xz[1]); zMax=Math.max(zMax,xz[1]);
+                        }
+                        if (xMin<=xMax && zMin<=zMax) {
+                            int cx = (xMin + xMax) >> 1;
+                            int cz = (zMin + zMax) >> 1;
+                            acc.add(BlockPos.asLong(cx, 0, cz));
+                        }
+                    }
+                }
+            }
+        }
+
+        java.util.List<int[]> out = new java.util.ArrayList<>(acc.size());
+        for (long k : acc) out.add(new int[]{BlockPos.getX(k), BlockPos.getZ(k)});
+        return out;
+    }
+    
+    // ====== ДВЕРИ ПО entrance=* + POI ======
     private void placeDoorsOnEntrances(Set<Long> edge, Set<Long> fill, List<int[]> entrances,
                                     int minOffset, int fallbackSurfY) {
         if (entrances == null || entrances.isEmpty() || edge == null || edge.isEmpty()) return;
 
-        // Быстрая структура для поиска ближайшей точки ребра
         List<int[]> edgeList = edge.stream()
                 .map(k -> new int[]{BlockPos.getX(k), BlockPos.getZ(k)})
                 .collect(Collectors.toList());
 
-        // Чтобы не ставить двери в одну и ту же клетку
         Set<Long> usedDoorSpots = new HashSet<>();
 
         for (int[] ent : entrances) {
             int ex = ent[0], ez = ent[1];
 
-            // Вход должен находиться внутри полигона здания (или вплотную к нему)
             boolean inside = fill.contains(BlockPos.asLong(ex,0,ez));
+            boolean near = false;
             if (!inside) {
-                // допустим "рядом": максимум в 2 блока от границы
-                int near2 = 2*2;
-                boolean near = false;
+                int nearR2 = 4 * 4; // было 2*2 — чуть щедрее к шуму данных
                 for (int[] e : edgeList) {
                     int dx = e[0] - ex, dz = e[1] - ez;
-                    if (dx*dx + dz*dz <= near2) { near = true; break; }
+                    if (dx*dx + dz*dz <= nearR2) { near = true; break; }
                 }
-                if (!near) continue; // этот entrance к этому зданию не относится
+                if (!near) continue; // не относится к этому зданию
             }
 
-            // Ищем ближайшую клетку ребра
+            // ближайшая точка периметра
             int[] nearest = edgeList.stream()
                     .min(Comparator.comparingInt(p -> {
                         int dx = p[0] - ex, dz = p[1] - ez;
@@ -1913,26 +2042,47 @@ public class BuildingGenerator {
                     }))
                     .orElse(null);
             if (nearest == null) continue;
-            // порог 5 блоков (25 по квадрату расстояния)
+
             int ndx = nearest[0] - ex, ndz = nearest[1] - ez;
-            if (ndx*ndx + ndz*ndz > 25) continue;
-            int x = nearest[0];
-            int z = nearest[1];
+            int dist2 = ndx*ndx + ndz*ndz;
 
+            // если это наружный entrance (не inside) — ограничим 5 блоками как было;
+            // если это внутренний POI/entrance — разрешаем любой отступ, просто проецируем.
+            if (!inside && dist2 > 25) continue;
 
+            int x = nearest[0], z = nearest[1];
             long spot = BlockPos.asLong(x,0,z);
-            if (usedDoorSpots.contains(spot)) continue; // уже ставили рядом дверь
+            if (usedDoorSpots.contains(spot)) continue;
             usedDoorSpots.add(spot);
 
             Direction facing = guessDoorFacing(edge, x, z);
             int yBase = localWallBaseYAt(x, z, minOffset, fallbackSurfY);
 
-            // На всякий — очищаем проём
+            // проём
             level.setBlock(new BlockPos(x, yBase + 1, z), Blocks.AIR.defaultBlockState(), 3);
             level.setBlock(new BlockPos(x, yBase + 2, z), Blocks.AIR.defaultBlockState(), 3);
 
+            // дверь + принудительно ЗАКРЫТА
             placeDoorDarkOak(x, yBase, z, facing);
+            forceDoorClosed(x, yBase, z);
+
             ensureDoorLanding(x, z, facing, yBase);
+        }
+    }
+
+    // Гарантируем, что дверь закрыта (open=false) после установки
+    private void forceDoorClosed(int x, int yBase, int z) {
+        BlockPos lower = new BlockPos(x, yBase + 1, z);
+        BlockPos upper = new BlockPos(x, yBase + 2, z);
+        BlockState s1 = level.getBlockState(lower);
+        BlockState s2 = level.getBlockState(upper);
+        if (s1.getBlock() instanceof DoorBlock && s1.hasProperty(DoorBlock.OPEN)) {
+            s1 = s1.setValue(DoorBlock.OPEN, false);
+            level.setBlock(lower, s1, 3);
+        }
+        if (s2.getBlock() instanceof DoorBlock && s2.hasProperty(DoorBlock.OPEN)) {
+            s2 = s2.setValue(DoorBlock.OPEN, false);
+            level.setBlock(upper, s2, 3);
         }
     }
 
@@ -1988,6 +2138,8 @@ public class BuildingGenerator {
         level.setBlock(new BlockPos(x, yBase + 1, z), stBottom, 3);
         level.setBlock(new BlockPos(x, yBase + 2, z), stTop, 3);
     }
+
+    
 
     // ====== КРЫШИ ======
 
@@ -2663,45 +2815,6 @@ public class BuildingGenerator {
         );
         if (ttype == null || ttype.isBlank()) return false; // без типа по умолчанию оставляем radio
         return ttype.contains("optical") || "optics".equals(ttype) || "light".equals(ttype);
-    }
-
-    private List<int[]> collectEntrances(JsonArray elements,
-                                         double centerLat, double centerLng,
-                                         double east, double west, double north, double south,
-                                         int sizeMeters, int centerX, int centerZ) {
-        List<int[]> pts = new ArrayList<>();
-        for (JsonElement je : elements) {
-            JsonObject e = je.getAsJsonObject();
-            if (!"node".equals(optString(e, "type"))) continue;
-            JsonObject tags = (e.has("tags") && e.get("tags").isJsonObject()) ? e.getAsJsonObject("tags") : null;
-            if (tags == null) continue;
-            String ent = optString(tags, "entrance");
-            if (ent == null) continue;
-            double lat = e.get("lat").getAsDouble();
-            double lon = e.get("lon").getAsDouble();
-            int[] xz = latlngToBlock(lat, lon, centerLat, centerLng, east, west, north, south, sizeMeters, centerX, centerZ);
-            pts.add(new int[]{xz[0], xz[1]});
-        }
-        return pts;
-    }
-
-    private List<int[]> collectEntrances(FeatureStream fs,
-                                        double centerLat, double centerLng,
-                                        double east, double west, double north, double south,
-                                        int sizeMeters, int centerX, int centerZ) {
-        List<int[]> pts = new ArrayList<>();
-        for (JsonObject e : fs) {
-            if (!"node".equals(optString(e, "type"))) continue;
-            JsonObject tags = (e.has("tags") && e.get("tags").isJsonObject()) ? e.getAsJsonObject("tags") : null;
-            if (tags == null) continue;
-            String ent = optString(tags, "entrance");
-            if (ent == null) continue;
-            double lat = e.get("lat").getAsDouble();
-            double lon = e.get("lon").getAsDouble();
-            int[] xz = latlngToBlock(lat, lon, centerLat, centerLng, east, west, north, south, sizeMeters, centerX, centerZ);
-            pts.add(new int[]{xz[0], xz[1]});
-        }
-        return pts;
     }
 
 
