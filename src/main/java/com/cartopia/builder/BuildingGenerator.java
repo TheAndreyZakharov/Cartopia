@@ -2942,6 +2942,27 @@ public class BuildingGenerator {
 
     /** Высота стен: приоритет уровней, затем height/roof:height отнимаем крыши при наличии */
     private int parseFacadeHeightBlocks(JsonObject tags) {
+        // ОСОБЫЕ ОБЪЕКТЫ: трубы/градирни — крыши нет, окна не ставим, дефолт высоты 50
+        if (isPipeOrCoolingTower(tags)) {
+            Integer levels = parseFirstInt(optString(tags, "building:levels"));
+            if (levels == null) levels = parseFirstInt(optString(tags, "levels"));
+            if (levels == null) levels = parseFirstInt(optString(tags, "building:levels:aboveground"));
+            Double totalH = parseMeters(optString(tags, "height"));
+            if (totalH == null) totalH = parseMeters(optString(tags, "building:height"));
+
+            // конфликт этажи/метры: если этажей < 10 и высота в 2 раза больше — доверяем метрам
+            if (levels != null && levels > 0 && totalH != null && totalH > 0 && levels < 10) {
+                int floorsBlocks = levels * LEVEL_HEIGHT;
+                int totalMetersRounded = (int)Math.round(totalH);
+                if (totalMetersRounded >= floorsBlocks * 2) {
+                    // слушаемся метры; крыши нет → весь фасад = total
+                    return Math.max(1, totalMetersRounded);
+                }
+            }
+            if (levels != null && levels > 0) return Math.max(1, levels * LEVEL_HEIGHT);
+            if (totalH != null && totalH > 0) return Math.max(1, (int)Math.round(totalH));
+            return 50; // дефолт для труб/градирен
+        }
         // 1) ЭТАЖИ и МЕТРЫ — если оба есть, применяем правило «сильного расхождения»
         Integer levels = parseFirstInt(optString(tags, "building:levels"));
         if (levels == null) levels = parseFirstInt(optString(tags, "levels"));
@@ -2994,6 +3015,23 @@ public class BuildingGenerator {
     }
 
     private int parseTotalHeightBlocks(JsonObject tags, int fallbackFacadeBlocks, int roofBlocks) {
+        // ОСОБЫЕ ОБЪЕКТЫ: трубы/градирни — крыши нет, дефолт 50
+        if (isPipeOrCoolingTower(tags)) {
+            Integer levels = parseFirstInt(optString(tags, "building:levels"));
+            if (levels == null) levels = parseFirstInt(optString(tags, "levels"));
+            if (levels == null) levels = parseFirstInt(optString(tags, "building:levels:aboveground"));
+            Double totalMeters = parseMeters(optString(tags, "height"));
+            if (totalMeters == null) totalMeters = parseMeters(optString(tags, "building:height"));
+
+            if (levels != null && levels > 0 && totalMeters != null && totalMeters > 0 && levels < 10) {
+                int floorsBlocks = levels * LEVEL_HEIGHT;
+                int tm = (int)Math.round(totalMeters);
+                if (tm >= floorsBlocks * 2) return Math.max(1, tm); // слушаемся метры
+            }
+            if (levels != null && levels > 0) return Math.max(1, levels * LEVEL_HEIGHT);
+            if (totalMeters != null && totalMeters > 0) return Math.max(1, (int)Math.round(totalMeters));
+            return 50; // дефолт для труб/градирен
+        }
         Integer levels = parseFirstInt(optString(tags, "building:levels"));
         if (levels == null) levels = parseFirstInt(optString(tags, "levels"));
         if (levels == null) levels = parseFirstInt(optString(tags, "building:levels:aboveground"));
@@ -4197,6 +4235,11 @@ public class BuildingGenerator {
             PartVertical pv = computePartVertical(tags);
             roofBlocks = parseRoofHeightBlocksForPart(tags); // >=1 (flat=1)
 
+            // Трубы/градирни: крыша не нужна
+            if (isPipeOrCoolingTower(tags)) {
+                roofBlocks = 0;
+            }
+
             // входные якоря (уровни/метры)
             Integer lv = parseFirstInt(optString(tags, "building:levels"));
             if (lv == null) lv = parseFirstInt(optString(tags, "levels"));
@@ -4250,6 +4293,11 @@ public class BuildingGenerator {
             minOffset    = (FORCE_GROUND_ANCHOR ? 0 : effectiveMinOffset(tags));
             facadeBlocks = parseFacadeHeightBlocks(tags);
             roofBlocks   = parseRoofHeightBlocks(tags);
+
+            // Трубы/градирни: крыша не нужна
+            if (isPipeOrCoolingTower(tags)) {
+                roofBlocks = 0;
+            }
 
             int totalBlocks = parseTotalHeightBlocks(tags, facadeBlocks, roofBlocks);
             if (totalBlocks <= roofBlocks) {
@@ -4339,22 +4387,25 @@ public class BuildingGenerator {
         applyWindows(edge, fill, tags, minOffset, facadeBlocks, yBaseSurf, /*totalHeight=*/facadeBlocks + roofBlocks, facadeId);
 
         // крыша (она тоже не идёт в этажи)
-        switch (roofShape) {
-            case "gabled"    -> buildRoofGabled  (fill, minOffset, facadeBlocks, roofBlocks, roof, tags, false, yBaseSurf);
-            case "skillion"  -> buildRoofSkillion(fill, minOffset, facadeBlocks, roofBlocks, roof, tags, false, yBaseSurf);
-            case "pyramidal" -> buildRoofPyramidal(fill, minOffset, facadeBlocks, roofBlocks, roof, tags, false, yBaseSurf);
-            case "hip"       -> buildRoofHip     (fill, minOffset, facadeBlocks, roofBlocks, roof, tags, false, yBaseSurf);
-            case "halfhip"   -> buildRoofHalfHip (fill, minOffset, facadeBlocks, roofBlocks, roof, tags, false, yBaseSurf);
-            case "gambrel"   -> buildRoofGambrel (fill, minOffset, facadeBlocks, roofBlocks, roof, tags, false, yBaseSurf);
-            case "mansard"   -> buildRoofMansard (fill, minOffset, facadeBlocks, roofBlocks, roof, tags, false, yBaseSurf);
-            case "dome"      -> buildRoofDome    (fill, minOffset, facadeBlocks, roofBlocks, roof, tags, false, yBaseSurf);
-            case "onion"     -> buildRoofOnion   (fill, minOffset, facadeBlocks, roofBlocks, roof, tags, false, yBaseSurf);
-            case "conical"   -> buildRoofConical (fill, minOffset, facadeBlocks, roofBlocks, roof, tags, false, yBaseSurf);
-            case "sawtooth"  -> buildRoofSawtooth(fill, minOffset, facadeBlocks, roofBlocks, roof, tags, false, yBaseSurf);
-            case "butterfly" -> buildRoofButterfly(fill, minOffset, facadeBlocks, roofBlocks, roof, tags, false, yBaseSurf);
-            case "barrel"    -> buildRoofBarrel  (fill, minOffset, facadeBlocks, roofBlocks, roof, tags, false, yBaseSurf);
-            case "saltbox"   -> buildRoofSaltbox (fill, minOffset, facadeBlocks, roofBlocks, roof, tags, false, yBaseSurf);
-            default          -> buildRoofFlat    (fill, minOffset, facadeBlocks, roofBlocks, roof, false, yBaseSurf);
+        // крыша (для труб/градирен не строим вообще)
+        if (!isPipeOrCoolingTower(tags)) {
+            switch (roofShape) {
+                case "gabled"    -> buildRoofGabled  (fill, minOffset, facadeBlocks, roofBlocks, roof, tags, false, yBaseSurf);
+                case "skillion"  -> buildRoofSkillion(fill, minOffset, facadeBlocks, roofBlocks, roof, tags, false, yBaseSurf);
+                case "pyramidal" -> buildRoofPyramidal(fill, minOffset, facadeBlocks, roofBlocks, roof, tags, false, yBaseSurf);
+                case "hip"       -> buildRoofHip     (fill, minOffset, facadeBlocks, roofBlocks, roof, tags, false, yBaseSurf);
+                case "halfhip"   -> buildRoofHalfHip (fill, minOffset, facadeBlocks, roofBlocks, roof, tags, false, yBaseSurf);
+                case "gambrel"   -> buildRoofGambrel (fill, minOffset, facadeBlocks, roofBlocks, roof, tags, false, yBaseSurf);
+                case "mansard"   -> buildRoofMansard (fill, minOffset, facadeBlocks, roofBlocks, roof, tags, false, yBaseSurf);
+                case "dome"      -> buildRoofDome    (fill, minOffset, facadeBlocks, roofBlocks, roof, tags, false, yBaseSurf);
+                case "onion"     -> buildRoofOnion   (fill, minOffset, facadeBlocks, roofBlocks, roof, tags, false, yBaseSurf);
+                case "conical"   -> buildRoofConical (fill, minOffset, facadeBlocks, roofBlocks, roof, tags, false, yBaseSurf);
+                case "sawtooth"  -> buildRoofSawtooth(fill, minOffset, facadeBlocks, roofBlocks, roof, tags, false, yBaseSurf);
+                case "butterfly" -> buildRoofButterfly(fill, minOffset, facadeBlocks, roofBlocks, roof, tags, false, yBaseSurf);
+                case "barrel"    -> buildRoofBarrel  (fill, minOffset, facadeBlocks, roofBlocks, roof, tags, false, yBaseSurf);
+                case "saltbox"   -> buildRoofSaltbox (fill, minOffset, facadeBlocks, roofBlocks, roof, tags, false, yBaseSurf);
+                default          -> buildRoofFlat    (fill, minOffset, facadeBlocks, roofBlocks, roof, false, yBaseSurf);
+            }
         }
 
         // Оптический телескоп — купол из гладкого кварца на крыше 
@@ -4638,6 +4689,8 @@ public class BuildingGenerator {
     }
 
     private int estimateFloors(JsonObject tags, int facadeBlocks) {
+        // Трубы/градирни — никаких внутренних перекрытий/этажей
+        if (isPipeOrCoolingTower(tags)) return 0;
         Integer lv = parseFirstInt(optString(tags, "building:levels"));
         if (lv == null) lv = parseFirstInt(optString(tags, "levels"));
         if (lv == null) lv = parseFirstInt(optString(tags, "building:levels:aboveground"));
@@ -4972,6 +5025,8 @@ public class BuildingGenerator {
 
         // 1) культовые — как было
         if (isPlaceOfWorship(tags)) return true;
+        // Трубы/градирни/куллинг-тауэр — окон не ставим (только для building/*)
+        if (isPipeOrCoolingTower(tags)) return true;
 
         // 2) явные ключи
         String building = normalize(optString(tags, "building"));
@@ -5014,6 +5069,35 @@ public class BuildingGenerator {
         String btype   = normalize(optString(tags, "building"));
         if ("place_of_worship".equals(amenity)) return true;
         return btype != null && WORSHIP_TYPES.contains(btype);
+    }
+
+    // ТРУБЫ / ГРАДИРНИ / COOLING TOWERS — только если это именно building/*, а не просто man_made без building
+    private boolean isPipeOrCoolingTower(JsonObject tags) {
+        if (tags == null) return false;
+        // учитываем только случаи, когда объект участвует в генерации зданий
+        boolean isBld = isBuilding(tags) || isBuildingPart(tags);
+        if (!isBld) return false;
+
+        String b  = normalize(optString(tags, "building"));
+        String bp = normalize(optString(tags, "building:part"));
+        String mm = normalize(optString(tags, "man_made"));
+
+        // Возможные значения/синонимы
+        Set<String> pipeKeys = new HashSet<>(Arrays.asList(
+            "chimney", "smokestack", "stack"
+        ));
+        Set<String> coolingKeys = new HashSet<>(Arrays.asList(
+            "cooling_tower", "coolingtower", "cooling-tower"
+        ));
+
+        // По building=* или building:part=*
+        if (b != null  && (pipeKeys.contains(b) || coolingKeys.contains(b))) return true;
+        if (bp != null && (pipeKeys.contains(bp) || coolingKeys.contains(bp))) return true;
+
+        // Разрешаем распознать по man_made=*, НО только вместе с building/* (см. isBld выше)
+        if (mm != null && (pipeKeys.contains(mm) || coolingKeys.contains(mm))) return true;
+
+        return false;
     }
 
     /** Похож ли id фасада на стеклянный (лента стекла — окна не ставим) */
