@@ -64,11 +64,168 @@ const searchInput = document.getElementById('searchInput');
 const searchBtn = document.getElementById('searchBtn');
 const areaInfo = document.getElementById('areaInfo');
 const statusLine = document.getElementById('statusLine');
+const scalePlusBtn  = document.getElementById('btnScalePlus');
+const scaleMinusBtn = document.getElementById('btnScaleMinus');
+const zoomInBtn  = document.getElementById('btnZoomIn');
+const zoomOutBtn = document.getElementById('btnZoomOut');
+/* === Dark theme toggle === */
+const themeToggleBtn = document.getElementById('themeToggleBtn');
+
+/* Визуальный «нажим» для кнопок панели */
+const panelButtons = [searchBtn, toggleBtn, confirmBtn, collapseTab, dragTab, zoomInBtn, zoomOutBtn, scalePlusBtn, scaleMinusBtn];
+panelButtons.forEach(btn => {
+  if (!btn) return;
+
+  // Pointer (мышь/тач/стилус)
+  btn.addEventListener('pointerdown', () => btn.classList.add('is-pressed'));
+  const cancelPress = () => btn.classList.remove('is-pressed');
+  ['pointerup','pointercancel','mouseleave','blur'].forEach(ev =>
+    btn.addEventListener(ev, cancelPress)
+  );
+
+  // Клавиатура: Space/Enter – коротко показываем «нажим»
+  btn.addEventListener('keydown', e => {
+    if (e.key === ' ' || e.key === 'Enter') btn.classList.add('is-pressed');
+  });
+  btn.addEventListener('keyup', () => btn.classList.remove('is-pressed'));
+});
+
+/* Переключатель темы — клик по кнопке в панели */
+if (themeToggleBtn){
+  themeToggleBtn.addEventListener('click', () => {
+    const isDark = !document.body.classList.contains('theme-dark');
+    applyTheme(isDark ? 'dark' : 'light');
+    localStorage.setItem('cartopiaTheme', isDark ? 'dark' : 'light');
+  });
+}
+
 
 const controlsGlass = document.getElementById('controlsGlass');
 const controlsBody  = document.getElementById('controlsBody');
 
-let lastExpandedHeightPx = null; // сюда запишем высоту стекла перед схлопыванием
+
+/* Тема: применить + обновить кнопку */
+function applyTheme(mode){
+  const isDark = (mode === 'dark');
+  document.body.classList.toggle('theme-dark', isDark);
+  if (themeToggleBtn){
+    themeToggleBtn.textContent = isDark ? 'Enable light theme' : 'Enable dark theme';
+    themeToggleBtn.setAttribute('aria-pressed', String(isDark));
+    themeToggleBtn.title = isDark ? 'Enable light theme' : 'Enable dark theme';
+  }
+}
+
+/* Инициализация: из localStorage, иначе по системной */
+(function initTheme(){
+  const saved = localStorage.getItem('cartopiaTheme');
+  const prefersDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+  const start = saved || (prefersDark ? 'dark' : 'light');
+  applyTheme(start);
+
+  // если пользователь не сохранял — следим за системной темой
+  if (!saved && window.matchMedia){
+    const mq = window.matchMedia('(prefers-color-scheme: dark)');
+    mq.addEventListener('change', e => applyTheme(e.matches ? 'dark' : 'light'));
+  }
+})();
+
+function showGlassDialog({ title = 'Saved!', message = '', okText = 'OK' } = {}){
+  return new Promise(resolve => {
+    // backdrop
+    const bg = document.createElement('div');
+    bg.className = 'glass-modal-backdrop';
+    // dialog
+    const dlg = document.createElement('div');
+    dlg.className = 'glass-modal';
+    dlg.setAttribute('role', 'dialog');
+    dlg.setAttribute('aria-modal', 'true');
+
+    const inner = document.createElement('div');
+    inner.className = 'glass-modal__inner';
+
+    const h = document.createElement('h3');
+    h.className = 'glass-modal__title';
+    h.textContent = title;
+
+    const p = document.createElement('div');
+    p.className = 'glass-modal__msg';
+    p.innerHTML = message;
+
+    const actions = document.createElement('div');
+    actions.className = 'glass-modal__actions';
+
+    const ok = document.createElement('button');
+    ok.type = 'button';
+    ok.className = 'ui-button ui-button--primary';
+    ok.textContent = okText;
+
+    actions.appendChild(ok);
+    inner.append(h, p, actions);
+    dlg.appendChild(inner);
+    document.body.append(bg, dlg);
+
+    // show
+    requestAnimationFrame(() => { bg.classList.add('visible'); dlg.classList.add('visible'); });
+
+    const close = () => {
+      bg.classList.remove('visible'); dlg.classList.remove('visible');
+      setTimeout(() => { bg.remove(); dlg.remove(); resolve(); }, 200);
+    };
+
+    bg.addEventListener('click', close);
+    ok.addEventListener('click', close);
+    document.addEventListener('keydown', function onKey(e){
+      if (e.key === 'Escape'){ document.removeEventListener('keydown', onKey); close(); }
+    });
+
+    // фокус на кнопку
+    setTimeout(() => ok.focus(), 10);
+  });
+}
+
+if (zoomInBtn)  zoomInBtn.addEventListener('click',  () => map.zoomIn());
+if (zoomOutBtn) zoomOutBtn.addEventListener('click', () => map.zoomOut());
+
+function syncZoomButtons(){
+  if (!zoomInBtn || !zoomOutBtn) return;
+  const z = map.getZoom();
+  const minZ = map.getMinZoom ? map.getMinZoom() : 0;
+  const maxZ = map.getMaxZoom ? map.getMaxZoom() : 18;
+  zoomOutBtn.disabled = z <= minZ;
+  zoomInBtn.disabled  = z >= maxZ;
+}
+map.on('zoomend', syncZoomButtons);
+map.whenReady(syncZoomButtons);
+
+
+function changeSizeBy(stepDir){
+  const step = parseInt(sizeInput.step || '100', 10);
+  const min  = parseInt(sizeInput.min  || '200', 10);
+  const max  = 20000000;
+
+  let v = parseInt(sizeInput.value, 10);
+  if (isNaN(v)) v = selectionSize;
+
+  v = Math.min(Math.max(v + stepDir * step, min), max);
+  sizeInput.value = v;
+  selectionSize = v;
+
+  updateAreaInfo();
+  if (selecting){ animateSelectionResize(); updateBoxAndCenter(); }
+}
+
+if (scalePlusBtn)  scalePlusBtn.addEventListener('click', () => changeSizeBy(+1));
+if (scaleMinusBtn) scaleMinusBtn.addEventListener('click', () => changeSizeBy(-1));
+
+function animateSelectionResize(){
+  if (!box) return;
+  box.classList.add('size-anim');
+  clearTimeout(animateSelectionResize._t);
+  animateSelectionResize._t = setTimeout(
+    () => box.classList.remove('size-anim'),
+    230 // чуть больше, чем 200ms в CSS
+  );
+}
 
 // Размеры итогового GeoTIFF (single-band) под твой bbox
 const OLM_TIFF_WIDTH   = 1024;   // при больших окнах можно 2048–4096
@@ -358,8 +515,22 @@ function updateCenterSquare(){
 }
 map.on('zoom move', updateBoxAndCenter);
 toggleBtn.onclick = () => { selecting = !selecting; toggleBtn.textContent = selecting ? 'Cancel selection' : 'Select area'; confirmBtn.disabled = !selecting; box.style.display = selecting ? 'block' : 'none'; if (selecting) updateBoxAndCenter(); else { centerLatLng=null; updateCenterSquare(); } };
-sizeInput.addEventListener('input', () => { const v = parseInt(sizeInput.value,10); if(!isNaN(v)){ selectionSize=v; updateAreaInfo(); if(selecting) updateBoxAndCenter(); } });
-sizeInput.addEventListener('blur', () => { let v = parseInt(sizeInput.value,10); if(isNaN(v)) v=200; v=Math.min(Math.max(v,200),20000000); sizeInput.value=v; selectionSize=v; updateAreaInfo(); if(selecting) updateBoxAndCenter(); });
+sizeInput.addEventListener('input', () => {
+  const v = parseInt(sizeInput.value,10);
+  if(!isNaN(v)){
+    selectionSize = v;
+    updateAreaInfo();
+    if (selecting){ animateSelectionResize(); updateBoxAndCenter(); }
+  }
+});
+
+sizeInput.addEventListener('blur', () => {
+  let v = parseInt(sizeInput.value,10);
+  if(isNaN(v)) v = 200;
+  v = Math.min(Math.max(v,200),20000000);
+  sizeInput.value = v; selectionSize = v; updateAreaInfo();
+  if (selecting){ animateSelectionResize(); updateBoxAndCenter(); }
+});
 searchBtn.onclick = async () => {
   const q = searchInput.value.trim(); if(!q) return;
   try{
@@ -528,7 +699,14 @@ confirmBtn.onclick = async () => {
   // Предупреждение на очень больших окнах (данных будет ОЧЕНЬ много)
   if (size > 10000) {
     const km = (size/1000).toFixed(1);
-    const sure = confirm(`You selected a very large area: ${km} km. Continue?\n(One huge Overpass query, may be slow/denied)`);
+
+  
+    let sure = false;
+    await showGlassDialog({
+      title: 'Large area',
+      message: `You selected a very large area: ${km} km.<br><br>One huge Overpass query — may be slow or denied.`,
+      okText: 'Continue'
+    }).then(() => sure = true);
     if (!sure) return;
   }
 
@@ -579,17 +757,32 @@ confirmBtn.onclick = async () => {
     const txt = await r.text().catch(()=> '');
     if (!r.ok) {
       console.error('Backend error:', r.status, txt);
-      alert(`Backend error ${r.status}: ${txt || 'see console'}`);
+      await showGlassDialog({
+        title: `Backend error ${r.status}`,
+        message: txt ? txt : 'See console for details.',
+        okText: 'Close'
+      });
       return;
     }
-    alert(overpass_status === "ok" ? 'Saved!' : 'Saved! (Overpass failed — payload is empty)');
+      await showGlassDialog({
+        title: 'Saved!',
+        message: overpass_status === "ok"
+          ? 'Your selection has been saved.'
+          : 'Saved! (Overpass failed — payload is empty)',
+        okText: 'OK'
+      });
   } catch (e2) {
     console.error(e2);
-    alert('Could not save selection to backend (network error).');
+    await showGlassDialog({
+      title: 'Save failed',
+      message: 'Could not save selection to backend (network error).',
+      okText: 'Close'
+    });
   } finally {
     setStatus('');
   }
 };
+
 
 /* ===================== Go ===================== */
 updateAreaInfo();

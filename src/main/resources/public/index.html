@@ -36,6 +36,7 @@
     </div>
 
     <div id="map"></div>
+    <div id="darkBackdrop" aria-hidden="true"></div>
     <div id="selectionBox"></div>
 
     <div id="controls">
@@ -44,6 +45,9 @@
 
       <div id="controlsGlass">
         <div class="glass-inner">
+          <button id="themeToggleBtn" type="button" class="theme-toggle" title="Switch color theme" aria-pressed="false">
+            Enable dark theme
+          </button>
           <div id="controlsBody">
             <label for="searchInput">Search for a city, address, or coordinates:</label>
             <input
@@ -51,20 +55,32 @@
               id="searchInput"
               placeholder="For example, Москва, Moscow or 55.7558,37.6176"
             />
-            <button id="searchBtn">Find</button><br />
+            <div class="actions-row">
+              <button id="searchBtn">Find</button>
+              <button id="toggleBtn">Select area</button>
+            </div>
 
-            <button id="toggleBtn">Select area</button><br />
+            <!-- Map zoom controls -->
+            <div class="zoom-row">
+              <label class="zoom-label" for="map" style="margin-bottom:0;">Map zoom:</label>
+              <div class="zoom-actions">
+                <button type="button" id="btnZoomIn"  title="Zoom in">Zoom in</button>
+                <button type="button" id="btnZoomOut" title="Zoom out">Zoom out</button>
+              </div>
+            </div>
 
-            <div style="display:flex;align-items:center;margin-bottom:4px;">
+            <div class="size-row">
               <label for="sizeInput" style="margin-right:8px;margin-bottom:0;">Side length (meters):</label>
               <input
                 type="number"
                 id="sizeInput"
+                class="size-input"
                 value="500"
                 min="200"
                 step="100"
-                style="width:160px;margin-bottom:0;"
               />
+              <button type="button" id="btnScaleMinus" class="scale-btn" title="Decrease side" aria-label="Decrease side">−</button>
+              <button type="button" id="btnScalePlus"  class="scale-btn" title="Increase side" aria-label="Increase side">+</button>
             </div>
 
             <div id="areaInfo" style="font-size:12px;color:#666;margin-bottom:8px;text-align:left;">
@@ -82,11 +98,11 @@
     <div id="footer">
       <div class="footer-inner">
         <div class="footer-text">
-          <span class="made-by">by
+          <span class="made-by">Built by
             <a href="https://theandreyzakharov.github.io/" target="_blank" rel="noopener">Andrey Zakharov</a>
           </span>
-          <span class="sep">-</span>
-          <span class="powered">powered by</span>
+          <span class="sep">·</span>
+          <span class="powered">Powered by</span>
         </div>
 
         <div class="footer-logos">

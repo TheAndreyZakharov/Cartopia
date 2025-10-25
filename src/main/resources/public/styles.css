@@ -1,6 +1,16 @@
 html, body { height: 100%; margin: 0; }
+body{
+  /* единый стек шрифтов под все системы */
+  font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+}
+
+/* чтобы кнопки и инпуты действительно использовали тот же шрифт */
+input, button{
+  font: inherit;
+}
 #appRoot { height: 100%; }
 #map { height: 100%; width: 100%; position: relative; }
+#map{ transition: filter 240ms ease; }
 #selectionBox {
   position: fixed;
   border: 3px dashed rgba(255, 0, 0, 0.8);
@@ -9,12 +19,53 @@ html, body { height: 100%; margin: 0; }
   z-index: 999;
 }
 
+/* по умолчанию — без анимации (чтоб не мигал при зуме/скролле карты) */
+#selectionBox{
+  transition: none;
+  will-change: width, height, left, top;
+}
+
+/* временно включаем анимацию, когда меняем side length */
+#selectionBox.size-anim{
+  transition:
+    width 200ms cubic-bezier(.22,.61,.36,1),
+    height 200ms cubic-bezier(.22,.61,.36,1),
+    left 200ms cubic-bezier(.22,.61,.36,1),
+    top 200ms cubic-bezier(.22,.61,.36,1);
+}
+
+
+/* Полноэкранный «диммер» над картой; не перехватывает клики */
+#darkBackdrop{
+  position: fixed;
+  inset: 0;
+  z-index: 800;          /* ниже панели (1000) и selectionBox (999), выше карты */
+  pointer-events: none;
+  background: rgba(0,0,0,0.4);   /* фиксируем 0.4 всегда */
+  opacity: 0;
+  transition: opacity 700ms ease;
+}
+
+body.theme-dark #darkBackdrop{
+  opacity: 1; /* фон уже 0.4, просто проявляем его */
+}
+
+
 /* === Общие переменные для «стекла» === */
 :root{
   --glass-alpha: 0.55;
   --glass-dark: rgba(15, 18, 20, var(--glass-alpha));
   --glass-light: rgba(255, 255, 255, var(--glass-alpha));
   --glass-blur: 5px;
+}
+
+/* === Dark theme overrides (включаются классом .theme-dark на <body>) === */
+body.theme-dark{
+  /* делаем «тёмное стекло» и слегка меняем альфу */
+  --glass-alpha: 0.60;
+  --glass-dark: rgba(8, 10, 12, var(--glass-alpha));
+  --glass-light: rgba(28, 30, 34, var(--glass-alpha));
+  color-scheme: dark; /* корректные цвета нативных контролов */
 }
 
 /* --- Хедер --- */
@@ -37,7 +88,10 @@ html, body { height: 100%; margin: 0; }
   user-select: none;
 
   transition: transform 520ms cubic-bezier(.22,.61,.36,1),
-              opacity   360ms cubic-bezier(.22,.61,.36,1);
+              opacity   360ms cubic-bezier(.22,.61,.36,1),
+              background-color 240ms ease,
+              color 240ms ease,
+              box-shadow 240ms ease;
 }
 #header .brand{ display: inline-flex; align-items: center; gap: 10px; }
 #header .brand-logo{ height: 40px; width: auto; display: block; }
@@ -74,7 +128,10 @@ html, body { height: 100%; margin: 0; }
   user-select: none;
 
   transition: transform 520ms cubic-bezier(.22,.61,.36,1),
-              opacity   360ms cubic-bezier(.22,.61,.36,1);
+              opacity   360ms cubic-bezier(.22,.61,.36,1),
+              background-color 240ms ease,
+              color 240ms ease,
+              box-shadow 240ms ease;
 }
 .footer-inner{ display: flex; align-items: center; justify-content: center; gap: 12px; }
 .footer-text,
@@ -116,7 +173,82 @@ html, body { height: 100%; margin: 0; }
 
   will-change: transform, opacity;
   transition: transform 520ms cubic-bezier(.22,.61,.36,1),
-              opacity   220ms cubic-bezier(.22,.61,.36,1);
+              opacity   220ms cubic-bezier(.22,.61,.36,1),
+              background-color 240ms ease,
+              color 240ms ease,
+              box-shadow 240ms ease;
+          }
+
+/* Панель и контент — светлая тема уже есть; ниже — overrides для .theme-dark */
+body.theme-dark #controls{
+  /* #controls уже использует var(--glass-light), в тёмной теме она тёмная */
+  box-shadow: 0 4px 16px rgba(0,0,0,0.30);
+}
+
+body.theme-dark #controlsGlass{
+  color: #eaecef;
+}
+
+body.theme-dark #controls label{
+  color: #c7cbd1;
+}
+
+body.theme-dark #areaInfo{
+  color: #b5bac1 !important;
+}
+
+body.theme-dark #statusLine{
+  color: #e0e3e7;
+}
+
+/* Кнопки */
+body.theme-dark #controls button{
+  background: #262a2f;
+  color: #f1f3f5;
+  border-color: rgba(255,255,255,0.10);
+  /* те же переходы, что и в светлой */
+}
+
+body.theme-dark #controls button:hover:not(:disabled){
+  filter: none;
+  background: #2f343a;
+  box-shadow: 0 4px 14px rgba(0,0,0,.28), 0 1px 0 rgba(255,255,255,.06) inset;
+}
+
+body.theme-dark #controls button:active:not(:disabled),
+body.theme-dark #controls button.is-pressed:not(:disabled){
+  filter: none;
+  background: #22262b;
+  box-shadow: 0 1px 6px rgba(0,0,0,.32) inset;
+}
+
+/* Круглые табы (‹ и ✣) */
+body.theme-dark #collapseTab,
+body.theme-dark #dragTab{
+  background: #2a2f34;
+  color: #f1f1f1;
+  border-color: rgba(255,255,255,0.12);
+}
+body.theme-dark #collapseTab:hover:not(:disabled),
+body.theme-dark #dragTab:hover:not(:disabled){
+  box-shadow: 0 6px 16px rgba(0,0,0,.28);
+}
+body.theme-dark #collapseTab:active:not(:disabled),
+body.theme-dark #dragTab:active:not(:disabled),
+body.theme-dark #collapseTab.is-pressed:not(:disabled),
+body.theme-dark #dragTab.is-pressed:not(:disabled){
+  filter: brightness(.98);
+  box-shadow: 0 2px 8px rgba(0,0,0,.36) inset;
+}
+
+/* Инпут поиска */
+body.theme-dark #searchInput{
+  background: #1b1d21;
+  color: #e7e9ea;
+  border-color: #3a3f44;
+}
+body.theme-dark #searchInput::placeholder{
+  color: #9aa1a8;
 }
 
 #collapseTab, #dragTab {
@@ -135,6 +267,30 @@ html, body { height: 100%; margin: 0; }
 #dragTab     { right: -16px; }
 #controls.collapsed #dragTab { display: none; }
 #controls.collapsed #collapseTab { left: -12px; right: auto; }
+
+/* FX для круглых табов */
+#collapseTab, #dragTab{
+  transition:
+    transform 120ms cubic-bezier(.2,.6,.2,1),
+    box-shadow 180ms ease,
+    filter 120ms ease,
+    background-color 200ms ease,
+    color 200ms ease,
+    border-color 200ms ease;
+}
+#collapseTab:hover:not(:disabled),
+#dragTab:hover:not(:disabled){
+  transform: translateY(-1px);
+  box-shadow: 0 6px 16px rgba(0,0,0,.14);
+}
+#collapseTab:active:not(:disabled),
+#dragTab:active:not(:disabled),
+#collapseTab.is-pressed:not(:disabled),
+#dragTab.is-pressed:not(:disabled){
+  transform: translateY(0) scale(.96);
+  filter: brightness(.98);
+  box-shadow: 0 2px 8px rgba(0,0,0,.18) inset;
+}
 
 /* --- «Стекло» панели: анимируем ТОЛЬКО height --- */
 #controlsGlass{
@@ -174,13 +330,106 @@ html, body { height: 100%; margin: 0; }
 #searchInput {
   width: 95%; margin-bottom: 8px; padding: 6px;
   border-radius: 6px; border: 1px solid #ccc; background: #fff;
+  transition: background-color 240ms ease,
+            color 240ms ease,
+            border-color 240ms ease;
 }
+
+/* Ряд с кнопками Find + Select area */
+.actions-row{
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  justify-content: flex-start;
+  margin: 8px 0;           /* общий вертикальный отступ для ряда */
+  flex-wrap: wrap;         /* если не влезет по ширине — переноситеcь */
+}
+/* Внутри ряда — без собственных внешних отступов у кнопок */
+.actions-row > #searchBtn,
+.actions-row > #toggleBtn{
+  margin: 0;
+}
+
+/* Плейсхолдер такого же размера, как и label (13px) */
+#searchInput::placeholder{
+  font-size: 12px;
+}
+
+
+
 #controls label {
   font-size: 13px; color: #333; margin-bottom: 3px; display: block; text-align: left;
 }
-#searchBtn, #toggleBtn, #confirmBtn {
-  border-radius: 8px; height: 25px; min-width: 110px;
+
+/* Кнопка темы — широкая и по центру */
+#themeToggleBtn{
+  height: 32px;
+  width: 200px;
+  min-width: 200px;
+
+  display: flex;
+  align-items: center;
+  justify-content: center;
+
+  box-sizing: border-box;
+  padding: 0 10px;
+  border-radius: 8px;
+  text-align: center;
+
+  margin: 12px auto 10px; /* центрируем */
+  white-space: nowrap;
+  font-weight: 500;
 }
+
+/* При схлопывании панели прячем кнопку темы вместе со всем остальным */
+#controlsGlass.glass-collapsed #themeToggleBtn{
+  visibility: hidden;   /* можно поставить display:none; если так больше нравится */
+}
+
+/* Остальные кнопки — уже и по левому краю */
+#searchBtn, #toggleBtn{
+  height: 32px;
+  width: 160px;         /* уже */
+  min-width: 160px;
+
+  display: flex;
+  align-items: center;
+  justify-content: center;
+
+  box-sizing: border-box;
+  padding: 0 10px;
+  border-radius: 8px;
+  text-align: center;
+
+  margin: 8px 0;        /* без auto => прижато влево */
+
+  /* 
+  margin: 12px auto 10px; 
+  white-space: nowrap;
+  font-weight: 500; 
+  */
+}
+
+/* Остальные кнопки — уже и по левому краю */
+#confirmBtn{
+  height: 32px;
+  width: 160px;         /* уже */
+  min-width: 160px;
+
+  display: flex;
+  align-items: center;
+  justify-content: center;
+
+  box-sizing: border-box;
+  padding: 0 10px;
+  border-radius: 8px;
+  text-align: center;
+
+  margin: 12px auto 10px; 
+  white-space: nowrap;
+  font-weight: 500; 
+}
+
 #controls button{
   -webkit-appearance: none; appearance: none;
   background: #fff; color: #111;
@@ -190,6 +439,39 @@ html, body { height: 100%; margin: 0; }
 #controls button:hover{ filter: brightness(1.03); }
 #controls button:active{ filter: brightness(0.97); }
 #controls button:focus-visible{ outline: 2px solid rgba(17,17,17,0.25); outline-offset: 2px; }
+
+/* === FX: интерактивные кнопки панели выбора/подтверждения === */
+#controls button{
+  transition:
+    transform 120ms cubic-bezier(.2,.6,.2,1),
+    box-shadow 180ms ease,
+    filter 120ms ease,
+    background-color 180ms ease,
+    border-color 180ms ease,
+    color 180ms ease;
+  border-radius: 50px;         /* чуть более мягкие края */
+  user-select: none;
+}
+
+#controls button:hover:not(:disabled){
+  transform: translateY(-1px);
+  box-shadow: 0 4px 14px rgba(0,0,0,.12), 0 1px 0 rgba(255,255,255,.6) inset;
+  filter: none; /* перекрываем старый brightness */
+}
+
+#controls button:active:not(:disabled),
+#controls button.is-pressed:not(:disabled){
+  transform: translateY(0) scale(.98);
+  box-shadow: 0 1px 6px rgba(0,0,0,.18) inset;
+  filter: brightness(.98);
+}
+
+#controls button:disabled{
+  opacity: .45;
+  cursor: not-allowed;
+  transform: none;
+  box-shadow: none;
+}
 
 /* --- Скрываем дефолтные контролы Leaflet --- */
 .leaflet-bottom.leaflet-right,
@@ -201,6 +483,11 @@ html, body { height: 100%; margin: 0; }
   margin-top: 6px;
   font: 12px/1.3 system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
   color: #333; text-align: left;
+}
+
+/* Отступ между текстом площади и кнопкой Confirm */
+#areaInfo{
+  margin-bottom: 16px !important; /* сделает зазор больше; можно 12–20 под свой вкус */
 }
 
 /* ===== ВХОДНЫЕ АНИМАЦИИ ПРИ ЗАГРУЗКЕ СТРАНИЦЫ ===== */
@@ -284,3 +571,142 @@ body:not(.page-ready) #controls{
   image-rendering: pixelated;
   image-rendering: crisp-edges;
 }
+
+/* === Glass modal (общий стиль под обе темы) === */
+.glass-modal-backdrop{
+  position: fixed; inset: 0; z-index: 4000;
+  background: rgba(0,0,0,0.35);
+  opacity: 0; transition: opacity 220ms ease;
+}
+.glass-modal-backdrop.visible{ opacity: 1; }
+
+.glass-modal{
+  position: fixed; z-index: 4001;
+  left: 50%; top: 50%;
+  transform: translate(-50%,-50%) scale(.98);
+  opacity: 0; transition: transform 240ms cubic-bezier(.22,.61,.36,1), opacity 180ms ease;
+
+  width: min(92vw, 420px);
+  background: var(--glass-light);
+  color: #111;
+  border-radius: 12px;
+  box-shadow: 0 10px 28px rgba(0,0,0,.18);
+  backdrop-filter: blur(var(--glass-blur));
+  -webkit-backdrop-filter: blur(var(--glass-blur));
+}
+.glass-modal.visible{
+  transform: translate(-50%,-50%) scale(1);
+  opacity: 1;
+}
+
+.glass-modal__inner{ padding: 16px 18px 14px; display: grid; gap: 10px; }
+.glass-modal__title{
+  margin: 0; font: 600 16px/1.25 system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+}
+.glass-modal__msg{
+  font: 13px/1.45 system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+  color: #2a2a2a;
+}
+.glass-modal__actions{
+  display: flex; justify-content: flex-end; gap: 8px; margin-top: 6px;
+}
+
+/* Кнопки модалки — тот же стиль, что и у кнопок панели */
+.ui-button{
+  -webkit-appearance: none; appearance: none;
+  height: 32px; min-width: 120px;
+  padding: 0 12px; box-sizing: border-box;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: #fff; color: #111;
+  border: 1px solid rgba(0,0,0,0.12);
+  border-radius: 8px;
+  text-align: center;
+  user-select: none;
+  transition: transform 120ms cubic-bezier(.2,.6,.2,1),
+              box-shadow 180ms ease,
+              filter 120ms ease,
+              background-color 180ms ease,
+              border-color 180ms ease,
+              color 180ms ease;
+}
+.ui-button:hover{ transform: translateY(-1px); box-shadow: 0 4px 14px rgba(0,0,0,.12), 0 1px 0 rgba(255,255,255,.6) inset; }
+.ui-button:active{ transform: translateY(0) scale(.98); box-shadow: 0 1px 6px rgba(0,0,0,.18) inset; filter: brightness(.98); }
+.ui-button:focus-visible{ outline: 2px solid rgba(17,17,17,0.25); outline-offset: 2px; }
+
+/* Вариация «основная» */
+.ui-button--primary{
+  background: #fff; border-color: rgba(0,0,0,0.14);
+}
+
+/* Тёмная тема */
+body.theme-dark .glass-modal{ color: #eaecef; }
+body.theme-dark .glass-modal__msg{ color: #cfd3d8; }
+body.theme-dark .ui-button{
+  background: #262a2f; color: #f1f3f5;
+  border-color: rgba(255,255,255,0.10);
+}
+body.theme-dark .ui-button:hover{
+  background: #2f343a; box-shadow: 0 4px 14px rgba(0,0,0,.28), 0 1px 0 rgba(255,255,255,.06) inset;
+}
+body.theme-dark .ui-button:active{
+  background: #22262b; box-shadow: 0 1px 6px rgba(0,0,0,.32) inset;
+}
+
+/* === Map zoom row === */
+.zoom-row{
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 25px 0 12px;
+}
+.zoom-actions{
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+/* Кнопки зума — компактнее стандартных */
+#btnZoomIn, #btnZoomOut{
+  height: 22px;
+  min-width: 120px;   /* текст "Zoom in/out" помещается */
+  padding: 0 10px;
+  border-radius: 8px;
+}
+
+
+/* Узкое поле размера */
+.size-input{
+  width: 80px;            /* было 175px */
+  margin-bottom: 0;
+}
+
+/* Убрать встроенные стрелочки у number */
+.size-input::-webkit-outer-spin-button,
+.size-input::-webkit-inner-spin-button{
+  -webkit-appearance: none;
+  margin: 0;
+}
+.size-input{
+  -moz-appearance: textfield; /* Firefox */
+  appearance: textfield;      /* остальное */
+}
+
+/* Ряд с полем и кнопками */
+.size-row{
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+/* Круглые +/− */
+.scale-btn{
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  padding: 0;
+  display: grid;
+  place-items: center;
+  font: 700 18px/1 system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+}
+
