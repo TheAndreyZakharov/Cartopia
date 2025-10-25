@@ -157,6 +157,8 @@ public class SurfaceGenerator {
         ZONE_MATERIALS.put("man_made=breakwater","stone");
         ZONE_MATERIALS.put("power=substation","stone");
 
+        ZONE_MATERIALS.put("highway=pedestrian","stone");
+
         // --- Wetlands / болота и пр. ---
         ZONE_MATERIALS.put("natural=wetland",     "muddy_mangrove_roots");
         ZONE_MATERIALS.put("natural=marsh",       "muddy_mangrove_roots");
@@ -1410,6 +1412,30 @@ public class SurfaceGenerator {
             return new MatMatch("muddy_mangrove_roots", "wetland=" + wet);
         }
 
+        // --- площади HIGHWAY ---
+        // area:highway=* (стандарт для площадей)
+        String areaH = optString(tags, "area:highway");
+        if (areaH != null && !areaH.isBlank()) {
+            String mat = pickAreaBlockFromSurface(tags, "stone"); // камень по умолчанию
+            return new MatMatch(mat, "area:highway=" + areaH);
+        }
+
+        // highway=pedestrian — почти всегда площадные (скверы/площади), красим как мощение
+        String hw = optString(tags, "highway");
+        String area = optString(tags, "area");
+        if ("pedestrian".equals(hw)) {
+            String mat = pickAreaBlockFromSurface(tags, "stone");
+            return new MatMatch(mat, "highway=pedestrian");
+        }
+
+        // Для замкнутых контуров с area=yes считаем площадью и для footway/path/cycleway берём покрытие
+        if ("yes".equalsIgnoreCase(String.valueOf(area))) {
+            if ("footway".equals(hw) || "path".equals(hw) || "cycleway".equals(hw)) {
+                String mat = pickAreaBlockFromSurface(tags, "stone");
+                return new MatMatch(mat, "area=yes;highway=" + hw);
+            }
+        }
+
         // дальше — как было: точные сопоставления key=value
         for (Map.Entry<String,String> m : ZONE_MATERIALS.entrySet()) {
             String kv = m.getKey();
@@ -2180,5 +2206,50 @@ public class SurfaceGenerator {
     private static String optString(JsonObject o, String k) {
         try { return o.has(k) && !o.get(k).isJsonNull() ? o.get(k).getAsString() : null; }
         catch (Throwable ignore) { return null; }
+    }
+
+    /** Материал плитки/мощения для площадных зон по surface/material; возвращает имя блока без префикса minecraft:. */
+    private static String pickAreaBlockFromSurface(JsonObject tags, String fallback) {
+        String val = null;
+        for (String k : new String[]{"surface","material"}) {
+            String v = optString(tags, k);
+            if (v != null && !v.isBlank()) { val = v.trim().toLowerCase(Locale.ROOT); break; }
+        }
+        if (val == null) return fallback;
+
+        // дерево
+        Set<String> WOODY = Set.of("wood","wooden","boards","board","boardwalk","planks","timber");
+        for (String tok : val.split("[;,/\\s]+")) if (WOODY.contains(tok)) return "spruce_planks";
+
+        // металл/решётка
+        Set<String> METALLIC = Set.of("metal","metallic","steel","iron","metal_grid","metal_grate","grate","grating","grid",
+                "chequer_plate","tread_plate","металл","сталь","железо","решётка","решетка");
+        for (String tok : val.split("[;,/\\s]+")) if (METALLIC.contains(tok)) return "chiseled_stone_bricks";
+
+        // брусчатка/мощение (как в дорогах)
+        Set<String> BRUSCHATKA = Set.of(
+            "sett","setts","stone_setts","granite_setts","basalt_setts","sandstone_setts",
+            "paving_stones","paving-stones","paving_stone","paving-stone",
+            "cobblestone","cobblestones","cobbled","cobbles","cobble",
+            "cobblestone:flattened","unhewn_cobblestone",
+            "брусчатка","булыжник","булыжная","булыжное","булыжной","гранитная_брусчатка"
+        );
+        for (String tok : val.split("[;,/\\s]+")) if (BRUSCHATKA.contains(tok)) return "cobblestone";
+
+        // асфальт/бетон
+        Set<String> ASPHALT = Set.of("asphalt","bitumen","tarmac","асфальт","битум","тёмный_асфальт","темный_асфальт");
+        for (String tok : val.split("[;,/\\s]+")) if (ASPHALT.contains(tok)) return "gray_concrete";
+        if (val.contains("concrete") || val.contains("бетон")) return "gray_concrete";
+
+        // гранит – плитка
+        if (val.contains("granite") || val.contains("гранит")) return "cobblestone";
+
+        // гравий/щебень
+        if (val.contains("gravel") || val.contains("щеб") || val.contains("гравий")) return "gravel";
+
+        // плитка/камень по умолчанию
+        if (val.contains("stone") || val.contains("плит") || val.contains("камен")) return "stone";
+
+        return fallback;
     }
 }

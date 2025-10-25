@@ -122,11 +122,10 @@ public class CartopiaPipeline {
             buildings.generate();
             broadcast(level, "Здания готовы.");
 
-// очистка зоны, fix стены, fix этажность, опоры
-// зоны highway pedestrian multipolygon и всё такое закрашивать камнем, либо по материалу (granite). или там еще бывает area:highway footway surface asphalt type multipolygon. вот надо чтобы все такие зоны верно закрашивались
-// Ветряки ? - доработать как телескопы
+// площади, пешеходные зоны
 // Маяки ? - доработать как телескопы
-// Теплицы - проверить
+// Темная тема
+// fix мосты отсчет от земли
 
 
 

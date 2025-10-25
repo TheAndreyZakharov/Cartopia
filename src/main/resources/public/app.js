@@ -388,6 +388,12 @@ function buildMonolithicQuery(bboxStr, includeAllNodes){
   nwr["traffic_calming"](${bboxStr});
   nwr["kerb"](${bboxStr});
   nwr["barrier"](${bboxStr});
+  
+  /* Площади-дороги (area:highway и пед. площади) */
+  nwr["area:highway"](${bboxStr});
+  relation["type"="multipolygon"]["area:highway"](${bboxStr});
+  relation["type"="multipolygon"]["highway"="pedestrian"](${bboxStr});
+  way["highway"="pedestrian"]["area"="yes"](${bboxStr});
 
   /* Рельсы, платформы, ОТ */
   nwr["railway"](${bboxStr});
@@ -399,6 +405,7 @@ function buildMonolithicQuery(bboxStr, includeAllNodes){
   /* Вода/берега */
   nwr["waterway"](${bboxStr});
   nwr["water"](${bboxStr});
+  relation["type"="multipolygon"]["waterway"="riverbank"](${bboxStr});
 
   /* Авиа + канатки */
   nwr["aeroway"](${bboxStr});
@@ -409,6 +416,7 @@ function buildMonolithicQuery(bboxStr, includeAllNodes){
   nwr["landuse"](${bboxStr});
   nwr["landcover"](${bboxStr});
   nwr["natural"](${bboxStr});
+  nwr["wetland"](${bboxStr});
   nwr["leisure"](${bboxStr});
   nwr["military"](${bboxStr});
 
