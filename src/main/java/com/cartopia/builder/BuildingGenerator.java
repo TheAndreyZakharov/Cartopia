@@ -684,6 +684,12 @@ public class BuildingGenerator {
     private static final boolean IGNORE_WORLD_LIMIT = true;
     private static final int SOFT_MAX_Y = 8192; 
 
+    /** Переключатель: выводить ли высоту/этажность из внутренних indoor-подсказок,
+     *  когда они явно НЕ заданы в тегах здания/части. Поставь false, чтобы полностью отключить
+     *  «упорный» поиск высоты по интерьеру во всех местах этого файла (stream и non-stream).
+     */
+    private static final boolean INFER_MISSING_HEIGHT_FROM_INTERIOR = true;
+
     private static final Set<String> STRUCTURAL_HEIGHT_KEYS = new HashSet<>(Arrays.asList(
         "height","building:height",
         "building:levels","levels","building:levels:aboveground",
@@ -782,6 +788,102 @@ public class BuildingGenerator {
 
     private int worldTopCap() {
         return IGNORE_WORLD_LIMIT ? SOFT_MAX_Y : (level.getMaxBuildHeight() - 1);
+    }
+
+    // ====== ОПОРНЫЕ СТОЛБЫ ДЛЯ ПАРЯЩИХ ЧАСТЕЙ ======
+
+    /** Вернуть высоту грунта (снимок ДО строительства), иначе — текущий heightmap-уровень. */
+    private int groundAt(int x, int z) {
+        Integer gy = groundSnapshot.get(BlockPos.asLong(x, 0, z));
+        if (gy != null) return gy;
+        try {
+            return level.getHeight(Heightmap.Types.WORLD_SURFACE, x, z) - 1;
+        } catch (Throwable ignore) {
+            return level.getMinBuildHeight();
+        }
+    }
+
+    /** Первый снизу-вверх НЕ-воздух под fromYInclusive (включительно). Если не найден — возвращает (minY-1). */
+    private int firstSolidBelow(int x, int z, int fromYInclusive) {
+        final int minY = level.getMinBuildHeight();
+        final int top = Math.min(fromYInclusive, worldTopCap());
+        for (int y = top; y >= minY; y--) {
+            if (!level.getBlockState(new BlockPos(x, y, z)).isAir()) return y;
+        }
+        return minY - 1;
+    }
+
+    /** Найти ближайшую клетку из fill к целевой (tx,tz). Радиус поиска ограничен maxR. */
+    private int[] nearestFillCell(Set<Long> fill, int tx, int tz, int maxR) {
+        long bestKey = Long.MIN_VALUE;
+        int bestD2 = Integer.MAX_VALUE;
+        for (int r = 0; r <= Math.max(0, maxR); r++) {
+            for (int dx = -r; dx <= r; dx++) {
+                for (int dz = -r; dz <= r; dz++) {
+                    int x = tx + dx, z = tz + dz;
+                    long k = BlockPos.asLong(x, 0, z);
+                    if (!fill.contains(k)) continue;
+                    int d2 = dx*dx + dz*dz;
+                    if (d2 < bestD2) {
+                        bestD2 = d2;
+                        bestKey = k;
+                    }
+                }
+            }
+            if (bestKey != Long.MIN_VALUE) {
+                return new int[]{ BlockPos.getX(bestKey), BlockPos.getZ(bestKey) };
+            }
+        }
+        return null;
+    }
+
+    /** Блок материала для опоры (используем тот же, что и FOUNDATION). */
+    private Block supportBlock() {
+        Block b = ForgeRegistries.BLOCKS.getValue(ResourceLocation.tryParse(FOUNDATION_BLOCK_ID));
+        return (b != null ? b : Blocks.STONE_BRICKS);
+    }
+
+    /**
+     * Если часть/здание начинается НЕ с земли (minOffsetBlocks > 0) и под углами нет ничего кроме грунта,
+     * протягивает столбы опоры из каменного кирпича от низа части вниз до первого препятствия (грунт).
+     */
+    private void maybePlaceSupportPillarsAtCorners(Set<Long> fill, List<List<int[]>> outers, int minOffsetBlocks) {
+        if (fill == null || fill.isEmpty() || minOffsetBlocks <= 0) return;
+
+        int[] bb = bounds(fill); // [minX,minZ,maxX,maxZ]
+        int[][] corners = new int[][]{
+                { bb[0], bb[1] },
+                { bb[0], bb[3] },
+                { bb[2], bb[1] },
+                { bb[2], bb[3] }
+        };
+
+        final Block pillar = supportBlock();
+
+        for (int[] c : corners) {
+            int cx = c[0], cz = c[1];
+            int[] cell = nearestFillCell(fill, cx, cz, 6);
+            if (cell == null) continue;
+
+            int x = cell[0], z = cell[1];
+
+            int gy = groundAt(x, z);
+            int baseY = gy + Math.max(0, minOffsetBlocks);
+            if (baseY <= gy + 1) continue; // фактически не парит над землёй
+
+            // Ищем первый твёрдый блок вниз от основания
+            int firstSolidY = firstSolidBelow(x, z, baseY - 1);
+
+            // Если первый твёрдый находится ВЫШЕ уровня грунта — под нами есть другая конструкция → опору не ставим
+            if (firstSolidY > gy) continue;
+
+            // Иначе тянем опору от основания до клетки над препятствием (обычно gy+1)
+            int yStart = baseY - 1;
+            int yEnd   = Math.max(gy + 1, level.getMinBuildHeight());
+            for (int y = yStart; y >= yEnd; y--) {
+                level.setBlock(new BlockPos(x, y, z), pillar.defaultBlockState(), 3);
+            }
+        }
     }
 
     // ====== ДАЛЬШЕ — ВСЯ ЛОГИКА ГЕНЕРАЦИИ ======
@@ -1011,9 +1113,35 @@ public class BuildingGenerator {
 
         // === NEW: строим ВСЕ части снизу вверх (без зазоров на стыке)
         partTasks.sort(Comparator.comparingInt(t -> t.minOffsetSort));
+        // NEW: аугментация высоты от indoor только для СВОЕЙ части + ограничение верхом по «верхним» частям
         for (PartTask t : partTasks) {
-            buildFromFill(t.fill, t.outers, t.tags,
-                        entrances, passages, minX, maxX, minZ, maxZ, /*airOnly=*/false);
+            JsonObject effTags = t.tags;
+            // augment ONLY if no structural height at all
+            if (!hasStructuralHeight(effTags)) {
+                // indoor-подсказки берём ТОЛЬКО изнутри текущей части (t.fill) — это делает augment* сам
+                effTags = augmentHeightFromInteriorIfMissing(
+                        effTags, t.fill, elements,
+                        centerLat, centerLng, east, west, north, south,
+                        sizeMeters, centerX, centerZ);
+
+                // Если над текущей частью есть другие части, начинающиеся выше — не поднимаем выше их старта
+                int ceilingStart = computeCeilingStartBlocks(t, partTasks);
+                if (ceilingStart != Integer.MAX_VALUE) {
+                    int base = t.minOffsetSort;               // старт текущей части (в блоках)
+                    int hBlocks = heightBlocksFromTags(effTags); // её итоговая высота (в блоках), если выведена
+                    if (hBlocks > 0 && base + hBlocks > ceilingStart) {
+                        int newH = Math.max(1, ceilingStart - base);
+                        effTags = applyHeightBlocks(effTags, newH);
+                    }
+                }
+            }
+
+            // NEW: опоры, если часть начинается над землёй и под ней нет других конструкций
+            if (t.minOffsetSort > 0) {
+                maybePlaceSupportPillarsAtCorners(t.fill, t.outers, t.minOffsetSort);
+            }
+            buildFromFill(t.fill, t.outers, effTags,
+                          entrances, passages, minX, maxX, minZ, maxZ, /*airOnly=*/false);
         }
 
         // В методе runStreaming()
@@ -1072,6 +1200,12 @@ public class BuildingGenerator {
                                   centerLat, centerLng, east, west, north, south,
                                   sizeMeters, centerX, centerZ);
 
+                        // NEW: опоры для «парящего» контура здания (если начинается не с земли)
+                        int moForBuilding = effectiveMinOffsetForPart(effAug);
+                        if (moForBuilding > 0) {
+                            maybePlaceSupportPillarsAtCorners(fill, mp.outers, moForBuilding);
+                        }
+
                         buildFromFill(fill, mp.outers, effAug, entrances, passages, minX, maxX, minZ, maxZ, false);
                     }
                 }
@@ -1120,6 +1254,11 @@ public class BuildingGenerator {
                                       centerLat, centerLng, east, west, north, south,
                                       sizeMeters, centerX, centerZ);
 
+                            // NEW: опоры для «парящего» контура здания (если начинается не с земли)
+                            int moForBuilding2 = effectiveMinOffsetForPart(eff);
+                            if (moForBuilding2 > 0) {
+                                maybePlaceSupportPillarsAtCorners(fill, outers, moForBuilding2);
+                            }
                             buildFromFill(fill, outers, eff, entrances, passages, minX, maxX, minZ, maxZ, false);
                         }
                     }
@@ -1289,8 +1428,31 @@ public class BuildingGenerator {
 
         // ---------- Построить части снизу вверх ----------
         partTasks.sort(Comparator.comparingInt(t -> t.minOffsetSort));
+        // NEW: аугментация высоты от indoor (стрим-хинты) только для СВОЕЙ части + ограничение верхом по «верхним» частям
         for (PartTask t : partTasks) {
-            buildFromFill(t.fill, t.outers, t.tags, entrances, passages, minX, maxX, minZ, maxZ, /*airOnly=*/false);
+            JsonObject effTags = t.tags;
+            if (!hasStructuralHeight(effTags)) {
+                effTags = augmentHeightFromInteriorUsingHints(
+                        effTags, t.fill, interiorHints,
+                        centerLat, centerLng, east, west, north, south,
+                        sizeMeters, centerX, centerZ);
+
+                int ceilingStart = computeCeilingStartBlocks(t, partTasks);
+                if (ceilingStart != Integer.MAX_VALUE) {
+                    int base = t.minOffsetSort;
+                    int hBlocks = heightBlocksFromTags(effTags);
+                    if (hBlocks > 0 && base + hBlocks > ceilingStart) {
+                        int newH = Math.max(1, ceilingStart - base);
+                        effTags = applyHeightBlocks(effTags, newH);
+                    }
+                }
+            }
+
+            // NEW: опоры, если часть начинается над землёй и под ней нет других конструкций (stream)
+            if (t.minOffsetSort > 0) {
+                maybePlaceSupportPillarsAtCorners(t.fill, t.outers, t.minOffsetSort);
+            }
+            buildFromFill(t.fill, t.outers, effTags, entrances, passages, minX, maxX, minZ, maxZ, /*airOnly=*/false);
         }
 
         // ---------- Pass E: relation с building=* и canopy ----------
@@ -1316,6 +1478,11 @@ public class BuildingGenerator {
                         JsonObject eff =
                             augmentHeightFromInteriorUsingHints(tags, fill, interiorHints, centerLat, centerLng, east, west, north, south, sizeMeters, centerX, centerZ);
 
+                        // NEW: опоры для «парящего» relation-контуры здания (stream)
+                        int moForRel = effectiveMinOffsetForPart(eff);
+                        if (moForRel > 0) {
+                            maybePlaceSupportPillarsAtCorners(fill, mp.outers, moForRel);
+                        }
                         buildFromFill(fill, mp.outers, eff, entrances, passages, minX, maxX, minZ, maxZ, false);
                     }
                 }
@@ -1358,7 +1525,11 @@ public class BuildingGenerator {
                 JsonObject eff =
                     augmentHeightFromInteriorUsingHints(tags, fill, interiorHints, centerLat, centerLng, east, west, north, south, sizeMeters, centerX, centerZ);
 
-
+                // NEW: опоры для «парящего» way-контуры здания (stream)
+                int moForWay = effectiveMinOffsetForPart(eff);
+                if (moForWay > 0) {
+                    maybePlaceSupportPillarsAtCorners(fill, outers, moForWay);
+                }
                 buildFromFill(fill, outers, eff, entrances, passages, minX, maxX, minZ, maxZ, false);
             }
         } catch (Exception ex) {
@@ -3088,6 +3259,59 @@ public class BuildingGenerator {
         return false;
     }
 
+    /** Явно задана пара якорей «от-до»: уровни (min/max) или метры (min/height). */
+    private boolean hasExplicitHeightRange(JsonObject tags) {
+        if (tags == null) return false;
+
+        Integer minL = parseFirstInt(optString(tags, "building:min_level"));
+        if (minL == null) minL = parseFirstInt(optString(tags, "min_level"));
+        Integer maxL = parseFirstInt(optString(tags, "building:max_level"));
+        if (maxL == null) maxL = parseFirstInt(optString(tags, "max_level"));
+        if (minL != null && maxL != null) return true;
+
+        Double hMin = parseMeters(optString(tags, "building:min_height"));
+        if (hMin == null) hMin = parseMeters(optString(tags, "min_height"));
+        Double hTop = parseMeters(optString(tags, "building:height"));
+        if (hTop == null) hTop = parseMeters(optString(tags, "height"));
+        return (hMin != null && hTop != null);
+    }
+
+    /** indoor? (yes/room/corridor/hall/...); допускаем любые не-пустые значения кроме явного "no". */
+    private boolean isIndoor(JsonObject tags) {
+        String v = normalize(optString(tags, "indoor"));
+        if (v == null) return false;
+        if ("no".equals(v)) return false;
+        // типичные значения: yes / room / corridor / hall / area / level / mezzanine и т.д.
+        return true;
+    }
+
+    /** Есть ли внутри явные этажи/высота (что нам годится как подсказка). */
+    private boolean hasLevelsOrHeight(JsonObject tags) {
+        // уровни/списки уровней
+        if (parseFirstInt(optString(tags, "building:levels")) != null) return true;
+        if (parseFirstInt(optString(tags, "levels")) != null) return true;
+        if (parseFirstInt(optString(tags, "building:levels:aboveground")) != null) return true;
+        if (optString(tags, "level") != null || optString(tags, "level:ref") != null) return true;
+
+        // диапазон по уровням
+        Integer minL = parseFirstInt(optString(tags, "building:min_level"));
+        if (minL == null) minL = parseFirstInt(optString(tags, "min_level"));
+        Integer maxL = parseFirstInt(optString(tags, "building:max_level"));
+        if (maxL == null) maxL = parseFirstInt(optString(tags, "max_level"));
+        if (minL != null && maxL != null) return true;
+
+        // высота в метрах
+        if (parseMeters(optString(tags, "building:height")) != null) return true;
+        if (parseMeters(optString(tags, "height")) != null) return true;
+
+        return false;
+    }
+
+    /** Разрешённый «носитель подсказки»: только indoor + есть уровни/высота. */
+    private boolean isIndoorHeightCarrier(JsonObject tags) {
+        return isIndoor(tags) && hasLevelsOrHeight(tags);
+    }
+
     // Парсинг строки level: "1", "0;1;2", "1-9", "1-3;5;7-8" → множество целых уровней
     private Set<Integer> parseLevelsSet(String s) {
         Set<Integer> out = new HashSet<>();
@@ -3172,7 +3396,13 @@ public class BuildingGenerator {
             double east, double west, double north, double south,
             int sizeMeters, int centerX, int centerZ) {
 
+        // Глобальный выключатель «умного» вывода высоты из внутренних объектов
+        if (!INFER_MISSING_HEIGHT_FROM_INTERIOR) {
+            return (buildingTags != null) ? buildingTags : new JsonObject();
+        }
+
         if (buildingTags == null) buildingTags = new JsonObject();
+        if (hasExplicitHeightRange(buildingTags)) return buildingTags;
         // Уже всё есть — ничего не делаем
         if (hasStructuralHeight(buildingTags)) return buildingTags;
 
@@ -3200,6 +3430,9 @@ public class BuildingGenerator {
 
             JsonObject tags = (e.has("tags") && e.get("tags").isJsonObject()) ? e.getAsJsonObject("tags") : null;
             if (tags == null) continue;
+
+            // Берём только indoor-объекты, у которых явно заданы этажи/высота
+            if (!isIndoorHeightCarrier(tags)) continue;
 
             // Берём любые подсказки об этажности/высоте
             // a) level / level:ref — парсим списки/диапазоны и накапливаем уровни >= 0
@@ -3252,6 +3485,7 @@ public class BuildingGenerator {
             int sizeMeters, int centerX, int centerZ) {
 
         if (buildingTags == null) buildingTags = new JsonObject();
+        if (hasExplicitHeightRange(buildingTags)) return buildingTags;
         if (hasStructuralHeight(buildingTags)) return buildingTags;
 
         JsonObject out = buildingTags.deepCopy();
@@ -3278,6 +3512,8 @@ public class BuildingGenerator {
 
                 JsonObject tags = (e.has("tags") && e.get("tags").isJsonObject()) ? e.getAsJsonObject("tags") : null;
                 if (tags == null) continue;
+
+                if (!isIndoorHeightCarrier(tags)) continue;
 
                 for (String key : new String[]{"level","level:ref"}) {
                     Set<Integer> lv = parseLevelsSet(optString(tags, key));
@@ -3319,6 +3555,11 @@ public class BuildingGenerator {
             JsonObject buildingTags, Set<Long> buildingFill, List<JsonObject> hints,
             double centerLat, double centerLng, double east, double west, double north, double south,
             int sizeMeters, int centerX, int centerZ) {
+
+        // Глобальный выключатель «умного» вывода высоты из внутренних объектов (stream-версия)
+        if (!INFER_MISSING_HEIGHT_FROM_INTERIOR) {
+            return (buildingTags != null) ? buildingTags : new JsonObject();
+        }
         
         if (buildingTags == null) buildingTags = new JsonObject();
         if (hasStructuralHeight(buildingTags)) return buildingTags;
@@ -3337,6 +3578,8 @@ public class BuildingGenerator {
 
             JsonObject tags = (e.has("tags") && e.get("tags").isJsonObject()) ? e.getAsJsonObject("tags") : null;
             if (tags == null) continue;
+
+            if (!isIndoorHeightCarrier(tags)) continue;
 
             for (String key : new String[]{"level", "level:ref"}) {
                 Set<Integer> lv = parseLevelsSet(optString(tags, key));
@@ -4996,7 +5239,8 @@ public class BuildingGenerator {
             // узко-тех. постройки
             "transformer_tower", "service",
             // на всякий случай, если кто-то проставляет building=toilets
-            "toilets", "toilet"
+            "toilets", "toilet",
+            "wall", "retaining_wall", "city_wall", "citywalls"
     ));
 
     /** Инженерные сооружения (man_made=*), где окон не должно быть. */
@@ -5027,6 +5271,8 @@ public class BuildingGenerator {
         if (isPlaceOfWorship(tags)) return true;
         // Трубы/градирни/куллинг-тауэр — окон не ставим (только для building/*)
         if (isPipeOrCoolingTower(tags)) return true;
+        // Стены (wall / retaining_wall / city_wall и т.п.) — окна не ставим
+        if (isWallLike(tags)) return true;
 
         // 2) явные ключи
         String building = normalize(optString(tags, "building"));
@@ -5069,6 +5315,33 @@ public class BuildingGenerator {
         String btype   = normalize(optString(tags, "building"));
         if ("place_of_worship".equals(amenity)) return true;
         return btype != null && WORSHIP_TYPES.contains(btype);
+    }
+
+    /** Стена/шумозащитный экран/городская стена и т.п. */
+    private boolean isWallLike(JsonObject tags) {
+        if (tags == null) return false;
+
+        String b       = normalize(optString(tags, "building"));
+        String barrier = normalize(optString(tags, "barrier"));
+        String usage   = normalize(optString(tags, "building:use"), optString(tags, "building:usage"));
+
+        // Варианты через building=*
+        if ("wall".equals(b) || "retaining_wall".equals(b) || "city_wall".equals(b) || "citywalls".equals(b)) {
+            return true;
+        }
+
+        // Классические барьеры (если вдруг объект отмечен как здание + барьер)
+        if ("wall".equals(barrier) || "retaining_wall".equals(barrier)
+                || "city_wall".equals(barrier) || "citywalls".equals(barrier)
+                || "sound_barrier".equals(barrier)) {
+            return true;
+        }
+
+        // Редкие описания через использование
+        if (usage != null && (usage.contains("wall") || usage.contains("retaining_wall") || usage.contains("city_wall"))) {
+            return true;
+        }
+        return false;
     }
 
     // ТРУБЫ / ГРАДИРНИ / COOLING TOWERS — только если это именно building/*, а не просто man_made без building
@@ -5193,8 +5466,64 @@ public class BuildingGenerator {
         }
     }
 
+    /**
+     * Найти ближайший «потолок» сверху для части: минимальный старт (minOffsetSort) среди
+     * других частей, которые выше этой и ПЕРЕКРЫВАЮТ её по плану. Возвращает Integer.MAX_VALUE, если нет.
+     */
+    private int computeCeilingStartBlocks(PartTask current, List<PartTask> all) {
+        int own = current.minOffsetSort;
+        int best = Integer.MAX_VALUE;
+        for (PartTask other : all) {
+            if (other == current) continue;
+            if (other.minOffsetSort <= own) continue;                 // не выше
+            if (!footprintsIntersect(current.fill, other.fill)) continue; // нет пересечения по XZ
+            if (other.minOffsetSort < best) best = other.minOffsetSort;
+        }
+        return best;
+    }
+
+    /** Быстрая проверка пересечения следов (XZ-клеток) двух частей. */
+    private static boolean footprintsIntersect(Set<Long> a, Set<Long> b) {
+        if (a == null || b == null || a.isEmpty() || b.isEmpty()) return false;
+        // Итерируем меньший набор
+        if (a.size() > b.size()) { Set<Long> t = a; a = b; b = t; }
+        for (Long k : a) if (b.contains(k)) return true;
+        return false;
+    }
+
+    /**
+     * Извлечь высоту части в «блоках» из её тегов (height метры ~ блоки, либо levels*LEVEL_HEIGHT).
+     * Возвращает -1, если не удаётся определить.
+     */
+    private int heightBlocksFromTags(JsonObject tags) {
+        if (tags == null) return -1;
+        try {
+            Double h = parseMeters(optString(tags, "height"));
+            if (h == null) h = parseMeters(optString(tags, "building:height"));
+            if (h != null && h > 0) return (int)Math.round(h);
+        } catch (Throwable ignore) {}
+        try {
+            Integer lv = parseFirstInt(optString(tags, "building:levels"));
+            if (lv == null) lv = parseFirstInt(optString(tags, "levels"));
+            if (lv == null) lv = parseFirstInt(optString(tags, "building:levels:aboveground"));
+            if (lv != null && lv > 0) return Math.max(1, lv) * LEVEL_HEIGHT;
+        } catch (Throwable ignore) {}
+        return -1;
+    }
+
+    /**
+     * Применить заданную высоту (в блоках) к тегам: если уже была height — обновим её,
+     * иначе запишем building:levels (округляя вверх кратно LEVEL_HEIGHT).
+     */
+    private JsonObject applyHeightBlocks(JsonObject tags, int hBlocks) {
+        JsonObject out = (tags == null ? new JsonObject() : tags.deepCopy());
+        if (hasNonBlank(out, "height") || hasNonBlank(out, "building:height")) {
+            if (hasNonBlank(out, "height")) out.addProperty("height", hBlocks);
+            else out.addProperty("building:height", hBlocks);
+            return out;
+        }
+        int lv = (int)Math.max(1, Math.ceil(hBlocks / (double)LEVEL_HEIGHT));
+        out.addProperty("building:levels", lv);
+        return out;
+    }
 }
-
-
-
-
