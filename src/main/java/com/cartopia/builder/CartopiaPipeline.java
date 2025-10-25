@@ -121,15 +121,6 @@ public class CartopiaPipeline {
             BuildingGenerator buildings = new BuildingGenerator(level, coords, store);
             buildings.generate();
             broadcast(level, "Здания готовы.");
-
-
-            
-// Тема зависит от цвета системы
-
-
-
-
-
             // ===== ОСВЕЩЕНИЕ =====
             // Дорожные фонари
             broadcast(level, "Старт расстановки дорожных фонарей…");
@@ -141,6 +132,8 @@ public class CartopiaPipeline {
             RailLampGenerator railLamps = new RailLampGenerator(level, coords, store);
             railLamps.generate();
             broadcast(level, "Фонари вдоль рельсов готовы.");
+
+            
 // Фонари в зонах аэропортов, портов и тд. на уровне асфальта... 
 
 
@@ -187,7 +180,7 @@ public class CartopiaPipeline {
 // На аэродромах инфраструктура для ветра и тд aeroway=windsock
 // Светофоры
 // Скамейки
-// Урны, Места мусорных баков
+// Урны, Места мусорных баков, свалки
 // Информационнын стенды, гиды, знаки
 // Велопарковки
 // breakwater волнорезы как утёсы - ширина 2, высота +1, +2 над водой

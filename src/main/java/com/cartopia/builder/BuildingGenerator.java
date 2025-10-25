@@ -2332,8 +2332,9 @@ public class BuildingGenerator {
         }
     }
 
+    // GABLED
     private void buildRoofGabled(Set<Long> fill, int minOffset, int facadeBlocks, int roofBlocks,
-                             Block roof, JsonObject tags, boolean unusedAirOnly, int fallbackSurfY) {
+                                Block roof, JsonObject tags, boolean unusedAirOnly, int fallbackSurfY) {
         if (roofBlocks <= 0) return;
         double rad = resolveRoofDirectionRad(tags, fill);
         double vx = Math.cos(rad), vz = Math.sin(rad);
@@ -2354,12 +2355,11 @@ public class BuildingGenerator {
         for (long k : fill) {
             int x = BlockPos.getX(k), z = BlockPos.getZ(k);
             double px = x - cx, pz = z - cz;
-            double t = Math.abs(px * nx + pz * nz) / maxAbs; // [0..1] от конька к краю
-            int dh = (int)Math.round((1.0 - t) * roofBlocks); // выше в центре, ниже на краях
+            double t = Math.abs(px * nx + pz * nz) / maxAbs; // [0..1]
+            int dh = Math.max(1, (int)Math.round((1.0 - t) * roofBlocks)); // ← гарантия ≥1
             for (int dy = 1; dy <= dh; dy++) {
                 int yBaseTop = localWallTopYAt(x, z, minOffset, facadeBlocks, fallbackSurfY);
-                BlockPos pos = new BlockPos(x, yBaseTop + dy, z);
-                level.setBlock(pos, roof.defaultBlockState(), 3);
+                level.setBlock(new BlockPos(x, yBaseTop + dy, z), roof.defaultBlockState(), 3);
             }
         }
     }
@@ -2400,8 +2400,9 @@ public class BuildingGenerator {
         }
     }
 
+    // PYRAMIDAL
     private void buildRoofPyramidal(Set<Long> fill, int minOffset, int facadeBlocks, int roofBlocks,
-                             Block roof, JsonObject tags, boolean unusedAirOnly, int fallbackSurfY) {
+                                    Block roof, JsonObject tags, boolean unusedAirOnly, int fallbackSurfY) {
         if (roofBlocks <= 0) return;
         int[] bb = bounds(fill);
         double cx = (bb[0] + bb[2]) / 2.0;
@@ -2418,11 +2419,10 @@ public class BuildingGenerator {
         for (long k : fill) {
             int x = BlockPos.getX(k), z = BlockPos.getZ(k);
             double r = Math.max(Math.abs(x - cx), Math.abs(z - cz)) / maxR; // 0..1
-            int dh = (int)Math.round((1.0 - r) * roofBlocks);
+            int dh = Math.max(1, (int)Math.round((1.0 - r) * roofBlocks));   // ← гарантия ≥1
             for (int dy = 1; dy <= dh; dy++) {
                 int yBaseTop = localWallTopYAt(x, z, minOffset, facadeBlocks, fallbackSurfY);
-                BlockPos pos = new BlockPos(x, yBaseTop + dy, z);
-                level.setBlock(pos, roof.defaultBlockState(), 3);
+                level.setBlock(new BlockPos(x, yBaseTop + dy, z), roof.defaultBlockState(), 3);
             }
         }
     }
@@ -2462,39 +2462,35 @@ public class BuildingGenerator {
 
     // ---------- ДОП. ФОРМЫ КРЫШ ----------
 
+    // HIP
     private void buildRoofHip(Set<Long> fill, int minOffset, int facadeBlocks, int roofBlocks,
-                             Block roof, JsonObject tags, boolean unusedAirOnly, int fallbackSurfY) {
+                            Block roof, JsonObject tags, boolean unusedAirOnly, int fallbackSurfY) {
         if (roofBlocks <= 0) return;
         double rad = resolveRoofDirectionRad(tags, fill);
         double vx = Math.cos(rad), vz = Math.sin(rad);
-        double nx = -vz, nz = vx;                        // поперёк (скаты)
+        double nx = -vz, nz = vx;
         double[] c = centerOf(fill);
         double cx = c[0], cz = c[1];
 
-        // поперёк конька (скаты) — как у gabled
         double maxAbs = 1.0;
         for (long k : fill) {
             double px = BlockPos.getX(k) - cx, pz = BlockPos.getZ(k) - cz;
             double t = Math.abs(px*nx + pz*nz);
             if (t > maxAbs) maxAbs = t;
         }
-        // вдоль конька — слегка “подхиповываем” концы
         double[] span = projSpan(fill, vx, vz, cx, cz);
-        @SuppressWarnings("unused")
-        double minL = span[0], maxL = span[1], L = span[2];
+        double minL = span[0], L = span[2];
 
         for (long k : fill) {
             int x = BlockPos.getX(k), z = BlockPos.getZ(k);
             double px = x - cx, pz = z - cz;
-            double tAcross = Math.abs(px*nx + pz*nz) / maxAbs; // 0..1 от конька к краю
-            double tAlong  = ((px*vx + pz*vz) - minL) / L;     // 0..1 вдоль конька
-            double hipFactor = 1.0 - 0.3 * Math.min(tAlong, 1.0 - tAlong); // ниже к концам
-            int dh = (int)Math.round((1.0 - tAcross) * roofBlocks * hipFactor);
-
+            double tAcross = Math.abs(px*nx + pz*nz) / maxAbs;   // 0..1 от конька к краю
+            double tAlong  = ((px*vx + pz*vz) - minL) / L;       // 0..1 вдоль конька
+            double hipFactor = 1.0 - 0.3 * Math.min(tAlong, 1.0 - tAlong);
+            int dh = Math.max(1, (int)Math.round((1.0 - tAcross) * roofBlocks * hipFactor)); // ← гарантия ≥1
             for (int dy = 1; dy <= dh; dy++) {
                 int yBaseTop = localWallTopYAt(x, z, minOffset, facadeBlocks, fallbackSurfY);
-                BlockPos pos = new BlockPos(x, yBaseTop + dy, z);
-                level.setBlock(pos, roof.defaultBlockState(), 3);
+                level.setBlock(new BlockPos(x, yBaseTop + dy, z), roof.defaultBlockState(), 3);
             }
         }
     }
@@ -4628,6 +4624,14 @@ public class BuildingGenerator {
 
         // --- ОКНА: пробиваем окна в стенах (см. блок «ЛОГИКА ОКОН» внизу файла)
         applyWindows(edge, fill, tags, minOffset, facadeBlocks, yBaseSurf, /*totalHeight=*/facadeBlocks + roofBlocks, facadeId);
+
+
+        // FIX fix фикс крыши
+        //  для подстраховки по крышам - добавит плоскую подложку 
+        //  if (!"flat".equals(roofShape) && roofBlocks > 0) {
+        //      buildRoofFlat(fill, minOffset, facadeBlocks, /*thickness=*/1, roof, false, yBaseSurf);
+        //  }
+
 
         // крыша (она тоже не идёт в этажи)
         // крыша (для труб/градирен не строим вообще)
