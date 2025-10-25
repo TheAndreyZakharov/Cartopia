@@ -90,21 +90,25 @@ panelButtons.forEach(btn => {
   btn.addEventListener('keyup', () => btn.classList.remove('is-pressed'));
 });
 
-/* Переключатель темы — клик по кнопке в панели */
-if (themeToggleBtn){
-  themeToggleBtn.addEventListener('click', () => {
-    const isDark = !document.body.classList.contains('theme-dark');
-    applyTheme(isDark ? 'dark' : 'light');
-    localStorage.setItem('cartopiaTheme', isDark ? 'dark' : 'light');
-  });
+/* === Dark/Light theme with "last-writer-wins" (system vs user) === */
+const THEME_KEYS = {
+  actor:  'cartopiaThemeActor',   // 'system' | 'user'
+  user:   'cartopiaUserTheme',    // 'light' | 'dark' (когда actor='user')
+  system: 'cartopiaSystemTheme'   // последняя виденная системная тема
+};
+
+function getSystemTheme(){
+  return (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches)
+    ? 'dark' : 'light';
 }
 
+function persistTheme({ actor, userTheme, systemTheme }){
+  localStorage.setItem(THEME_KEYS.actor, actor);
+  if (userTheme)  localStorage.setItem(THEME_KEYS.user, userTheme);
+  if (systemTheme) localStorage.setItem(THEME_KEYS.system, systemTheme);
+}
 
-const controlsGlass = document.getElementById('controlsGlass');
-const controlsBody  = document.getElementById('controlsBody');
-
-
-/* Тема: применить + обновить кнопку */
+/* Применяем тему + обновляем подпись кнопки */
 function applyTheme(mode){
   const isDark = (mode === 'dark');
   document.body.classList.toggle('theme-dark', isDark);
@@ -115,19 +119,43 @@ function applyTheme(mode){
   }
 }
 
-/* Инициализация: из localStorage, иначе по системной */
-(function initTheme(){
-  const saved = localStorage.getItem('cartopiaTheme');
-  const prefersDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
-  const start = saved || (prefersDark ? 'dark' : 'light');
-  applyTheme(start);
+/* Инициализация и подписка на системные изменения — система всегда говорит последней,
+   пока пользователь явно не кликнет. */
+(function initThemeLW(){
+  const mq = window.matchMedia('(prefers-color-scheme: dark)');
+  const systemNow = getSystemTheme();
 
-  // если пользователь не сохранял — следим за системной темой
-  if (!saved && window.matchMedia){
-    const mq = window.matchMedia('(prefers-color-scheme: dark)');
-    mq.addEventListener('change', e => applyTheme(e.matches ? 'dark' : 'light'));
+  let actor      = localStorage.getItem(THEME_KEYS.actor) || 'system';
+  let userTheme  = localStorage.getItem(THEME_KEYS.user)  || 'dark';
+  const lastSeen = localStorage.getItem(THEME_KEYS.system);
+
+  // Если ранее пользователь выбирал тему, но ПОКА страница была закрыта
+  // системная тема успела измениться — считаем, что последнее слово за системой.
+  if (actor === 'user' && lastSeen && lastSeen !== systemNow){
+    actor = 'system';
   }
+
+  // Применяем актуальную тему
+  persistTheme({ actor, userTheme, systemTheme: systemNow });
+  applyTheme(actor === 'user' ? userTheme : systemNow);
+
+  // Всегда слушаем систему: любое её изменение немедленно применяем и запоминаем как последнее.
+  mq.addEventListener('change', e => {
+    const sys = e.matches ? 'dark' : 'light';
+    persistTheme({ actor: 'system', userTheme: localStorage.getItem(THEME_KEYS.user) || 'dark', systemTheme: sys });
+    applyTheme(sys);
+  });
 })();
+
+/* Кнопка: пользователь сказал последнее слово — фиксируем и применяем */
+if (themeToggleBtn){
+  themeToggleBtn.addEventListener('click', () => {
+    const sys = getSystemTheme();
+    const next = document.body.classList.contains('theme-dark') ? 'light' : 'dark';
+    persistTheme({ actor: 'user', userTheme: next, systemTheme: sys });
+    applyTheme(next);
+  });
+}
 
 function showGlassDialog({ title = 'Saved!', message = '', okText = 'OK' } = {}){
   return new Promise(resolve => {

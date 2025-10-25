@@ -122,6 +122,8 @@ public class CartopiaPipeline {
             buildings.generate();
             broadcast(level, "Здания готовы.");
 
+
+            
 // Тема зависит от цвета системы
 
 
