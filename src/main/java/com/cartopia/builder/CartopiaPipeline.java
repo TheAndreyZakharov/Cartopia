@@ -133,8 +133,9 @@ public class CartopiaPipeline {
             railLamps.generate();
             broadcast(level, "Фонари вдоль рельсов готовы.");
 
-            
 // Фонари в зонах аэропортов, портов и тд. на уровне асфальта... 
+// дамбы
+
 
 
 
@@ -164,7 +165,6 @@ public class CartopiaPipeline {
 
 // Остановки общественного транспорта
 // Места отдыха
-// Просто навесы отдельные
 // Спорт площадки
 // Кладбища
 // Фонтаны
@@ -235,8 +235,8 @@ public class CartopiaPipeline {
             level.save(null, true, false);
             broadcast(level, "Generation finished.");
             // Через ~3 секунды после завершения генерации — очистка выпавших предметов
-            DroppedEntitiesCleaner.schedule(level, 60); // 60 тиков ≈ 3 сек
-            DroppedEntitiesCleaner.schedule(level, 200);  // ещё раз через ~10 сек
+            DroppedEntitiesCleaner.schedule(level, 60); // 60 тиков ≈ 3 сек + задержки
+            DroppedEntitiesCleaner.schedule(level, 200);  // ещё раз через ~10 сек + задержки
         } catch (Exception e) {
             // твой текущий catch остаётся как есть…
             String cls = e.getClass().getSimpleName();

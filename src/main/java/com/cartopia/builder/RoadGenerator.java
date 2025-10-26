@@ -23,6 +23,10 @@ public class RoadGenerator {
     private final ServerLevel level;
     private final JsonObject coords;           // как и раньше
     private final GenerationStore store;       // НОВОЕ: стрим фич и грид рельефа (может быть null)
+    // === runway centerline lights ===
+    private static final int RUNWAY_LAMP_EVERY = 30; // каждые N блоков
+    private int runwayLampStep = 0;                  // счётчик вдоль текущей ВПП
+    private boolean runwayMode = false;              // true, когда обрабатываем aeroway=runway
 
     // СТАРЫЙ конструктор — оставляем для совместимости (fallback на coords.features.elements).
     public RoadGenerator(ServerLevel level, JsonObject coords) {
@@ -188,6 +192,10 @@ public class RoadGenerator {
                 Block roadBlock = resolveBlock(style.blockId);
                 roadBlock = pickRoadBlockFromSurface(tags, roadBlock);
 
+                // RUNWAY LAMPS: активируем только для аэродромной ВПП
+                runwayMode = "runway".equals(aeroway);
+                if (runwayMode) runwayLampStep = 0;
+
                 // Переводим lat/lon в блоки и красим сегменты Брезенхэмом
                 int prevX = Integer.MIN_VALUE, prevZ = Integer.MIN_VALUE;
                 Integer lastYHint = null;
@@ -205,6 +213,8 @@ public class RoadGenerator {
 
                     prevX = x; prevZ = z;
                 }
+
+                runwayMode = false; // выключаем режим ВПП после завершения way
 
                 processed++;
                 if (totalWays > 0 && processed % Math.max(1, totalWays/10) == 0) {
@@ -260,6 +270,10 @@ public class RoadGenerator {
             Block roadBlock = resolveBlock(style.blockId);
             roadBlock = pickRoadBlockFromSurface(tags, roadBlock);
 
+            // RUNWAY LAMPS: активируем только для аэродромной ВПП
+            runwayMode = "runway".equals(aeroway);
+            if (runwayMode) runwayLampStep = 0;
+
             int prevX = Integer.MIN_VALUE, prevZ = Integer.MIN_VALUE;
             Integer lastYHint = null;
             for (int i=0; i<geom.size(); i++) {
@@ -276,6 +290,8 @@ public class RoadGenerator {
 
                 prevX = x; prevZ = z;
             }
+
+            runwayMode = false; // выключаем режим ВПП после завершения way
 
             processed++;
             if (totalWays > 0 && processed % Math.max(1, totalWays/10) == 0) {
@@ -345,7 +361,20 @@ public class RoadGenerator {
                 BlockState top = level.getBlockState(new BlockPos(xx, y, zz));
                 // if (top.getBlock() == Blocks.WATER) continue;
 
-                level.setBlock(new BlockPos(xx, y, zz), roadBlock.defaultBlockState(), 3);
+                // --- runway centerline light каждые RUNWAY_LAMP_EVERY блоков по осевой (w==0) ---
+                if (runwayMode && w == 0) {
+                    if (runwayLampStep % RUNWAY_LAMP_EVERY == 0) {
+                        level.setBlock(new BlockPos(xx, y, zz), Blocks.SEA_LANTERN.defaultBlockState(), 3);
+                    } else {
+                        level.setBlock(new BlockPos(xx, y, zz), roadBlock.defaultBlockState(), 3);
+                    }
+                } else {
+                    level.setBlock(new BlockPos(xx, y, zz), roadBlock.defaultBlockState(), 3);
+                }
+
+                // счёт шага только по осевой точки линии, чтобы «каждые 10 блоков» было по центру
+                if (runwayMode && w == 0) runwayLampStep++;
+
                 yHint = y;
             }
         }
