@@ -132,21 +132,19 @@ public class CartopiaPipeline {
             RailLampGenerator railLamps = new RailLampGenerator(level, coords, store);
             railLamps.generate();
             broadcast(level, "Фонари вдоль рельсов готовы.");
-
-// дамбы
-
-
-
-
-
-
-
-
-
-
-
             // ===== ИНФРАСТРУКТУРА =====
-// Заправки
+            // Бензоколонки на АЗС
+            broadcast(level, "Старт генерации бензоколонок…");
+            FuelPumpGenerator fuelGen = new FuelPumpGenerator(level, coords, store);
+            fuelGen.generate();
+            broadcast(level, "Бензоколонки готовы.");
+
+
+
+
+
+
+// Автомойки
 // Электро зарядки
 // паркоматы: amenity=parking_meter
 // почтовые ящики: amenity=post_box
@@ -188,8 +186,7 @@ public class CartopiaPipeline {
 // Открытые ископаемые в шахтах
 // Пасеки, Фермы
 
-// Поля с посевами - по цветам
-// ? Рекламные щиты, сденды, билборды, рекламные телевизоры на домах? 
+// ? Рекламные щиты, сденды, билборды, рекламные телевизоры на домах? - картинами
 
 
 
@@ -201,6 +198,7 @@ public class CartopiaPipeline {
 
 
             // ===== РАСТИТЕЛЬНОСТЬ ======
+// Поля с посевами - по цветам
 // Всё засадить соответствующими типами деревьев, травы и тд
 // Учитывать зоны - просеки под ЛЭП и тд
 // Рассаживать везде, но учитывать интенсивность от зон
