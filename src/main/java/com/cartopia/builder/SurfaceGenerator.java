@@ -476,6 +476,32 @@ public class SurfaceGenerator {
                 waterProtected, waterFromOLM,
                 lockedOSM);
 
+
+        // === NEW: waterway=dam — линейные дамбы; могут перекрывать воду любого происхождения
+        Map<Long,String> damCells = (store != null)
+                ? extractDamCellsFromOSMStream(store,
+                    centerLat, centerLng, east, west, north, south,
+                    sizeMeters, centerX, centerZ,
+                    minX, maxX, minZ, maxZ)
+                : extractDamCellsFromOSM(coordsJson,
+                    centerLat, centerLng, east, west, north, south,
+                    sizeMeters, centerX, centerZ,
+                    minX, maxX, minZ, maxZ);
+
+        if (damCells != null && !damCells.isEmpty()) {
+            for (Map.Entry<Long,String> de : damCells.entrySet()) {
+                long k = de.getKey();
+                String damMat = de.getValue(); // без префикса
+                surface.put(k, damMat);
+
+                // ВАЖНО: дамба может перекрывать воду — снимаем любые «охраны» воды.
+                waterFromOLM.remove(k);     // если это была вода OLM
+                waterProtected.remove(k);   // если это была OSM/морская вода
+                lockedOSM.add(k);           // закрепим как пришедшее из OSM-объекта
+            }
+        }
+
+
         // Маска воды
         Set<Long> waterMask = new HashSet<>();
         for (Map.Entry<Long,String> e : surface.entrySet())
@@ -1412,6 +1438,16 @@ public class SurfaceGenerator {
             return new MatMatch("muddy_mangrove_roots", "wetland=" + wet);
         }
 
+        // --- DAM areas (waterway=dam / man_made=dam): заливаем как площадную зону
+        String wwDam = optString(tags, "waterway");
+        String mmDam = optString(tags, "man_made");
+        if ("dam".equals(wwDam) || "dam".equals(mmDam)) {
+            // по умолчанию камень, но если указан material/surface — используем его
+            String matDam = pickDamBlockFromTags(tags, "stone");
+            String srcKV  = "dam".equals(wwDam) ? "waterway=dam" : "man_made=dam";
+            return new MatMatch(matDam, srcKV);
+        }
+
         // --- площади HIGHWAY ---
         // area:highway=* (стандарт для площадей)
         String areaH = optString(tags, "area:highway");
@@ -2009,6 +2045,14 @@ public class SurfaceGenerator {
         return false;
     }
 
+    private static boolean isDamLike(JsonObject tags) {
+        if (tags == null) return false;
+        String ww = optString(tags, "waterway");
+        String mm = optString(tags, "man_made");
+        // основной случай — waterway=dam; иногда встречается man_made=dam
+        return "dam".equals(ww) || "dam".equals(mm);
+    }
+
     /** Рисуем линию на сетке (Брезенхэм) и собираем клетки в out. */
     private static void drawLineCells(int x1, int z1, int x2, int z2,
                                     int minX, int maxX, int minZ, int maxZ,
@@ -2095,6 +2139,98 @@ public class SurfaceGenerator {
         return out;
     }
 
+    // NDJSON-стрим для дамб (waterway=dam / man_made=dam). Возвращает МАПУ: клетка -> материал (без "minecraft:").
+    private static Map<Long,String> extractDamCellsFromOSMStream(
+            GenerationStore store,
+            double centerLat, double centerLng,
+            double east, double west, double north, double south,
+            int sizeMeters, int centerX, int centerZ,
+            int minX, int maxX, int minZ, int maxZ) {
+
+        Map<Long,String> out = new HashMap<>();
+        if (store == null) return out;
+
+        try (FeatureStream fs = store.featureStream()) {
+            for (JsonObject e : fs) {
+                String type = optString(e, "type");
+                JsonObject tags = e.has("tags") && e.get("tags").isJsonObject() ? e.getAsJsonObject("tags") : null;
+                if (!isDamLike(tags)) continue;
+
+                // Если это площадная дамба (замкнутый way или area=yes/1), линию не рисуем —
+                // её уже зальём как зону через materialAndKeyForTags().
+                if ("way".equals(type) && e.has("geometry") && e.get("geometry").isJsonArray()) {
+                    JsonArray geom = e.getAsJsonArray("geometry");
+                    if (isClosed(geom) || "yes".equalsIgnoreCase(optString(tags,"area")) || "1".equals(optString(tags,"area"))) {
+                        continue;
+                    }
+                }
+                if ("relation".equals(type)) {
+                    // Мультиполигоны с дамбой тоже уйдут в зоны
+                    continue;
+                }
+
+                String mat = pickDamBlockFromTags(tags, "stone"); // по умолчанию камень
+
+                // WAY
+                if ("way".equals(type) && e.has("geometry") && e.get("geometry").isJsonArray()) {
+                    JsonArray geom = e.getAsJsonArray("geometry");
+                    if (geom.size() < 2) continue;
+
+                    JsonObject p0 = geom.get(0).getAsJsonObject();
+                    int[] prev = latlngToBlock(
+                            p0.get("lat").getAsDouble(), p0.get("lon").getAsDouble(),
+                            centerLat, centerLng, east, west, north, south,
+                            sizeMeters, centerX, centerZ);
+
+                    Set<Long> cells = new HashSet<>();
+                    for (int i = 1; i < geom.size(); i++) {
+                        JsonObject pi = geom.get(i).getAsJsonObject();
+                        int[] cur = latlngToBlock(
+                                pi.get("lat").getAsDouble(), pi.get("lon").getAsDouble(),
+                                centerLat, centerLng, east, west, north, south,
+                                sizeMeters, centerX, centerZ);
+                        drawLineCells(prev[0], prev[1], cur[0], cur[1], minX, maxX, minZ, maxZ, cells);
+                        prev = cur;
+                    }
+                    for (long k : cells) out.put(k, mat);
+                }
+
+                // RELATION (берём geometry из членов way)
+                if ("relation".equals(type) && e.has("members") && e.get("members").isJsonArray()) {
+                    for (JsonElement memEl : e.getAsJsonArray("members")) {
+                        JsonObject mem = memEl.getAsJsonObject();
+                        if (!"way".equals(optString(mem, "type"))) continue;
+                        if (!mem.has("geometry") || !mem.get("geometry").isJsonArray()) continue;
+
+                        JsonArray geom = mem.getAsJsonArray("geometry");
+                        if (geom.size() < 2) continue;
+
+                        JsonObject p0 = geom.get(0).getAsJsonObject();
+                        int[] prev = latlngToBlock(
+                                p0.get("lat").getAsDouble(), p0.get("lon").getAsDouble(),
+                                centerLat, centerLng, east, west, north, south,
+                                sizeMeters, centerX, centerZ);
+
+                        Set<Long> cells = new HashSet<>();
+                        for (int i = 1; i < geom.size(); i++) {
+                            JsonObject pi = geom.get(i).getAsJsonObject();
+                            int[] cur = latlngToBlock(
+                                    pi.get("lat").getAsDouble(), pi.get("lon").getAsDouble(),
+                                    centerLat, centerLng, east, west, north, south,
+                                    sizeMeters, centerX, centerZ);
+                            drawLineCells(prev[0], prev[1], cur[0], cur[1], minX, maxX, minZ, maxZ, cells);
+                            prev = cur;
+                        }
+                        for (long k : cells) out.put(k, mat);
+                    }
+                }
+            }
+        } catch (Exception ex) {
+            System.err.println("[Cartopia] featureStream for dams failed: " + ex);
+        }
+        return out;
+    }
+
     // Старый вариант (coords.features)
     private static Set<Long> extractCliffCellsFromOSM(
             JsonObject root,
@@ -2160,6 +2296,99 @@ public class SurfaceGenerator {
                         drawLineCells(prev[0], prev[1], cur[0], cur[1], minX, maxX, minZ, maxZ, out);
                         prev = cur;
                     }
+                }
+            }
+        }
+        return out;
+    }
+
+    // Старый вариант (coords.features) для дамб.
+    private static Map<Long,String> extractDamCellsFromOSM(
+            JsonObject root,
+            double centerLat, double centerLng,
+            double east, double west, double north, double south,
+            int sizeMeters, int centerX, int centerZ,
+            int minX, int maxX, int minZ, int maxZ) {
+
+        Map<Long,String> out = new HashMap<>();
+        if (root == null || !root.has("features")) return out;
+        JsonObject features = root.getAsJsonObject("features");
+        if (features == null || !features.has("elements")) return out;
+        JsonArray elements = features.getAsJsonArray("elements");
+        if (elements == null) return out;
+
+        for (JsonElement el : elements) {
+            if (!el.isJsonObject()) continue;
+            JsonObject e = el.getAsJsonObject();
+
+            String type = optString(e, "type");
+            JsonObject tags = e.has("tags") && e.get("tags").isJsonObject() ? e.getAsJsonObject("tags") : null;
+            if (!isDamLike(tags)) continue;
+
+            // Площадные дамбы не трогаем как линии — они зальются как зона
+            if ("way".equals(type) && e.has("geometry") && e.get("geometry").isJsonArray()) {
+                JsonArray geom = e.getAsJsonArray("geometry");
+                if (isClosed(geom) || "yes".equalsIgnoreCase(optString(tags,"area")) || "1".equals(optString(tags,"area"))) {
+                    continue;
+                }
+            }
+            if ("relation".equals(type)) {
+                continue;
+            }
+            
+            String mat = pickDamBlockFromTags(tags, "stone"); // по умолчанию камень
+
+            // WAY
+            if ("way".equals(type) && e.has("geometry") && e.get("geometry").isJsonArray()) {
+                JsonArray geom = e.getAsJsonArray("geometry");
+                if (geom.size() < 2) continue;
+
+                JsonObject p0 = geom.get(0).getAsJsonObject();
+                int[] prev = latlngToBlock(
+                        p0.get("lat").getAsDouble(), p0.get("lon").getAsDouble(),
+                        centerLat, centerLng, east, west, north, south,
+                        sizeMeters, centerX, centerZ);
+
+                Set<Long> cells = new HashSet<>();
+                for (int i = 1; i < geom.size(); i++) {
+                    JsonObject pi = geom.get(i).getAsJsonObject();
+                    int[] cur = latlngToBlock(
+                            pi.get("lat").getAsDouble(), pi.get("lon").getAsDouble(),
+                            centerLat, centerLng, east, west, north, south,
+                            sizeMeters, centerX, centerZ);
+                    drawLineCells(prev[0], prev[1], cur[0], cur[1], minX, maxX, minZ, maxZ, cells);
+                    prev = cur;
+                }
+                for (long k : cells) out.put(k, mat);
+            }
+
+            // RELATION
+            if ("relation".equals(type) && e.has("members") && e.get("members").isJsonArray()) {
+                for (JsonElement memEl : e.getAsJsonArray("members")) {
+                    JsonObject mem = memEl.getAsJsonObject();
+                    if (!"way".equals(optString(mem, "type"))) continue;
+                    if (!mem.has("geometry") || !mem.get("geometry").isJsonArray()) continue;
+
+                    JsonArray geom = mem.getAsJsonArray("geometry");
+                    if (geom.size() < 2) continue;
+
+                    JsonObject p0 = geom.get(0).getAsJsonObject();
+                    int[] prev = latlngToBlock(
+                            p0.get("lat").getAsDouble(), p0.get("lon").getAsDouble(),
+                            centerLat, centerLng, east, west, north, south,
+                            sizeMeters, centerX, centerZ);
+
+                    Set<Long> cells = new HashSet<>();
+                    for (int i = 1; i < geom.size(); i++) {
+                        JsonObject pi = geom.get(i).getAsJsonObject();
+                        int[] cur = latlngToBlock(
+                                pi.get("lat").getAsDouble(), pi.get("lon").getAsDouble(),
+                                centerLat, centerLng, east, west, north, south,
+                                sizeMeters, centerX, centerZ);
+                        drawLineCells(prev[0], prev[1], cur[0], cur[1], minX, maxX, minZ, maxZ, cells);
+                        prev = cur;
+                    }
+                    for (long k : cells) out.put(k, mat);
                 }
             }
         }
@@ -2252,4 +2481,35 @@ public class SurfaceGenerator {
 
         return fallback;
     }
+
+    /** Материал дамбы по tags.material/surface; fallback = "stone" (без префикса). */
+    private static String pickDamBlockFromTags(JsonObject tags, String fallback) {
+        String val = null;
+        for (String k : new String[]{"material","surface"}) {
+            String v = optString(tags, k);
+            if (v != null && !v.isBlank()) { val = v.trim().toLowerCase(Locale.ROOT); break; }
+        }
+        if (val == null) return fallback;
+
+        // земляные дамбы
+        Set<String> EARTHY = Set.of("earth","ground","soil","dirt","loam","clay","грунт","земля","суглинок","глина");
+        for (String tok : val.split("[;,/\\s]+")) if (EARTHY.contains(tok)) return "coarse_dirt";
+
+        // кирпичные
+        Set<String> BRICKY = Set.of("brick","bricks","кирпич","кирпичная","кирпичные","кирпичный");
+        for (String tok : val.split("[;,/\\s]+")) if (BRICKY.contains(tok)) return "bricks";
+
+        // бетон / камень / булыжник
+        if (val.contains("concrete") || val.contains("бетон")) return "gray_concrete";
+        if (val.contains("cobbl") || val.contains("булыж"))   return "cobblestone";
+        if (val.contains("stone")  || val.contains("камен"))   return "stone";
+        if (val.contains("rock"))                              return "stone";
+
+        // дерево (на всякий случай)
+        Set<String> WOOD = Set.of("wood","wooden","timber","дерево","деревянный","деревянная");
+        for (String tok : val.split("[;,/\\s]+")) if (WOOD.contains(tok)) return "spruce_planks";
+
+        return fallback;
+    }
+
 }

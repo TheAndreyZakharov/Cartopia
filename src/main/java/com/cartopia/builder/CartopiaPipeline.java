@@ -133,7 +133,6 @@ public class CartopiaPipeline {
             railLamps.generate();
             broadcast(level, "Фонари вдоль рельсов готовы.");
 
-// Фонари в зонах аэропортов, портов и тд. на уровне асфальта... 
 // дамбы
 
 
