@@ -138,13 +138,22 @@ public class CartopiaPipeline {
             FuelPumpGenerator fuelGen = new FuelPumpGenerator(level, coords, store);
             fuelGen.generate();
             broadcast(level, "Бензоколонки готовы.");
+            // Автомойки
+            broadcast(level, "Старт генерации автомоек…");
+            CarWashGenerator washGen = new CarWashGenerator(level, coords, store);
+            washGen.generate();
+            broadcast(level, "Автомойки готовы.");
 
 
 
 
 
 
-// Автомойки
+
+
+
+
+
 // Электро зарядки
 // паркоматы: amenity=parking_meter
 // почтовые ящики: amenity=post_box
