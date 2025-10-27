@@ -155,6 +155,8 @@ public class SurfaceGenerator {
         // Прочая инфраструктура
         ZONE_MATERIALS.put("man_made=pier","stone");
         ZONE_MATERIALS.put("man_made=breakwater","stone");
+        ZONE_MATERIALS.put("man_made=groyne","stone");
+        ZONE_MATERIALS.put("natural=shingle","cobblestone");
         ZONE_MATERIALS.put("power=substation","stone");
 
         ZONE_MATERIALS.put("highway=pedestrian","stone");
@@ -501,6 +503,30 @@ public class SurfaceGenerator {
             }
         }
 
+        // breakwater/groyne/coastline — линейные «стенки» толщиной 2×2 и высотой 2
+        Map<Long,String> breakwaterCells = (store != null)
+                ? extractBreakwaterCellsFromOSMStream(store,
+                    centerLat, centerLng, east, west, north, south,
+                    sizeMeters, centerX, centerZ,
+                    minX, maxX, minZ, maxZ)
+                : extractBreakwaterCellsFromOSM(
+                    coordsJson,
+                    centerLat, centerLng, east, west, north, south,
+                    sizeMeters, centerX, centerZ,
+                    minX, maxX, minZ, maxZ);
+
+        if (breakwaterCells != null && !breakwaterCells.isEmpty()) {
+            for (Map.Entry<Long,String> be : breakwaterCells.entrySet()) {
+                long k = be.getKey();
+                String bwMat = be.getValue(); // без префикса
+                // кладём материал как поверхность, перекрывая даже воду (как дамбы)
+                surface.put(k, bwMat);
+                waterFromOLM.remove(k);    // если была OLM-вода
+                waterProtected.remove(k);  // если была OSM/морская вода
+                lockedOSM.add(k);          // закрепляем как OSM-объект
+            }
+        }
+
 
         // Маска воды
         Set<Long> waterMask = new HashSet<>();
@@ -542,7 +568,7 @@ public class SurfaceGenerator {
         }
 
         // ВЫЗОВ placeBlocks с новым параметром
-        placeBlocks(surface, terrainY, waterMask, waterSurfaceY, cliffCapCells, minX, maxX, minZ, maxZ, totalCells);
+        placeBlocks(surface, terrainY, waterMask, waterSurfaceY, breakwaterCells, cliffCapCells, minX, maxX, minZ, maxZ, totalCells);
         broadcast(level, "Размещение блоков завершено.");
 
         // === FINAL JSON (v2) + дублируем groundY как data для обратной совместимости ===
@@ -1231,9 +1257,10 @@ public class SurfaceGenerator {
     }
 
     private void placeBlocks(Map<Long,String> surface, Map<Long,Integer> terrain,
-                             Set<Long> waterMask, Map<Long,Integer> waterSurfaceY,
-                             Set<Long> cliffCapCells,
-                             int minX, int maxX, int minZ, int maxZ, int totalCells) {
+                            Set<Long> waterMask, Map<Long,Integer> waterSurfaceY,
+                            Map<Long,String> breakwaterCells, // NEW
+                            Set<Long> cliffCapCells,
+                            int minX, int maxX, int minZ, int maxZ, int totalCells) {
         int done = 0;
         int nextConsole = 5;
         int[] chatMilestones = {25, 50, 75, 100};
@@ -1249,6 +1276,21 @@ public class SurfaceGenerator {
                 if (yTop >= worldMax - 2) yTop = worldMax - 3;
 
                 String mat = surface.getOrDefault(key(x, z), "moss_block");
+
+                // --- breakwater/groyne/coastline: двухблочная «стенка» толщиной 2×2
+                if (breakwaterCells != null && breakwaterCells.containsKey(key(x, z))) {
+                    String bwMat = breakwaterCells.get(key(x, z));
+                    // Укладываем два блока вверх одним и тем же материалом
+                    setBlock(x, yTop,     z, "minecraft:" + bwMat);
+                    setBlock(x, yTop + 1, z, "minecraft:" + bwMat);
+                    clearColumnAbove(x, yTop + 2, z, worldMax);
+                    clearColumnBelow(x, z, worldMin, yTop - 1);
+                    done++;
+                    @SuppressWarnings("unused")
+                    int pct = (int)((long)done * 100 / totalCells);
+                    // (оставляем остальную часть прогресс-логики как есть)
+                    continue;
+                }
 
                 if ("water".equals(mat) || waterMask.contains(key(x, z))) {
                     // вода
@@ -1446,6 +1488,22 @@ public class SurfaceGenerator {
             String matDam = pickDamBlockFromTags(tags, "stone");
             String srcKV  = "dam".equals(wwDam) ? "waterway=dam" : "man_made=dam";
             return new MatMatch(matDam, srcKV);
+        }
+
+        // --- BREAKWATER / GROYNE areas: если размечены как area/мультиполигон — красим как зону
+        String mmBW = optString(tags, "man_made");
+        if ("breakwater".equals(mmBW)) {
+            String matBW = pickBreakwaterBlockFromTags(tags, "cracked_stone_bricks"); // по умолчанию как у утёса
+            return new MatMatch(matBW, "man_made=breakwater");
+        }
+        if ("groyne".equals(mmBW)) {
+            String matGR = pickBreakwaterBlockFromTags(tags, "stone"); // шпоры по дефолту камень
+            return new MatMatch(matGR, "man_made=groyne");
+        }
+
+        // natural=shingle как площадная зона
+        if ("shingle".equals(optString(tags, "natural"))) {
+            return new MatMatch("cobblestone", "natural=shingle");
         }
 
         // --- площади HIGHWAY ---
@@ -2053,6 +2111,18 @@ public class SurfaceGenerator {
         return "dam".equals(ww) || "dam".equals(mm);
     }
 
+    private static boolean isBreakwaterLike(JsonObject tags) {
+        return tags != null && "breakwater".equals(optString(tags, "man_made"));
+    }
+    private static boolean isGroyneLike(JsonObject tags) {
+        return tags != null && "groyne".equals(optString(tags, "man_made"));
+    }
+
+    /** breakwater/groyne/coastline как линейные объекты */
+    private static boolean isBreakwaterLineLike(JsonObject tags) {
+        return isBreakwaterLike(tags) || isGroyneLike(tags);
+    }
+
     /** Рисуем линию на сетке (Брезенхэм) и собираем клетки в out. */
     private static void drawLineCells(int x1, int z1, int x2, int z2,
                                     int minX, int maxX, int minZ, int maxZ,
@@ -2070,6 +2140,21 @@ public class SurfaceGenerator {
             if (e2 > -dx) { err -= dz; x += sx; }
             if (e2 <  dz) { err += dx; z += sz; }
         }
+    }
+
+    /** Расширяет набор клеток до «толщины» 2×2 (морфологическая дилатация на 1 клетку по +X/+Z). */
+    private static Set<Long> thickenCells2x2(Set<Long> in, int minX, int maxX, int minZ, int maxZ) {
+        HashSet<Long> out = new HashSet<>(in.size() * 4);
+        for (long k : in) {
+            int x = (int)(k >> 32);
+            int z = (int)k;
+            for (int dx = 0; dx <= 1; dx++) for (int dz = 0; dz <= 1; dz++) {
+                int nx = x + dx, nz = z + dz;
+                if (nx<minX||nx>maxX||nz<minZ||nz>maxZ) continue;
+                out.add((((long)nx)<<32) ^ (nz & 0xffffffffL));
+            }
+        }
+        return out;
     }
 
     // NDJSON-стрим для обрывов/укреплений
@@ -2135,6 +2220,100 @@ public class SurfaceGenerator {
             }
         } catch (Exception ex) {
             System.err.println("[Cartopia] featureStream for cliffs failed: " + ex);
+        }
+        return thickenCells2x2(out, minX, maxX, minZ, maxZ);
+    }
+
+    // NDJSON-стрим для breakwater/groyne/coastline. Возвращает: клетка -> материал (без "minecraft:").
+    // Толщина 2×2 формируется после трассировки.
+    private static Map<Long,String> extractBreakwaterCellsFromOSMStream(
+            GenerationStore store,
+            double centerLat, double centerLng,
+            double east, double west, double north, double south,
+            int sizeMeters, int centerX, int centerZ,
+            int minX, int maxX, int minZ, int maxZ) {
+
+        Map<Long,String> out = new HashMap<>();
+        if (store == null) return out;
+
+        try (FeatureStream fs = store.featureStream()) {
+            for (JsonObject e : fs) {
+                String type = optString(e, "type");
+                JsonObject tags = e.has("tags") && e.get("tags").isJsonObject() ? e.getAsJsonObject("tags") : null;
+                if (!isBreakwaterLineLike(tags)) continue;
+
+                // Площадные breakwater/groyne уйдут в зоны через materialAndKeyForTags() — тут пропускаем
+                if ("way".equals(type) && e.has("geometry") && e.get("geometry").isJsonArray() && isClosed(e.getAsJsonArray("geometry"))) {
+                    continue;
+                }
+                if ("relation".equals(type)) {
+                    // мультиполигоны — как зоны
+                    continue;
+                }
+
+                // Fallback-материал: для breakwater — как у утёса; для groyne/coastline — камень
+                String fallback = isBreakwaterLike(tags) ? "cracked_stone_bricks" : "stone";
+                String mat = pickBreakwaterBlockFromTags(tags, fallback);
+
+                // WAY: собираем клетки линии
+                if ("way".equals(type) && e.has("geometry") && e.get("geometry").isJsonArray()) {
+                    JsonArray geom = e.getAsJsonArray("geometry");
+                    if (geom.size() < 2) continue;
+
+                    JsonObject p0 = geom.get(0).getAsJsonObject();
+                    int[] prev = latlngToBlock(
+                            p0.get("lat").getAsDouble(), p0.get("lon").getAsDouble(),
+                            centerLat, centerLng, east, west, north, south,
+                            sizeMeters, centerX, centerZ);
+
+                    Set<Long> cells = new HashSet<>();
+                    for (int i = 1; i < geom.size(); i++) {
+                        JsonObject pi = geom.get(i).getAsJsonObject();
+                        int[] cur = latlngToBlock(
+                                pi.get("lat").getAsDouble(), pi.get("lon").getAsDouble(),
+                                centerLat, centerLng, east, west, north, south,
+                                sizeMeters, centerX, centerZ);
+                        drawLineCells(prev[0], prev[1], cur[0], cur[1], minX, maxX, minZ, maxZ, cells);
+                        prev = cur;
+                    }
+                    // Толщина 2×2
+                    cells = thickenCells2x2(cells, minX, maxX, minZ, maxZ);
+                    for (long k : cells) out.put(k, mat);
+                }
+
+                // RELATION (редко бывает как коллекция ways без area): пройдёмся по членам как по way-линиям
+                if ("relation".equals(type) && e.has("members") && e.get("members").isJsonArray()) {
+                    for (JsonElement memEl : e.getAsJsonArray("members")) {
+                        JsonObject mem = memEl.getAsJsonObject();
+                        if (!"way".equals(optString(mem, "type"))) continue;
+                        if (!mem.has("geometry") || !mem.get("geometry").isJsonArray()) continue;
+
+                        JsonArray geom = mem.getAsJsonArray("geometry");
+                        if (geom.size() < 2) continue;
+
+                        JsonObject p0 = geom.get(0).getAsJsonObject();
+                        int[] prev = latlngToBlock(
+                                p0.get("lat").getAsDouble(), p0.get("lon").getAsDouble(),
+                                centerLat, centerLng, east, west, north, south,
+                                sizeMeters, centerX, centerZ);
+
+                        Set<Long> cells = new HashSet<>();
+                        for (int i = 1; i < geom.size(); i++) {
+                            JsonObject pi = geom.get(i).getAsJsonObject();
+                            int[] cur = latlngToBlock(
+                                    pi.get("lat").getAsDouble(), pi.get("lon").getAsDouble(),
+                                    centerLat, centerLng, east, west, north, south,
+                                    sizeMeters, centerX, centerZ);
+                            drawLineCells(prev[0], prev[1], cur[0], cur[1], minX, maxX, minZ, maxZ, cells);
+                            prev = cur;
+                        }
+                        cells = thickenCells2x2(cells, minX, maxX, minZ, maxZ);
+                        for (long k : cells) out.put(k, mat);
+                    }
+                }
+            }
+        } catch (Exception ex) {
+            System.err.println("[Cartopia] featureStream for breakwaters failed: " + ex);
         }
         return out;
     }
@@ -2297,6 +2476,66 @@ public class SurfaceGenerator {
                         prev = cur;
                     }
                 }
+            }
+        }
+        return thickenCells2x2(out, minX, maxX, minZ, maxZ);
+    }
+
+    // Старый вариант (coords.features) для breakwater/groyne/coastline.
+    private static Map<Long,String> extractBreakwaterCellsFromOSM(
+            JsonObject root,
+            double centerLat, double centerLng,
+            double east, double west, double north, double south,
+            int sizeMeters, int centerX, int centerZ,
+            int minX, int maxX, int minZ, int maxZ) {
+
+        Map<Long,String> out = new HashMap<>();
+        if (root == null || !root.has("features")) return out;
+        JsonObject features = root.getAsJsonObject("features");
+        if (features == null || !features.has("elements")) return out;
+        JsonArray elements = features.getAsJsonArray("elements");
+        if (elements == null) return out;
+
+        for (JsonElement el : elements) {
+            if (!el.isJsonObject()) continue;
+            JsonObject e = el.getAsJsonObject();
+            String type = optString(e, "type");
+            JsonObject tags = e.has("tags") && e.get("tags").isJsonObject() ? e.getAsJsonObject("tags") : null;
+            if (!isBreakwaterLineLike(tags)) continue;
+
+            // Площадные breakwater/groyne — зальются как зоны
+            if ("way".equals(type) && e.has("geometry") && e.get("geometry").isJsonArray() && isClosed(e.getAsJsonArray("geometry"))) {
+                continue;
+            }
+            if ("relation".equals(type)) {
+                continue;
+            }
+
+            String fallback = isBreakwaterLike(tags) ? "cracked_stone_bricks" : "stone";
+            String mat = pickBreakwaterBlockFromTags(tags, fallback);
+
+            if ("way".equals(type) && e.has("geometry") && e.get("geometry").isJsonArray()) {
+                JsonArray geom = e.getAsJsonArray("geometry");
+                if (geom.size() < 2) continue;
+
+                JsonObject p0 = geom.get(0).getAsJsonObject();
+                int[] prev = latlngToBlock(
+                        p0.get("lat").getAsDouble(), p0.get("lon").getAsDouble(),
+                        centerLat, centerLng, east, west, north, south,
+                        sizeMeters, centerX, centerZ);
+
+                Set<Long> cells = new HashSet<>();
+                for (int i = 1; i < geom.size(); i++) {
+                    JsonObject pi = geom.get(i).getAsJsonObject();
+                    int[] cur = latlngToBlock(
+                            pi.get("lat").getAsDouble(), pi.get("lon").getAsDouble(),
+                            centerLat, centerLng, east, west, north, south,
+                            sizeMeters, centerX, centerZ);
+                    drawLineCells(prev[0], prev[1], cur[0], cur[1], minX, maxX, minZ, maxZ, cells);
+                    prev = cur;
+                }
+                cells = thickenCells2x2(cells, minX, maxX, minZ, maxZ);
+                for (long k : cells) out.put(k, mat);
             }
         }
         return out;
@@ -2474,7 +2713,7 @@ public class SurfaceGenerator {
         if (val.contains("granite") || val.contains("гранит")) return "cobblestone";
 
         // гравий/щебень
-        if (val.contains("gravel") || val.contains("щеб") || val.contains("гравий")) return "gravel";
+        if (val.contains("gravel") || val.contains("щеб") || val.contains("гравий")) return "cobblestone";
 
         // плитка/камень по умолчанию
         if (val.contains("stone") || val.contains("плит") || val.contains("камен")) return "stone";
@@ -2511,5 +2750,26 @@ public class SurfaceGenerator {
 
         return fallback;
     }
+    
+    /** Материал для breakwater/groyne по tags.material/surface; fallback, например, "cracked_stone_bricks" или "stone". */
+    private static String pickBreakwaterBlockFromTags(JsonObject tags, String fallback) {
+        if (tags == null) return fallback;
+        String val = null;
+        for (String k : new String[]{"material","surface"}) {
+            String v = optString(tags, k);
+            if (v != null && !v.isBlank()) { val = v.trim().toLowerCase(Locale.ROOT); break; }
+        }
+        if (val == null) return fallback;
 
+        // если явно указан камень — используем stone
+        if (val.contains("stone") || val.contains("rock") || val.contains("кам")) return "stone";
+        // бетон
+        if (val.contains("concrete") || val.contains("бетон")) return "gray_concrete";
+        // дерево
+        if (val.contains("wood") || val.contains("timber") || val.contains("дерев")) return "spruce_planks";
+        // гравий / щебень
+        if (val.contains("gravel") || val.contains("щеб") || val.contains("грав")) return "cobblestone";
+
+        return fallback;
+    }
 }

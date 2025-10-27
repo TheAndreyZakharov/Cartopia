@@ -134,8 +134,7 @@ public class CartopiaPipeline {
             broadcast(level, "Фонари вдоль рельсов готовы.");
             // ===== ИНФРАСТРУКТУРА =====
 
-// breakwater волнорезы как утёсы - ширина 2, высота +1, +2 над водой. man_made	
-//groyne type	multipolygon
+// волнорезы, гройн, шингл, fix утёсы 
 
 
             // Утилитарные уличные боксы однотипно
