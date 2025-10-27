@@ -133,10 +133,6 @@ public class CartopiaPipeline {
             railLamps.generate();
             broadcast(level, "Фонари вдоль рельсов готовы.");
             // ===== ИНФРАСТРУКТУРА =====
-
-// волнорезы, гройн, шингл, fix утёсы 
-
-
             // Утилитарные уличные боксы однотипно
             broadcast(level, "Старт генерации утилитарных боксов…");
             UtilityBoxGenerator utilBoxGen = new UtilityBoxGenerator(level, coords, store);
@@ -161,9 +157,13 @@ public class CartopiaPipeline {
             CarWashGenerator washGen = new CarWashGenerator(level, coords, store); 
             washGen.generate();
             broadcast(level, "Автомойки готовы.");
+            // Электрозарядки
+            broadcast(level, "Старт генерации электрозарядок…");
+            ElectricChargerGenerator evGen = new ElectricChargerGenerator(level, coords, store);
+            evGen.generate();
+            broadcast(level, "Электрозарядки готовы.");
 
 
-// Электро зарядки для авто - добавить или новый файл
 
 
 // антенны и вышки без тега зданий отдельно - chimney, mast и тд water_tower, lifeguard_tower
