@@ -1236,11 +1236,16 @@ public class BridgeGenerator {
         bz0 = Math.max(bz0, minZ); bz1 = Math.min(bz1, maxZ);
         if (bx0 > bx1 || bz0 > bz1) return;
 
-        // если над центральной линией полигона уже есть мост — этот area-мост целиком пропускаем
+        // если над центральной линией полигона уже есть мост — не строим второй настил,
+        // а аккуратно РАСШИРЯЕМ существующий мост до границ полигона, сохраняя ступенчатый профиль по оси.
         if (centerlineHasExistingBridge(outers, inners, offset, bx0, bx1, bz0, bz1)) {
-            broadcast(level, "Area-мост: пропуск — над центральной линией уже есть мост.");
+            expandExistingBridgeIntoArea(outers, inners, deckBlock,
+                    bx0, bx1, bz0, bz1,
+                    minX, maxX, minZ, maxZ);
+            broadcast(level, "Area-мост: расширили существующий настил до границ полигона.");
             return;
         }
+
 
         int placed = 0;
         for (int x = bx0; x <= bx1; x++) {
@@ -1378,4 +1383,167 @@ public class BridgeGenerator {
         // всё остальное — как у дороги
         return fallback;
     }
+
+    /** точка-якорь существующего моста (колонка настила) */
+    private static final class Anchor {
+        final int x, z, y;
+        Anchor(int x, int z, int y) { this.x = x; this.z = z; this.y = y; }
+    }
+
+    /** быстрый тест "точка внутри полигона без дыр" */
+    private boolean insideAreaNoHoles(int x, int z, List<List<int[]>> outers, List<List<int[]>> inners) {
+        boolean inside = false;
+        for (List<int[]> outer : outers) { if (pointInPolygon(x, z, outer)) { inside = true; break; } }
+        if (!inside) return false;
+        for (List<int[]> inner : inners) { if (pointInPolygon(x, z, inner)) return false; }
+        return true;
+    }
+
+    /** собираем все «якоря» (реальные колонки настила) внутри полигона */
+    private List<Anchor> collectBridgeStepAnchors(
+            List<List<int[]>> outers, List<List<int[]>> inners,
+            int bx0, int bx1, int bz0, int bz1) {
+
+        List<Anchor> anchors = new ArrayList<>();
+        Integer yHintRow = null;
+
+        for (int x = bx0; x <= bx1; x++) {
+            yHintRow = null;
+            for (int z = bz0; z <= bz1; z++) {
+                if (!insideAreaNoHoles(x, z, outers, inners)) continue;
+
+                int ySurf = surfaceY(x, z, yHintRow);
+                if (ySurf == Integer.MIN_VALUE) continue;
+                yHintRow = ySurf;
+
+                Integer yDeck = detectBridgeDeckYNear(x, z, ySurf);
+                if (yDeck != null) anchors.add(new Anchor(x, z, yDeck));
+            }
+        }
+        return anchors;
+    }
+
+    /** Расширение: каждому блоку внутри полигона присваиваем Y ближайшего якоря (по Манхэттену).
+     *  Это гарантирует, что ступени будут сохранены «как у оригинала», и при множественных
+     *  пересечениях каждый мост расширится «от себя». */
+    private void expandExistingBridgeIntoArea(
+            List<List<int[]>> outers, List<List<int[]>> inners, Block deckBlock,
+            int bx0, int bx1, int bz0, int bz1,
+            int minX, int maxX, int minZ, int maxZ) {
+
+        final int worldMin = level.getMinBuildHeight();
+        final int worldMax = level.getMaxBuildHeight() - 1;
+
+        // 1) якоря-ступени из реальных мостов
+        List<Anchor> anchors = collectBridgeStepAnchors(outers, inners, bx0, bx1, bz0, bz1);
+        if (anchors.isEmpty()) {
+            // на всякий случай: если якоря не нашли (неожиданно), просто выходим — пусть работает fallback выше
+            broadcast(level, "Area-мост: якорей ступеней не найдено, оставляем как есть.");
+            return;
+        }
+
+        int W = bx1 - bx0 + 1;
+        int H = bz1 - bz0 + 1;
+        final int UNSET = Integer.MIN_VALUE;
+
+        int[][] assignedY = new int[W][H];
+        boolean[][] inPoly = new boolean[W][H];
+        for (int ix = 0; ix < W; ix++) {
+            Arrays.fill(assignedY[ix], UNSET);
+            for (int iz = 0; iz < H; iz++) {
+                int x = bx0 + ix, z = bz0 + iz;
+                inPoly[ix][iz] = insideAreaNoHoles(x, z, outers, inners);
+            }
+        }
+
+        // 2) мульти-источниковый BFS (флад-филл) от всех якорей сразу
+        ArrayDeque<int[]> q = new ArrayDeque<>(anchors.size() * 4);
+        for (Anchor a : anchors) {
+            int ix = a.x - bx0, iz = a.z - bz0;
+            if (ix < 0 || ix >= W || iz < 0 || iz >= H) continue;
+            if (!inPoly[ix][iz]) continue; // якорь должен лежать внутри area
+            assignedY[ix][iz] = a.y;
+            q.add(new int[]{ix, iz});
+        }
+
+        int[][] dir = new int[][] { {1,0}, {-1,0}, {0,1}, {0,-1} };
+        while (!q.isEmpty()) {
+            int[] cur = q.pollFirst();
+            int ix = cur[0], iz = cur[1];
+            int y = assignedY[ix][iz];
+
+            for (int[] d : dir) {
+                int jx = ix + d[0], jz = iz + d[1];
+                if (jx < 0 || jx >= W || jz < 0 || jz >= H) continue;
+                if (!inPoly[jx][jz]) continue;
+                if (assignedY[jx][jz] != UNSET) continue;   // уже посещено
+                assignedY[jx][jz] = y;                      // наследуем Y «ступени» от ближайшего якоря
+                q.addLast(new int[]{jx, jz});
+            }
+        }
+
+        // 3) проставляем блоки настила по назначенным Y, не затирая уже стоящие мосты
+        int placed = 0;
+        for (int ix = 0; ix < W; ix++) {
+            Integer yHintRow = null;
+            for (int iz = 0; iz < H; iz++) {
+                if (!inPoly[ix][iz]) continue;
+                int yDeck = assignedY[ix][iz];
+                if (yDeck == UNSET) continue; // если по какой-то причине не заполнилось — пропустим
+
+                int x = bx0 + ix, z = bz0 + iz;
+                if (x < minX || x > maxX || z < minZ || z > maxZ) continue;
+
+                // защитимся от втыка в рельеф: минимум на 1 блок выше поверхности
+                int ySurf = surfaceY(x, z, yHintRow);
+                if (ySurf == Integer.MIN_VALUE) continue;
+                yHintRow = ySurf;
+                if (yDeck <= ySurf) yDeck = Math.min(worldMax, ySurf + 1);
+
+                if (hasBridgeAboveHere(x, z, yDeck)) continue; // не дублируем уже существующий настил/бордюры/плиты
+                yDeck = clampInt(yDeck, worldMin, worldMax);
+
+                setBridgeBlock(x, yDeck, z, deckBlock);
+                placed++;
+            }
+        }
+        if (placed > 0) {
+            broadcast(level, "Area-мост: расширили по ступеням от " + anchors.size() + " якорей, поставили " + placed + " блоков.");
+        }
+    }
+
+
+    /** Поиск высоты настила ближайшего существующего моста над (x,z). */
+    private Integer detectBridgeDeckYNear(int x, int z, int ySurf) {
+        final int worldMax = level.getMaxBuildHeight() - 1;
+        final int scanTop = Math.min(worldMax, ySurf + 16);
+
+        for (int y = ySurf + 1; y <= scanTop; y++) {
+            var st = level.getBlockState(mpos.set(x, y, z));
+            if (st.isAir()) continue;
+            Block b = st.getBlock();
+
+            // Бордюрные стены или рельсы обычно стоят на блок выше настила
+            if (b == Blocks.ANDESITE_WALL || b == Blocks.STONE_BRICK_WALL || b == Blocks.RAIL) {
+                int yd = y - 1;
+                if (yd > ySurf) return yd;
+            }
+
+            if (isBridgeDeckMarker(b)) return y;
+        }
+        return null;
+    }
+
+    /** Какие блоки считаем «настилом моста» при детекции существующего моста. */
+    private boolean isBridgeDeckMarker(Block b) {
+        if (isRoadLikeBlock(b)) return true; // наши дорожные материалы из ROAD_MATERIALS
+        // плюс материалы, которые подбираются в pickDeckBlockForBridge(...)
+        return b == Blocks.SPRUCE_PLANKS
+                || b == Blocks.CHISELED_STONE_BRICKS
+                || b == Blocks.COBBLESTONE
+                || b == Blocks.GRAY_CONCRETE
+                || b == Blocks.STONE
+                || b == Blocks.STONE_BRICKS;
+    }
+
 }
