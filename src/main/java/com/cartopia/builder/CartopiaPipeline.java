@@ -148,6 +148,23 @@ public class CartopiaPipeline {
             WindTurbineGenerator wtGen = new WindTurbineGenerator(level, coords, store);
             wtGen.generate();
             broadcast(level, "Ветряки готовы.");
+            // Наблюдательные вышки
+            broadcast(level, "Старт генерации наблюдательных вышек…");
+            WatchtowerGenerator wtowerGen = new WatchtowerGenerator(level, coords, store);
+            wtowerGen.generate();
+            broadcast(level, "Вышки готовы.");
+
+
+
+// вышки - water_tower и тп
+// трубы - chimney, mast и тп
+// антенны сотовые и тп
+
+// Опоры ЛЭП разные + провода по линиям, power - Высоковольтные линии
+
+// Солнечные батареи
+
+
             // Бензоколонки на АЗС
             broadcast(level, "Старт генерации бензоколонок…");
             FuelPumpGenerator fuelGen = new FuelPumpGenerator(level, coords, store);
@@ -166,14 +183,7 @@ public class CartopiaPipeline {
 
 
 
-
-// антенны и вышки без тега зданий отдельно - chimney, mast и тд water_tower, lifeguard_tower
-// Высоковольтные линии, ЛЭП и тд + провода, power
-// Солнечные батареи
-
-
-
-// Заборы, ограждения, Шлагбаумы. дорожные отбойники/ограждения вдоль трасс: barrier=guard_rail (ways). учитывать маткриалы и высоту и тд
+// Заборы, ограждения, Шлагбаумы. дорожные отбойники/ограждения вдоль трасс: barrier=guard_rail (ways). учитывать материалы и высоту и тд
 
 
 

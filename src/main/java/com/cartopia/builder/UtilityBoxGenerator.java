@@ -261,6 +261,8 @@ public class UtilityBoxGenerator {
         String military = optString(t,"military");
 
         if ("toilets".equals(amenity)) return true;
+        if ("toilet".equals(amenity)) return true;
+        if ("shower".equals(amenity)) return true;
         if ("telephone".equals(amenity)) return true;
         if ("shelter".equals(amenity)) return true;
         if ("marketplace".equals(amenity)) return true;
