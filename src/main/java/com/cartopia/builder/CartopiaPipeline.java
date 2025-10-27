@@ -133,14 +133,23 @@ public class CartopiaPipeline {
             railLamps.generate();
             broadcast(level, "Фонари вдоль рельсов готовы.");
             // ===== ИНФРАСТРУКТУРА =====
+
+// breakwater волнорезы как утёсы - ширина 2, высота +1, +2 над водой. man_made	
+//groyne type	multipolygon
+
+
             // Утилитарные уличные боксы однотипно
             broadcast(level, "Старт генерации утилитарных боксов…");
             UtilityBoxGenerator utilBoxGen = new UtilityBoxGenerator(level, coords, store);
             utilBoxGen.generate();
             broadcast(level, "Утилитарные боксы готовы.");
+            // Маяки
+            broadcast(level, "Старт генерации маяков…");
+            LighthouseGenerator lighthouseGen = new LighthouseGenerator(level, coords, store);
+            lighthouseGen.generate();
+            broadcast(level, "Маяки готовы.");
 
 
-// Маяки beacon и тд
 // Ветряки - Невинномыск
 
             // Бензоколонки на АЗС
@@ -166,7 +175,6 @@ public class CartopiaPipeline {
 
 // Заборы, ограждения, Шлагбаумы. дорожные отбойники/ограждения вдоль трасс: barrier=guard_rail (ways). учитывать маткриалы и высоту и тд
 
-// breakwater волнорезы как утёсы - ширина 2, высота +1, +2 над водой
 
 
 // =============================================
