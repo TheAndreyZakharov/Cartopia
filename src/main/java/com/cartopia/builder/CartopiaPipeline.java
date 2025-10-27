@@ -143,10 +143,11 @@ public class CartopiaPipeline {
             LighthouseGenerator lighthouseGen = new LighthouseGenerator(level, coords, store);
             lighthouseGen.generate();
             broadcast(level, "Маяки готовы.");
-
-// Ветряки - Невинномыск
-
-
+            // Ветряные турбины
+            broadcast(level, "Старт генерации ветряков…");
+            WindTurbineGenerator wtGen = new WindTurbineGenerator(level, coords, store);
+            wtGen.generate();
+            broadcast(level, "Ветряки готовы.");
             // Бензоколонки на АЗС
             broadcast(level, "Старт генерации бензоколонок…");
             FuelPumpGenerator fuelGen = new FuelPumpGenerator(level, coords, store);
