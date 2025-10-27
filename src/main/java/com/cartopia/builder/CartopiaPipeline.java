@@ -156,7 +156,6 @@ public class CartopiaPipeline {
 
 
 
-// вышки - water_tower и тп
 // трубы - chimney, mast и тп
 // антенны сотовые и тп
 

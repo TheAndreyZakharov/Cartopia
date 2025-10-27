@@ -25,7 +25,7 @@ import java.util.Locale;
 public class WatchtowerGenerator {
 
     // ===== Конфиг визуала =====
-    private static final Block MATERIAL_BODY   = Blocks.RED_CONCRETE; // площадка, ножки, домик и крыша
+    private static final Block MATERIAL_BODY   = Blocks.IRON_BLOCK; // площадка, ножки, домик и крыша
     private static final Block MATERIAL_GLASS  = Blocks.GLASS;        // окна домика
     private static final int   PLATFORM_HALF   = 2;                   // 5×5 ⇒ смещения -2..+2
     private static final int   LEG_HEIGHT      = 4;                   // высота ножек
@@ -203,24 +203,27 @@ public class WatchtowerGenerator {
         out.add(new Tower(tx, tz));
     }
 
-    /** lifeguard_tower или наблюдательная (watchtower). */
+    /** lifeguard_tower или наблюдательные вышки (watch / observation / lookout). */
     private static boolean isWatchtowerLike(JsonObject t) {
-        // Явные спасательные вышки
         String mm = optString(t, "man_made");
         String em = optString(t, "emergency");
+
+        // явные спасательные вышки
         if ("lifeguard_tower".equalsIgnoreCase(mm)) return true;
         if ("lifeguard_tower".equalsIgnoreCase(em)) return true;
 
-        // Общая башня, указан тип наблюдательной
+        // наблюдательные варианты
         String towerType = optString(t, "tower:type");
-        if (towerType != null && towerType.toLowerCase(Locale.ROOT).contains("watch")) {
-            // часто man_made=tower
-            return true;
+        if (towerType != null) {
+            String v = towerType.toLowerCase(Locale.ROOT);
+            if (v.contains("watch") || v.contains("observation") || v.contains("lookout")) return true;
         }
-        // иногда ставят man_made=watchtower
-        if ("watchtower".equalsIgnoreCase(mm)) return true;
 
-        // запасные нетипичные ключи
+        // альтернативные man_made
+        if ("watchtower".equalsIgnoreCase(mm)) return true;
+        if ("observation_tower".equalsIgnoreCase(mm)) return true; // встречается в дикой природе
+
+        // иногда ещё как building
         String building = optString(t, "building");
         if ("lifeguard_tower".equalsIgnoreCase(building)) return true;
 
