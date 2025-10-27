@@ -22,14 +22,26 @@ import net.minecraft.world.level.levelgen.Heightmap;
 
 import java.util.*;
 
-
 public class FuelPumpGenerator {
 
     // ====== конфиг ======
     private static final int SEARCH_RADIUS_BLOCKS = 120; // радиус поиска навеса/здания/дороги вокруг станции
-    private static final int MAX_PUMPS_PER_AREA = 6;     // лимит колонок на один навес/здание
-    private static final int PUMP_SPACING = 6;           // шаг между колонками вдоль
+    private static final int MAX_PUMPS_PER_AREA = 48;    // защитный лимит
     private static final int EDGE_MARGIN  = 2;           // отступ от краёв проекции
+
+    // Геометрия одной колонки:
+    // Колонка — 3 блока в длину (по направлению дороги), 1 блок в ширину, 2 блока высота.
+    // Межколоночный зазор «со всех сторон» — 2 блока.
+    private static final int PUMP_LEN = 3;
+    private static final int PUMP_WIDTH = 1;
+    private static final int CLEAR_GAP = 2;
+
+    // Шаг сетки (центр-до-центра) под навесом:
+    private static final int STEP_ALONG  = PUMP_LEN  + CLEAR_GAP;  // 3 + 2 = 5
+    private static final int STEP_ACROSS = PUMP_WIDTH + CLEAR_GAP; // 1 + 2 = 3
+
+    // Для «кольца» вокруг здания, если навеса нет
+    private static final int RING_WIDTH = 3; // расстояние от границы building-полигона, где позволяем ставить
 
     private final ServerLevel level;
     private final JsonObject coords;
@@ -89,9 +101,8 @@ public class FuelPumpGenerator {
         final int x, z;                  // центр станции (по узлу amenity=fuel или центроиду полигона)
         PolyXZ canopyOrNull;             // ближайший навес (building=roof / man_made=canopy / building=carport)
         PolyXZ buildingOrNull;           // ближайшее здание (building=*, not roof)
-        Direction lengthDir;             // направление вдоль дороги (E/W/N/S)
-        int ux, uz;                      // ед. вектор вдоль lengthDir
-        Direction sideA, sideB;          // две длинные боковые стороны (перпендикуляр к lengthDir)
+        int ux, uz;                      // ед. вектор вдоль направления дороги
+        Direction sideA, sideB;          // боковые стороны (перпендикуляр к длине)
         int sxA, szA, sxB, szB;          // их векторы (+/-1 по оси)
         FuelStation(int x, int z) { this.x=x; this.z=z; }
     }
@@ -176,9 +187,10 @@ public class FuelPumpGenerator {
         // --- матчим для каждой станции навес/здание и направление дороги
         for (FuelStation fsx : stations) {
             // навес
-            fsx.canopyOrNull = nearestPoly(roofs, fsx.x, fsx.z, SEARCH_RADIUS_BLOCKS);
+            fsx.canopyOrNull   = nearestPoly(roofs, fsx.x, fsx.z, SEARCH_RADIUS_BLOCKS);
             // если нет навеса — берём здание
             fsx.buildingOrNull = nearestPoly(builds, fsx.x, fsx.z, SEARCH_RADIUS_BLOCKS);
+
             // направление дороги
             Direction dir = nearestRoadDirection(roads, fsx.x, fsx.z, SEARCH_RADIUS_BLOCKS);
             if (dir == null) {
@@ -192,7 +204,7 @@ public class FuelPumpGenerator {
                     dir = Direction.EAST;
                 }
             }
-            fsx.lengthDir = dir;
+            // базис вдоль/поперёк
             if (dir == Direction.EAST || dir == Direction.WEST) {
                 fsx.ux = (dir == Direction.EAST ? 1 : -1); fsx.uz = 0;
                 fsx.sideA = Direction.NORTH; fsx.sideB = Direction.SOUTH;
@@ -232,72 +244,61 @@ public class FuelPumpGenerator {
 
         String type = optString(e,"type");
 
-        // --- 1) amenity=fuel → станция (+ roof-полигон самой станции считаем навесом)
+        // --- 1) amenity=fuel → станция (+ roof/building полигоны как опора под расстановку)
         if ("fuel".equals(optString(tags,"amenity"))) {
-            if ("node".equals(type)) {
-                JsonArray g = (e.has("geometry") && e.get("geometry").isJsonArray())
-                        ? e.getAsJsonArray("geometry") : null;
-                if (g != null && g.size() == 1) {
-                    JsonObject p = g.get(0).getAsJsonObject();
-                    int[] xz = latlngToBlock(p.get("lat").getAsDouble(), p.get("lon").getAsDouble(),
-                            centerLat, centerLng, east, west, north, south, sizeMeters, centerX, centerZ);
-                    stations.add(new FuelStation(xz[0], xz[1]));
-                }
-            } else if ("way".equals(type) || "relation".equals(type)) {
-                JsonArray g = (e.has("geometry") && e.get("geometry").isJsonArray())
-                        ? e.getAsJsonArray("geometry") : null;
-                if (g != null && g.size() >= 4) {
-                    int[] xs = new int[g.size()], zs = new int[g.size()];
-                    for (int i=0;i<g.size();i++){
-                        JsonObject p=g.get(i).getAsJsonObject();
-                        int[] xz=latlngToBlock(p.get("lat").getAsDouble(), p.get("lon").getAsDouble(),
-                                centerLat, centerLng, east, west, north, south, sizeMeters, centerX, centerZ);
-                        xs[i]=xz[0]; zs[i]=xz[1];
-                    }
-                    PolyXZ poly = new PolyXZ(xs, zs);
-                    stations.add(new FuelStation(poly.cx, poly.cz));
+            // центр станции
+            int sx, sz;
+            int[] cxz = null;
 
-                    if (isRoofLike(tags)) {
-                        roofs.add(poly);   // amenity=fuel, building=roof → это и есть навес
-                    } else if (isBuilding(tags)) {
-                        builds.add(poly);  // обычное здание, полезно как fallback
+            if ("node".equals(type)) {
+                if (e.has("lat") && e.has("lon")) {
+                    cxz = latlngToBlock(
+                            e.get("lat").getAsDouble(), e.get("lon").getAsDouble(),
+                            centerLat, centerLng, east, west, north, south, sizeMeters, centerX, centerZ
+                    );
+                } else {
+                    JsonArray g = (e.has("geometry") && e.get("geometry").isJsonArray())
+                            ? e.getAsJsonArray("geometry") : null;
+                    if (g != null && g.size() == 1) {
+                        JsonObject p = g.get(0).getAsJsonObject();
+                        cxz = latlngToBlock(
+                                p.get("lat").getAsDouble(), p.get("lon").getAsDouble(),
+                                centerLat, centerLng, east, west, north, south, sizeMeters, centerX, centerZ
+                        );
                     }
+                }
+            } else { // way/relation — берём либо center/bounds, либо центроид полигона
+                PolyXZ poly = polyFromGeometryOrBounds(e, centerLat, centerLng, east, west, north, south, sizeMeters, centerX, centerZ);
+                if (poly != null) {
+                    cxz = new int[]{poly.cx, poly.cz};
+                    // если это «roof» — сразу добавим как навес; если просто building — как fallback-здание
+                    if (isRoofLike(tags)) roofs.add(poly);
+                    else if (isBuilding(tags)) builds.add(poly);
+                } else {
+                    cxz = elementCenterXZ(e, centerLat, centerLng, east, west, north, south, sizeMeters, centerX, centerZ);
                 }
             }
-            return; // не продолжаем обработку той же фичи
+
+            if (cxz != null) {
+                sx = cxz[0]; sz = cxz[1];
+                stations.add(new FuelStation(sx, sz));
+            }
+
+            // дороги собираем отдельно ниже, а тут выходим
+            return;
         }
 
-        // --- 2) крыша-навес (building=roof / man_made=canopy / building=carport)
+        // --- 2) навес (building=roof / man_made=canopy / building=carport)
         if (isRoofLike(tags) && ("way".equals(type) || "relation".equals(type))) {
-            JsonArray g = (e.has("geometry") && e.get("geometry").isJsonArray())
-                    ? e.getAsJsonArray("geometry") : null;
-            if (g != null && g.size() >= 4) {
-                int[] xs = new int[g.size()], zs = new int[g.size()];
-                for (int i=0;i<g.size();i++) {
-                    JsonObject p=g.get(i).getAsJsonObject();
-                    int[] xz=latlngToBlock(p.get("lat").getAsDouble(), p.get("lon").getAsDouble(),
-                            centerLat, centerLng, east, west, north, south, sizeMeters, centerX, centerZ);
-                    xs[i]=xz[0]; zs[i]=xz[1];
-                }
-                roofs.add(new PolyXZ(xs, zs));
-            }
+            PolyXZ poly = polyFromGeometryOrBounds(e, centerLat, centerLng, east, west, north, south, sizeMeters, centerX, centerZ);
+            if (poly != null) roofs.add(poly);
             return;
         }
 
         // --- 3) обычное здание (building=*, not roof)
         if (isBuilding(tags) && !isRoofLike(tags) && ("way".equals(type) || "relation".equals(type))) {
-            JsonArray g = (e.has("geometry") && e.get("geometry").isJsonArray())
-                    ? e.getAsJsonArray("geometry") : null;
-            if (g != null && g.size() >= 4) {
-                int[] xs = new int[g.size()], zs = new int[g.size()];
-                for (int i=0;i<g.size();i++) {
-                    JsonObject p=g.get(i).getAsJsonObject();
-                    int[] xz=latlngToBlock(p.get("lat").getAsDouble(), p.get("lon").getAsDouble(),
-                            centerLat, centerLng, east, west, north, south, sizeMeters, centerX, centerZ);
-                    xs[i]=xz[0]; zs[i]=xz[1];
-                }
-                builds.add(new PolyXZ(xs, zs));
-            }
+            PolyXZ poly = polyFromGeometryOrBounds(e, centerLat, centerLng, east, west, north, south, sizeMeters, centerX, centerZ);
+            if (poly != null) builds.add(poly);
             return;
         }
 
@@ -338,7 +339,6 @@ public class FuelPumpGenerator {
     }
 
     // ===== выбор ближайших сущностей =====
-
     private PolyXZ nearestPoly(List<PolyXZ> polys, int x, int z, int radius) {
         PolyXZ best = null; long bestD2 = Long.MAX_VALUE;
         int r2 = radius*radius;
@@ -382,75 +382,160 @@ public class FuelPumpGenerator {
     }
 
     // ===== рендер станции =====
-
     private void renderStation(FuelStation st, int minX, int maxX, int minZ, int maxZ) {
-        PolyXZ area = (st.canopyOrNull != null ? st.canopyOrNull : st.buildingOrNull);
-        if (area == null) {
-            placeSimplePair(st, minX, maxX, minZ, maxZ);
+        // Сет плиток, запрещённых для новых колонок (учитывает «радиус» CLEAR_GAP).
+        HashSet<Long> blocked = new HashSet<>();
+
+        if (st.canopyOrNull != null) {
+            // 1) Под навесом — плотно сеткой с зазорами
+            List<int[]> anchors = anchorsFillUnderCanopy(st.canopyOrNull, st, MAX_PUMPS_PER_AREA);
+            if (anchors.isEmpty()) anchors.add(new int[]{st.canopyOrNull.cx, st.canopyOrNull.cz});
+            for (int[] a : anchors) {
+                int ax = a[0], az = a[1];
+                if (ax<minX||ax>maxX||az<minZ||az>maxZ) continue;
+                if (!canPlacePumpAt(ax, az, st, blocked)) continue;
+                placePumpAt(ax, az, st);
+                markForbiddenAroundPump(ax, az, st, blocked);
+            }
             return;
         }
 
-        List<int[]> anchors = anchorsAlongArea(area, st, MAX_PUMPS_PER_AREA);
-        if (anchors.isEmpty()) {
-            anchors.add(new int[]{area.cx, area.cz});
+        if (st.buildingOrNull != null) {
+            // 2) Если навеса нет — ставим кольцом вокруг здания
+            List<int[]> anchors = anchorsRingAroundBuilding(st.buildingOrNull, st, MAX_PUMPS_PER_AREA);
+            if (anchors.isEmpty()) anchors.add(new int[]{st.buildingOrNull.cx, st.buildingOrNull.cz});
+            for (int[] a : anchors) {
+                int ax = a[0], az = a[1];
+                if (ax<minX||ax>maxX||az<minZ||az>maxZ) continue;
+                if (!canPlacePumpAt(ax, az, st, blocked)) continue;
+                placePumpAt(ax, az, st);
+                markForbiddenAroundPump(ax, az, st, blocked);
+            }
+            return;
         }
 
-        for (int[] a : anchors) {
-            int ax = a[0], az = a[1];
-            if (ax<minX||ax>maxX||az<minZ||az>maxZ) continue;
-            placePumpAt(ax, az, st);
-        }
+        // 3) Совсем без геометрии — фоллбэк из двух штук (с проверкой запрещённых зон)
+        placeSimplePair(st, minX, maxX, minZ, maxZ, blocked);
     }
 
-    private List<int[]> anchorsAlongArea(PolyXZ area, FuelStation st, int limit) {
+    // ===== генерация якорей под навесом: плотная сетка =====
+    private List<int[]> anchorsFillUnderCanopy(PolyXZ area, FuelStation st, int limit) {
         ArrayList<int[]> out = new ArrayList<>();
-        if (st.lengthDir == Direction.EAST || st.lengthDir == Direction.WEST) {
-            int z0 = clampToInsideZ(area, area.cz);
-            int minX = area.minX + EDGE_MARGIN, maxX = area.maxX - EDGE_MARGIN;
-            if (minX > maxX) { out.add(new int[]{area.cx, z0}); return out; }
-            int start = minX + ((PUMP_SPACING/2));
-            for (int x = start; x <= maxX; x += PUMP_SPACING) {
-                if (area.contains(x, z0)) {
-                    out.add(new int[]{x, z0});
-                    if (out.size() >= limit) break;
-                }
-            }
-        } else {
-            int x0 = clampToInsideX(area, area.cx);
-            int minZ = area.minZ + EDGE_MARGIN, maxZ = area.maxZ - EDGE_MARGIN;
-            if (minZ > maxZ) { out.add(new int[]{x0, area.cz}); return out; }
-            int start = minZ + ((PUMP_SPACING/2));
-            for (int z = start; z <= maxZ; z += PUMP_SPACING) {
-                if (area.contains(x0, z)) {
-                    out.add(new int[]{x0, z});
-                    if (out.size() >= limit) break;
-                }
+
+        // Оси сетки: вдоль дороги (ux,uz) и поперёк (px,pz)
+        int px = -st.uz, pz = st.ux;
+
+        int xmin = area.minX + EDGE_MARGIN, xmax = area.maxX - EDGE_MARGIN;
+        int zmin = area.minZ + EDGE_MARGIN, zmax = area.maxZ - EDGE_MARGIN;
+
+        int bboxW = Math.max(0, xmax - xmin + 1);
+        int bboxH = Math.max(0, zmax - zmin + 1);
+        int rangeAlong  = (Math.max(bboxW, bboxH) / STEP_ALONG)  + 3;
+        int rangeAcross = (Math.max(bboxW, bboxH) / STEP_ACROSS) + 3;
+
+        // Центр сетки — центроид полигона
+        int cx = area.cx, cz = area.cz;
+
+        for (int s = -rangeAcross; s <= rangeAcross; s++) {
+            for (int t = -rangeAlong; t <= rangeAlong; t++) {
+                int x = cx + t*st.ux + s*px;
+                int z = cz + t*st.uz + s*pz;
+
+                // Футпринт из трёх точек (-1,0,+1 вдоль длины) должен быть внутри
+                int xL = x - st.ux, zL = z - st.uz;
+                int xC = x,         zC = z;
+                int xR = x + st.ux, zR = z + st.uz;
+
+                if (xC < xmin || xC > xmax || zC < zmin || zC > zmax) continue;
+                if (!area.contains(xL, zL)) continue;
+                if (!area.contains(xC, zC)) continue;
+                if (!area.contains(xR, zR)) continue;
+
+                out.add(new int[]{xC, zC});
+                if (out.size() >= limit) return out;
             }
         }
         return out;
     }
 
-    private int clampToInsideZ(PolyXZ area, int zPref) {
-        for (int d=0; d<=8; d++) {
-            if (area.contains(area.cx, zPref+d)) return zPref+d;
-            if (area.contains(area.cx, zPref-d)) return zPref-d;
+    // ===== якоря «кольцом» вокруг здания (если нет навеса) =====
+    private List<int[]> anchorsRingAroundBuilding(PolyXZ building, FuelStation st, int limit) {
+        ArrayList<int[]> out = new ArrayList<>();
+
+        int px = -st.uz, pz = st.ux;
+
+        // Чуть расширим bbox, чтобы был коридор снаружи
+        int xmin = building.minX - RING_WIDTH - EDGE_MARGIN;
+        int xmax = building.maxX + RING_WIDTH + EDGE_MARGIN;
+        int zmin = building.minZ - RING_WIDTH - EDGE_MARGIN;
+        int zmax = building.maxZ + RING_WIDTH + EDGE_MARGIN;
+
+        int bboxW = Math.max(0, xmax - xmin + 1);
+        int bboxH = Math.max(0, zmax - zmin + 1);
+        int rangeAlong  = (Math.max(bboxW, bboxH) / STEP_ALONG)  + 3;
+        int rangeAcross = (Math.max(bboxW, bboxH) / STEP_ACROSS) + 3;
+
+        int cx = building.cx, cz = building.cz;
+
+        int ring2 = RING_WIDTH * RING_WIDTH;
+
+        for (int s = -rangeAcross; s <= rangeAcross; s++) {
+            for (int t = -rangeAlong; t <= rangeAlong; t++) {
+                int x = cx + t*st.ux + s*px;
+                int z = cz + t*st.uz + s*pz;
+
+                // Футпринт из трёх точек должен быть СНАРУЖИ здания
+                int xL = x - st.ux, zL = z - st.uz;
+                int xC = x,         zC = z;
+                int xR = x + st.ux, zR = z + st.uz;
+
+                if (xC < xmin || xC > xmax || zC < zmin || zC > zmax) continue;
+                if (building.contains(xL, zL)) continue;
+                if (building.contains(xC, zC)) continue;
+                if (building.contains(xR, zR)) continue;
+
+                // И при этом быть «рядом» с границей (не дальше RING_WIDTH)
+                if (minDist2ToEdges(building, xL, zL) > ring2) continue;
+                if (minDist2ToEdges(building, xC, zC) > ring2) continue;
+                if (minDist2ToEdges(building, xR, zR) > ring2) continue;
+
+                out.add(new int[]{xC, zC});
+                if (out.size() >= limit) return out;
+            }
         }
-        return Math.max(area.minZ+1, Math.min(area.maxZ-1, zPref));
-    }
-    private int clampToInsideX(PolyXZ area, int xPref) {
-        for (int d=0; d<=8; d++) {
-            if (area.contains(xPref+d, area.cz)) return xPref+d;
-            if (area.contains(xPref-d, area.cz)) return xPref-d;
-        }
-        return Math.max(area.minX+1, Math.min(area.maxX-1, xPref));
+        return out;
     }
 
-    private void placeSimplePair(FuelStation st, int minX, int maxX, int minZ, int maxZ) {
-        int gap = PUMP_SPACING;
-        int ax1 = st.x - st.ux * gap, az1 = st.z - st.uz * gap;
-        int ax2 = st.x + st.ux * gap, az2 = st.z + st.uz * gap;
-        if (ax1>=minX&&ax1<=maxX&&az1>=minZ&&az1<=maxZ) placePumpAt(ax1, az1, st);
-        if (ax2>=minX&&ax2<=maxX&&az2>=minZ&&az2<=maxZ) placePumpAt(ax2, az2, st);
+    /** Минимальная квадрат дистанции от точки до рёбер полигона. */
+    private static int minDist2ToEdges(PolyXZ p, int x, int z) {
+        int best = Integer.MAX_VALUE;
+        for (int i=0, j=p.n-1; i<p.n; j=i++) {
+            int x1 = p.xs[j], z1 = p.zs[j];
+            int x2 = p.xs[i], z2 = p.zs[i];
+            int d2 = pointSegDist2(x, z, x1, z1, x2, z2);
+            if (d2 < best) best = d2;
+        }
+        return best;
+    }
+
+    /** Квадрат расстояния от точки до отрезка. */
+    private static int pointSegDist2(int px, int pz, int x1, int z1, int x2, int z2) {
+        int vx = x2 - x1, vz = z2 - z1;
+        int wx = px - x1, wz = pz - z1;
+        int c1 = vx*wx + vz*wz;
+        if (c1 <= 0) {
+            int dx = px - x1, dz = pz - z1; return dx*dx + dz*dz;
+        }
+        int c2 = vx*vx + vz*vz;
+        if (c2 <= c1) {
+            int dx = px - x2, dz = pz - z2; return dx*dx + dz*dz;
+        }
+        // проекция
+        double t = (double)c1 / (double)c2;
+        double projx = x1 + t*vx;
+        double projz = z1 + t*vz;
+        double dx = px - projx, dz = pz - projz;
+        return (int)Math.round(dx*dx + dz*dz);
     }
 
     // ===== установка одной колонки (в точке-«якоре») =====
@@ -582,7 +667,6 @@ public class FuelPumpGenerator {
     }
 
     // ===== высота рельефа (строго) =====
-
     /** Берём ИМЕННО уровень земли, не «верхний не-воздух»: store.grid → coords.terrainGrid → heightmap-1. */
     private int terrainYFromCoordsOrWorld(int x, int z, Integer hintY) {
         try {
@@ -613,7 +697,6 @@ public class FuelPumpGenerator {
     }
 
     // ===== утилиты проекции и геопривязки =====
-
     private static String optString(JsonObject o, String k) {
         try { return (o != null && o.has(k) && !o.get(k).isJsonNull()) ? o.get(k).getAsString() : null; }
         catch (Throwable ignore) { return null; }
@@ -628,5 +711,139 @@ public class FuelPumpGenerator {
         int x = (int)Math.round(centerX + dx);
         int z = (int)Math.round(centerZ + dz);
         return new int[]{x, z};
+    }
+
+    // ===== простой фоллбэк на 2 колонки по направлению дороги (с учётом блокировок) =====
+    private void placeSimplePair(FuelStation st, int minX, int maxX, int minZ, int maxZ, Set<Long> blocked) {
+        int gap = STEP_ALONG; // соблюдаем минимальный шаг, чтобы не пересекались
+        int ax1 = st.x - st.ux * gap, az1 = st.z - st.uz * gap;
+        int ax2 = st.x + st.ux * gap, az2 = st.z + st.uz * gap;
+        if (ax1>=minX&&ax1<=maxX&&az1>=minZ&&az1<=maxZ) {
+            if (canPlacePumpAt(ax1, az1, st, blocked)) {
+                placePumpAt(ax1, az1, st);
+                markForbiddenAroundPump(ax1, az1, st, (HashSet<Long>) blocked);
+            }
+        }
+        if (ax2>=minX&&ax2<=maxX&&az2>=minZ&&az2<=maxZ) {
+            if (canPlacePumpAt(ax2, az2, st, blocked)) {
+                placePumpAt(ax2, az2, st);
+                markForbiddenAroundPump(ax2, az2, st, (HashSet<Long>) blocked);
+            }
+        }
+    }
+
+    /** Центр relation/way: сначала center.lat/lon, иначе середина bounds. Вернёт null, если ничего нет. */
+    private int[] elementCenterXZ(JsonObject e,
+                                  double centerLat, double centerLng,
+                                  double east, double west, double north, double south,
+                                  int sizeMeters, int centerX, int centerZ) {
+        try {
+            if (e.has("center") && e.get("center").isJsonObject()) {
+                JsonObject c = e.getAsJsonObject("center");
+                if (c.has("lat") && c.has("lon")) {
+                    return latlngToBlock(
+                            c.get("lat").getAsDouble(), c.get("lon").getAsDouble(),
+                            centerLat, centerLng, east, west, north, south, sizeMeters, centerX, centerZ
+                    );
+                }
+            }
+            if (e.has("bounds") && e.get("bounds").isJsonObject()) {
+                JsonObject b = e.getAsJsonObject("bounds");
+                if (b.has("minlat") && b.has("minlon") && b.has("maxlat") && b.has("maxlon")) {
+                    double minlat = b.get("minlat").getAsDouble();
+                    double minlon = b.get("minlon").getAsDouble();
+                    double maxlat = b.get("maxlat").getAsDouble();
+                    double maxlon = b.get("maxlon").getAsDouble();
+                    double clat = (minlat + maxlat) / 2.0;
+                    double clon = (minlon + maxlon) / 2.0;
+                    return latlngToBlock(
+                            clat, clon,
+                            centerLat, centerLng, east, west, north, south, sizeMeters, centerX, centerZ
+                    );
+                }
+            }
+        } catch (Throwable ignore) {}
+        return null;
+    }
+
+    /** Полигон из geometry; если его нет — прямоугольник по bounds. Вернёт null, если нет обоих. */
+    private PolyXZ polyFromGeometryOrBounds(JsonObject e,
+                                            double centerLat, double centerLng,
+                                            double east, double west, double north, double south,
+                                            int sizeMeters, int centerX, int centerZ) {
+        try {
+            JsonArray g = (e.has("geometry") && e.get("geometry").isJsonArray())
+                    ? e.getAsJsonArray("geometry") : null;
+            if (g != null && g.size() >= 4) {
+                int[] xs = new int[g.size()], zs = new int[g.size()];
+                for (int i=0;i<g.size();i++){
+                    JsonObject p = g.get(i).getAsJsonObject();
+                    int[] xz = latlngToBlock(
+                            p.get("lat").getAsDouble(), p.get("lon").getAsDouble(),
+                            centerLat, centerLng, east, west, north, south, sizeMeters, centerX, centerZ
+                    );
+                    xs[i]=xz[0]; zs[i]=xz[1];
+                }
+                return new PolyXZ(xs, zs);
+            }
+            if (e.has("bounds") && e.get("bounds").isJsonObject()) {
+                JsonObject b = e.getAsJsonObject("bounds");
+                if (b.has("minlat") && b.has("minlon") && b.has("maxlat") && b.has("maxlon")) {
+                    double minlat = b.get("minlat").getAsDouble();
+                    double minlon = b.get("minlon").getAsDouble();
+                    double maxlat = b.get("maxlat").getAsDouble();
+                    double maxlon = b.get("maxlon").getAsDouble();
+
+                    int[] a = latlngToBlock(minlat, minlon, centerLat, centerLng, east, west, north, south, sizeMeters, centerX, centerZ);
+                    int[] b1= latlngToBlock(minlat, maxlon, centerLat, centerLng, east, west, north, south, sizeMeters, centerX, centerZ);
+                    int[] c = latlngToBlock(maxlat, maxlon, centerLat, centerLng, east, west, north, south, sizeMeters, centerX, centerZ);
+                    int[] d = latlngToBlock(maxlat, minlon, centerLat, centerLng, east, west, north, south, sizeMeters, centerX, centerZ);
+                    int[] xs = new int[]{a[0], b1[0], c[0], d[0]};
+                    int[] zs = new int[]{a[1],  b1[1], c[1], d[1]};
+                    return new PolyXZ(xs, zs);
+                }
+            }
+        } catch (Throwable ignore) {}
+        return null;
+    }
+
+    // ======== анти-слипание: проверка и маркировка «санитарной зоны» ========
+    private static long packXZ(int x, int z) {
+        return (((long)x) << 32) ^ (z & 0xffffffffL);
+    }
+
+    /** Можно ли поставить колонку в (ax,az), учитывая блокировки вокруг всех трёх сегментов. */
+    private boolean canPlacePumpAt(int ax, int az, FuelStation st, Set<Long> blocked) {
+        int[][] pts = new int[][]{
+                {ax - st.ux, az - st.uz}, // левый
+                {ax,         az        }, // центр
+                {ax + st.ux, az + st.uz}  // правый
+        };
+        for (int[] p : pts) {
+            int px = p[0], pz = p[1];
+            for (int dx = -CLEAR_GAP; dx <= CLEAR_GAP; dx++) {
+                for (int dz = -CLEAR_GAP; dz <= CLEAR_GAP; dz++) {
+                    if (blocked.contains(packXZ(px + dx, pz + dz))) return false;
+                }
+            }
+        }
+        return true;
+    }
+
+    /** Помечаем квадратики CLEAR_GAP×CLEAR_GAP вокруг каждого из трёх сегментов как занятые. */
+    private void markForbiddenAroundPump(int ax, int az, FuelStation st, HashSet<Long> blocked) {
+        int[][] pts = new int[][]{
+                {ax - st.ux, az - st.uz},
+                {ax,         az        },
+                {ax + st.ux, az + st.uz}
+        };
+        for (int[] p : pts) {
+            int px = p[0], pz = p[1];
+            for (int dx = -CLEAR_GAP; dx <= CLEAR_GAP; dx++) {
+                for (int dz = -CLEAR_GAP; dz <= CLEAR_GAP; dz++) {
+                    blocked.add(packXZ(px + dx, pz + dz));
+                }
+            }
+        }
     }
 }

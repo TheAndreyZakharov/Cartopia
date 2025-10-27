@@ -144,8 +144,8 @@ public class CartopiaPipeline {
             lighthouseGen.generate();
             broadcast(level, "Маяки готовы.");
 
-
 // Ветряки - Невинномыск
+
 
             // Бензоколонки на АЗС
             broadcast(level, "Старт генерации бензоколонок…");
