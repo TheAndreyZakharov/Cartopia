@@ -158,10 +158,14 @@ public class CartopiaPipeline {
             ChimneyGenerator chGen = new ChimneyGenerator(level, coords, store);
             chGen.generate();
             broadcast(level, "Трубы готовы.");
+            // Вышки/мачты (communication/lighting и прочие небилдинги)
+            broadcast(level, "Старт генерации вышек…");
+            TowerMastGenerator tmGen = new TowerMastGenerator(level, coords, store);
+            tmGen.generate();
+            broadcast(level, "Вышки готовы.");
 
 
 
-// антенны сотовые и тп tower:type	communication, mast
 
 // Солнечные батареи - 9.35444 78.38444
 
@@ -203,7 +207,7 @@ public class CartopiaPipeline {
 // Десткие площадки
 // Места по типу театров под открытым небом и тп
 // Кладбища
-// Урны, Места мусорных баков
+// Урны, Места мусорных баков Tags amenity	урны - waste_basket, мысорки? - waste_disposal, recycling
 
 // =============================================
 
@@ -212,7 +216,7 @@ public class CartopiaPipeline {
 // Надземные трубы
 // камеры наблюдения и скорости: highway=speed_camera, видеонаблюдение: man_made=surveillance (+ surveillance:type=camera) и тп камеры
 // успокоители трафика, лежач полицейские: traffic_calming=table|hump|bump|cushion|chicane|island (ways) - полублоками, столбиками
-// паркоматы: amenity=parking_meter
+// паркоматы: amenity=parking_meter, amenity	vending_machine, parking_tickets
 // почтовые ящики: amenity=post_box
 // Пожарные гидранты
 // Информационнын стенды, гиды, знаки
