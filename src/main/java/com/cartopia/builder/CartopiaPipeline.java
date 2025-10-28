@@ -168,14 +168,18 @@ public class CartopiaPipeline {
             UtilityTankTowerGenerator tankGen = new UtilityTankTowerGenerator(level, coords, store);
             tankGen.generate();
             broadcast(level, "Башни-резервуары готовы.");
+            // Солнечные панели 9.35444 78.38444
+            broadcast(level, "Старт генерации солнечных зон…");
+            SolarPanelGenerator solarGen = new SolarPanelGenerator(level, coords, store);
+            solarGen.generate();
+            broadcast(level, "Солнечные зоны готовы.");
 
 
 
+// зоны - Подстанции - substation, transmission и все остальные
 
 
-// Солнечные батареи - 9.35444 78.38444
-
-// Опоры ЛЭП разные + провода по линиям (забором черным) , power - Высоковольтные линии
+// Опоры ЛЭП разные столбы + провода по линиям (забором черным) , power - Высоковольтные линии
 
 
 
