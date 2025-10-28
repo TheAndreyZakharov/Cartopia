@@ -153,15 +153,20 @@ public class CartopiaPipeline {
             WatchtowerGenerator wtowerGen = new WatchtowerGenerator(level, coords, store);
             wtowerGen.generate();
             broadcast(level, "Вышки готовы.");
+            // Трубы (дымоходы)
+            broadcast(level, "Старт генерации труб…");
+            ChimneyGenerator chGen = new ChimneyGenerator(level, coords, store);
+            chGen.generate();
+            broadcast(level, "Трубы готовы.");
 
 
 
-// трубы - chimney, mast и тп
-// антенны сотовые и тп
+// антенны сотовые и тп tower:type	communication, mast
 
-// Опоры ЛЭП разные + провода по линиям, power - Высоковольтные линии
+// Солнечные батареи - 9.35444 78.38444
 
-// Солнечные батареи
+// Опоры ЛЭП разные + провода по линиям (забором черным) , power - Высоковольтные линии
+
 
 
             // Бензоколонки на АЗС
@@ -226,7 +231,7 @@ public class CartopiaPipeline {
 // =============================================
 
 // Места строек отдельно оформить - заборы, башенные краны, кучи кирпичей, досок, песка
-// Краны башенные отдельно
+// Краны башенные отдельно  man_made	crane , некоторые как зоны отмечены - crane:mobile	rail
 
 // =============================================
 
