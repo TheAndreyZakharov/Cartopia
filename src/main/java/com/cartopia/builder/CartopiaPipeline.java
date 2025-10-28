@@ -163,10 +163,15 @@ public class CartopiaPipeline {
             TowerMastGenerator tmGen = new TowerMastGenerator(level, coords, store);
             tmGen.generate();
             broadcast(level, "Вышки готовы.");
+            // Башни-резервуары
+            broadcast(level, "Старт генерации башен-резервуаров…");
+            UtilityTankTowerGenerator tankGen = new UtilityTankTowerGenerator(level, coords, store);
+            tankGen.generate();
+            broadcast(level, "Башни-резервуары готовы.");
 
 
 
-// водонапорные башни и тп поднятые на опорах (без тега билдинг), сделать круглыми на основе смотровых
+
 
 // Солнечные батареи - 9.35444 78.38444
 
