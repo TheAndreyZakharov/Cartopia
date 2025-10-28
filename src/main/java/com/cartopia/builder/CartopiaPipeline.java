@@ -158,7 +158,7 @@ public class CartopiaPipeline {
             ChimneyGenerator chGen = new ChimneyGenerator(level, coords, store);
             chGen.generate();
             broadcast(level, "Трубы готовы.");
-            // Вышки/мачты (communication/lighting и прочие небилдинги)
+            // Вышки/мачты
             broadcast(level, "Старт генерации вышек…");
             TowerMastGenerator tmGen = new TowerMastGenerator(level, coords, store);
             tmGen.generate();
@@ -166,6 +166,7 @@ public class CartopiaPipeline {
 
 
 
+// водонапорные башни и тп поднятые на опорах (без тега билдинг), сделать круглыми на основе смотровых
 
 // Солнечные батареи - 9.35444 78.38444
 

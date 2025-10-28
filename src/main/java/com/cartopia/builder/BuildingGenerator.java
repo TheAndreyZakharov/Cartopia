@@ -44,6 +44,7 @@ public class BuildingGenerator {
     /** Если не указан материал — дефолтные блоки */
     private static final String DEFAULT_FACADE_BLOCK = "minecraft:light_gray_concrete";
     private static final String DEFAULT_ROOF_BLOCK   = "minecraft:stone_bricks";
+    private static final String LATTICE_BLOCK_ID = "minecraft:iron_bars";
 
     /** высота этажа (блоков) */
     private static final int LEVEL_HEIGHT = 4;
@@ -171,6 +172,7 @@ public class BuildingGenerator {
                 {"walnut",            "minecraft:dark_oak_planks"},
                 {"chestnut",          "minecraft:dark_oak_planks"},
                 {"elm",               "minecraft:oak_planks"},
+                {"lattice", LATTICE_BLOCK_ID},
         });
 
         // ----- ROOF materials -----
@@ -211,6 +213,7 @@ public class BuildingGenerator {
                 {"shingle_wood",     "minecraft:oak_planks"},
                 {"shake",            "minecraft:spruce_planks"},
                 {"cedar_shake",      "minecraft:spruce_planks"},
+                {"lattice", LATTICE_BLOCK_ID},
         });
 
         putAll(COLOR_BASE_FACADE, new Object[][]{
@@ -708,7 +711,8 @@ public class BuildingGenerator {
     // Ключи внешности, которые наследуем
     private static final String[] FAC_MAT_KEYS = new String[]{
             "building:material","material","facade:material","building:facade:material",
-            "cladding","building:cladding","facade:cladding","wall:material","building:wall:material"
+            "cladding","building:cladding","facade:cladding","wall:material","building:wall:material",
+            "tower:construction"
     };
     private static final String[] FAC_COL_KEYS = new String[]{
             "building:colour","building:color","colour","color",
@@ -720,6 +724,10 @@ public class BuildingGenerator {
     private static final String[] ROOF_COL_KEYS = new String[]{
             "roof:colour","roof:color"
     };
+
+    // Итоговые (разрешённые) блоки, чтобы части могли наследовать ровно тот же материал:
+    private static final String RES_FACADE_KEY = "cartopia:facade_block";
+    private static final String RES_ROOF_KEY   = "cartopia:roof_block";
 
     private boolean hasNonBlank(JsonObject o, String key){
         if (o == null || !o.has(key) || o.get(key).isJsonNull()) return false;
@@ -741,6 +749,22 @@ public class BuildingGenerator {
         }
     }
 
+     
+    /**
+     * Явно указано, что конструкция решетчатая (lattice) —
+     * либо в tower:construction, либо в одном из ключей материала фасада.
+     */
+    private static boolean isLatticeDeclared(JsonObject tags) {
+        if (tags == null) return false;
+        String tc = normalize(optString(tags, "tower:construction"));
+        if (tc != null && tc.contains("lattice")) return true;
+        for (String k : FAC_MAT_KEYS) {
+            String v = normalize(optString(tags, k));
+            if (v != null && v.contains("lattice")) return true;
+        }
+        return false;
+    }
+
     private static Stream<JsonObject> stream(JsonArray arr) {
         if (arr == null) return Stream.empty();
         return StreamSupport
@@ -753,7 +777,6 @@ public class BuildingGenerator {
     private JsonObject inheritAppearanceFromParent(JsonObject partTags, Set<Long> partFill){
         if (partTags == null || partFill == null || partFill.isEmpty()) return partTags;
 
-        // Сначала быстрый тест по центру (оставим — вдруг сработает)
         int[] bb = bounds(partFill);
         int cx = (bb[0] + bb[2]) >> 1, cz = (bb[1] + bb[3]) >> 1;
         long cKey = BlockPos.asLong(cx, 0, cz);
@@ -762,24 +785,30 @@ public class BuildingGenerator {
             if (sh.fill == null || sh.fill.isEmpty()) continue;
 
             boolean matches = sh.fill.contains(cKey);
-
-            // Надёжный фолбэк: есть ли пересечение областей?
             if (!matches) {
-                for (long k : partFill) {
-                    if (sh.fill.contains(k)) { matches = true; break; }
-                }
+                for (long k : partFill) { if (sh.fill.contains(k)) { matches = true; break; } }
             }
+            if (!matches) continue;
 
-            if (matches) {
-                JsonObject merged = partTags.deepCopy();
-                // Фасад
-                copyIfMissing(merged, sh.tags, FAC_MAT_KEYS);
-                copyIfMissing(merged, sh.tags, FAC_COL_KEYS);
-                // Крыша (на всякий случай)
-                copyIfMissing(merged, sh.tags, ROOF_MAT_KEYS);
-                copyIfMissing(merged, sh.tags, ROOF_COL_KEYS);
-                return merged;
+            JsonObject merged = partTags.deepCopy();
+
+            // Фасад/цвет — как было
+            copyIfMissing(merged, sh.tags, FAC_MAT_KEYS);
+            copyIfMissing(merged, sh.tags, FAC_COL_KEYS);
+            // Крыша — как было
+            copyIfMissing(merged, sh.tags, ROOF_MAT_KEYS);
+            copyIfMissing(merged, sh.tags, ROOF_COL_KEYS);
+
+            // NEW: если у части СВОИХ материалов/цветов нет — унаследуем уже-решённые блоки
+            boolean partHasFacade = hasAnyNonBlank(merged, FAC_MAT_KEYS) || hasAnyNonBlank(merged, FAC_COL_KEYS);
+            if (!partHasFacade && hasNonBlank(sh.tags, RES_FACADE_KEY)) {
+                merged.add(RES_FACADE_KEY, sh.tags.get(RES_FACADE_KEY));
             }
+            boolean partHasRoof = hasAnyNonBlank(merged, ROOF_MAT_KEYS) || hasAnyNonBlank(merged, ROOF_COL_KEYS);
+            if (!partHasRoof && hasNonBlank(sh.tags, RES_ROOF_KEY)) {
+                merged.add(RES_ROOF_KEY, sh.tags.get(RES_ROOF_KEY));
+            }
+            return merged;
         }
         return partTags;
     }
@@ -938,6 +967,153 @@ public class BuildingGenerator {
                 .map(w -> w.id)
                 .findFirst()
                 .orElse(valid.get(valid.size() - 1).id);
+    }
+
+    private String pickWeightedDefaultFacade(long seed) {
+        class W { final String id; final double w; W(String id, double w){ this.id=id; this.w=w; } }
+        List<W> options = Arrays.asList(
+            new W("minecraft:polished_diorite",      0.20),
+            new W("minecraft:diorite",               0.20),
+            new W("minecraft:quartz_bricks",         0.20),
+            new W("minecraft:bricks",                0.05),
+            new W("minecraft:end_stone_bricks",      0.05),
+            new W("minecraft:light_gray_concrete",   0.05),
+            new W("minecraft:calcite",               0.05),
+            new W("minecraft:bone_block",            0.05),
+            new W("minecraft:cut_sandstone",         0.05),
+            new W("minecraft:white_terracotta",      0.05),
+            new W("minecraft:light_gray_terracotta", 0.05)
+        );
+        List<W> valid = options.stream()
+                .filter(w -> ForgeRegistries.BLOCKS.getValue(ResourceLocation.tryParse(w.id)) != null)
+                .collect(Collectors.toList());
+        if (valid.isEmpty()) return DEFAULT_FACADE_BLOCK;
+        double sum = valid.stream().mapToDouble(w -> w.w).sum();
+        java.util.Random rnd = new java.util.Random(seed);
+        double r = rnd.nextDouble() * sum;
+        double acc = 0.0;
+        for (W w : valid){ acc += w.w; if (r <= acc) return w.id; }
+        return valid.get(valid.size() - 1).id;
+    }
+
+    private String pickFacadeBlock(JsonObject tags, Set<Long> fill) {
+        // HIGH-PRIORITY: любая явная lattice (материал или tower:construction) → фасад = решётка
+        if (isLatticeDeclared(tags)) {
+            if (!hasNonBlank(tags, RES_FACADE_KEY) || !LATTICE_BLOCK_ID.equals(optString(tags, RES_FACADE_KEY))) {
+                tags.addProperty(RES_FACADE_KEY, LATTICE_BLOCK_ID);
+            }
+            return LATTICE_BLOCK_ID;
+        }        
+        // 0) если часть/здание уже не пусто по материалам/цветам — обычная логика ниже
+        // 1) если есть уже готовое «решённое» значение и своих материалов/цветов НЕТ — вернём его
+        if (hasNonBlank(tags, RES_FACADE_KEY)
+                && !hasAnyNonBlank(tags, FAC_MAT_KEYS)
+                && !hasAnyNonBlank(tags, FAC_COL_KEYS)) {
+            return optString(tags, RES_FACADE_KEY);
+        }
+
+        // 1.a) Спец-случай: башни-решётки (tower:construction=lattice) → фасад = решётка,
+        //     но не перебиваем явно заданные материал/цвет
+        if (!hasAnyNonBlank(tags, FAC_MAT_KEYS) && !hasAnyNonBlank(tags, FAC_COL_KEYS)) {
+            String tcon = normalize(optString(tags, "tower:construction"));
+            if (tcon != null && tcon.contains("lattice")) {
+                String latticeId = LATTICE_BLOCK_ID;
+                if (!hasNonBlank(tags, RES_FACADE_KEY)) tags.addProperty(RES_FACADE_KEY, latticeId);
+                return latticeId;
+            }
+        }
+
+        // 2) обычный выбор (как в твоём pickFacadeBlock), НО для "полностью пустых" — детерминированный дефолт
+        String id;
+        {
+            // Вырезка из твоего pickFacadeBlock(tags) с концовкой:
+            // - если mat/col заданы → как было;
+            // - если вообще ничего нет → ДЕТЕРМИНИРОВАННЫЙ дефолт
+            String mat = normalize(
+                optString(tags, "building:material"),
+                optString(tags, "material"),
+                optString(tags, "facade:material"),
+                optString(tags, "building:facade:material"),
+                optString(tags, "cladding"),
+                optString(tags, "building:cladding"),
+                optString(tags, "facade:cladding"),
+                optString(tags, "wall:material"),
+                optString(tags, "building:wall:material")
+            );
+            String col = normalize(
+                optString(tags, "building:colour"),
+                optString(tags, "building:color"),
+                optString(tags, "colour"),
+                optString(tags, "color"),
+                optString(tags, "facade:colour"),
+                optString(tags, "facade:color"),
+                optString(tags, "building:facade:colour"),
+                optString(tags, "building:facade:color")
+            );
+
+            if (mat == null) {
+                String btype = normalize(optString(tags, "building"));
+                if (isLikelyWoodenType(btype)) mat = "wood";
+            }
+
+            if (mat != null && col != null) {
+                if (METAL_MATERIALS.contains(mat) || STONE_LIKE_MATERIALS.contains(mat)) {
+                    id = FACADE_MATERIAL.getOrDefault(mat, DEFAULT_FACADE_BLOCK);
+                } else {
+                    String family = familyFromMaterial(mat, false);
+                    if (family != null && familySupportsColor(family)) {
+                        String fallback = FACADE_MATERIAL.getOrDefault(mat,
+                                COLOR_BASE_FACADE.getOrDefault("default", DEFAULT_FACADE_BLOCK));
+                        String colored = resolveColoredBlockForFamily(family, col, fallback);
+                        id = (colored != null) ? colored
+                                : FACADE_MATERIAL.getOrDefault(mat, DEFAULT_FACADE_BLOCK);
+                    } else {
+                        id = FACADE_MATERIAL.getOrDefault(mat, DEFAULT_FACADE_BLOCK);
+                    }
+                }
+            } else if (mat != null) {
+                id = FACADE_MATERIAL.getOrDefault(mat, DEFAULT_FACADE_BLOCK);
+            } else if (col != null) {
+                String base = COLOR_BASE_FACADE.getOrDefault("default", DEFAULT_FACADE_BLOCK);
+                id = colorToBlock(col, base);
+            } else {
+                // ПУСТО: детерминированный дефолт от геометрии здания
+                long seed = (fill != null && !fill.isEmpty()) ? seedFromFill(fill) : System.identityHashCode(tags);
+                id = pickWeightedDefaultFacade(seed);
+            }
+        }
+
+        // 3) кешируем результат, чтобы части могли унаследовать ровно его
+        if (!hasNonBlank(tags, RES_FACADE_KEY)) tags.addProperty(RES_FACADE_KEY, id);
+        return id;
+    }
+
+    private String pickRoofBlock(JsonObject tags, Set<Long> fill) {
+        // HIGH-PRIORITY: любая явная lattice (материал или tower:construction) → крыша = решётка
+        if (isLatticeDeclared(tags)) {
+            if (!hasNonBlank(tags, RES_ROOF_KEY) || !LATTICE_BLOCK_ID.equals(optString(tags, RES_ROOF_KEY))) {
+                tags.addProperty(RES_ROOF_KEY, LATTICE_BLOCK_ID);
+            }
+            return LATTICE_BLOCK_ID;
+        }        
+        if (hasNonBlank(tags, RES_ROOF_KEY)
+                && !hasNonBlank(tags, "roof:material")
+                && !hasNonBlank(tags, "roof:colour") && !hasNonBlank(tags, "roof:color")) {
+            return optString(tags, RES_ROOF_KEY);
+        }
+        // Спец-случай: башни-решётки (tower:construction=lattice) → крыша = решётка,
+        // если не задан собственный материал/цвет крыши
+        if (!hasNonBlank(tags, "roof:material") && !hasNonBlank(tags, "roof:colour") && !hasNonBlank(tags, "roof:color")) {
+            String tconRoof = normalize(optString(tags, "tower:construction"));
+            if (tconRoof != null && tconRoof.contains("lattice")) {
+                String roofLatticeId = LATTICE_BLOCK_ID;
+                if (!hasNonBlank(tags, RES_ROOF_KEY)) tags.addProperty(RES_ROOF_KEY, roofLatticeId);
+                return roofLatticeId;
+            }
+        }
+        String id = pickRoofBlock(tags); // твой существующий метод — он и так детерминированный
+        if (!hasNonBlank(tags, RES_ROOF_KEY)) tags.addProperty(RES_ROOF_KEY, id);
+        return id;
     }
 
     // --- широковещалка
@@ -1199,6 +1375,7 @@ public class BuildingGenerator {
                                   eff, fill, elements,
                                   centerLat, centerLng, east, west, north, south,
                                   sizeMeters, centerX, centerZ);
+                        effAug = inheritAppearanceFromParent(effAug, fill); 
 
                         // NEW: опоры для «парящего» контура здания (если начинается не с земли)
                         int moForBuilding = effectiveMinOffsetForPart(effAug);
@@ -1253,6 +1430,7 @@ public class BuildingGenerator {
                                       tags, fill, elements,
                                       centerLat, centerLng, east, west, north, south,
                                       sizeMeters, centerX, centerZ);
+                            eff = inheritAppearanceFromParent(eff, fill);
 
                             // NEW: опоры для «парящего» контура здания (если начинается не с земли)
                             int moForBuilding2 = effectiveMinOffsetForPart(eff);
@@ -1478,6 +1656,8 @@ public class BuildingGenerator {
                         JsonObject eff =
                             augmentHeightFromInteriorUsingHints(tags, fill, interiorHints, centerLat, centerLng, east, west, north, south, sizeMeters, centerX, centerZ);
 
+                        eff = inheritAppearanceFromParent(eff, fill);
+                        
                         // NEW: опоры для «парящего» relation-контуры здания (stream)
                         int moForRel = effectiveMinOffsetForPart(eff);
                         if (moForRel > 0) {
@@ -1525,6 +1705,8 @@ public class BuildingGenerator {
                 JsonObject eff =
                     augmentHeightFromInteriorUsingHints(tags, fill, interiorHints, centerLat, centerLng, east, west, north, south, sizeMeters, centerX, centerZ);
 
+                eff = inheritAppearanceFromParent(eff, fill);
+                
                 // NEW: опоры для «парящего» way-контуры здания (stream)
                 int moForWay = effectiveMinOffsetForPart(eff);
                 if (moForWay > 0) {
@@ -1566,6 +1748,8 @@ public class BuildingGenerator {
                 Shell sh = new Shell();
                 sh.fill = fill;
                 sh.tags = (mp.tags != null ? mp.tags : tags).deepCopy();
+                pickFacadeBlock(sh.tags, sh.fill); // кеширует RES_FACADE_KEY
+                pickRoofBlock(sh.tags, sh.fill);   // кеширует RES_ROOF_KEY
                 parentShells.add(sh);
             }
         } catch (Exception ex) {
@@ -1591,6 +1775,8 @@ public class BuildingGenerator {
                 Shell sh = new Shell();
                 sh.fill = fill;
                 sh.tags = tags.deepCopy();
+                pickFacadeBlock(sh.tags, sh.fill); // кеширует RES_FACADE_KEY
+                pickRoofBlock(sh.tags, sh.fill);   // кеширует RES_ROOF_KEY
                 parentShells.add(sh);
             }
         } catch (Exception ex) {
@@ -1724,6 +1910,8 @@ public class BuildingGenerator {
             Shell sh = new Shell();
             sh.fill = fill;
             sh.tags = (mp.tags != null ? mp.tags : tags).deepCopy();
+            pickFacadeBlock(sh.tags, sh.fill); // кеширует RES_FACADE_KEY
+            pickRoofBlock(sh.tags, sh.fill);   // кеширует RES_ROOF_KEY
             parentShells.add(sh);
         }
 
@@ -1744,6 +1932,8 @@ public class BuildingGenerator {
             Shell sh = new Shell();
             sh.fill = fill;
             sh.tags = tags.deepCopy();
+            pickFacadeBlock(sh.tags, sh.fill); // кеширует RES_FACADE_KEY
+            pickRoofBlock(sh.tags, sh.fill);   // кеширует RES_ROOF_KEY
             parentShells.add(sh);
         }
     }
@@ -3772,7 +3962,11 @@ public class BuildingGenerator {
         return bestId;
     }
 
+    @SuppressWarnings("unused")
     private String pickFacadeBlock(JsonObject tags) {
+        if (hasLatticeConstruction(tags)) {
+            return LATTICE_BLOCK_ID; // башня/мачта/опора решётчатая → железные решётки
+        }
         String mat = normalize(
             optString(tags, "building:material"),
             optString(tags, "material"),
@@ -3863,6 +4057,9 @@ public class BuildingGenerator {
     }
 
     private String pickRoofBlock(JsonObject tags) {
+        if (hasLatticeConstruction(tags)) {
+            return LATTICE_BLOCK_ID; // и «крыша» для таких объектов тоже решётчатая
+        }
         String mat = normalize(optString(tags, "roof:material"));
         String col = normalize(optString(tags, "roof:colour"));
 
@@ -4568,9 +4765,13 @@ public class BuildingGenerator {
         }
 
         // --- сохраняем id фасада, чтобы понимать «стекло это или нет»
-        String facadeId = pickFacadeBlock(tags);
+        // String facadeId = pickFacadeBlock(tags);
+        // Block facade = resolveBlock(facadeId);
+        // Block roof   = resolveBlock(pickRoofBlock(tags));
+
+        String facadeId = pickFacadeBlock(tags, fill);
         Block facade = resolveBlock(facadeId);
-        Block roof   = resolveBlock(pickRoofBlock(tags));
+        Block roof   = resolveBlock(pickRoofBlock(tags, fill));
 
         // если часть стартует выше земли — ведём «подошву» вниз (не относится к навесам)
         if (shouldExtendDownToGround(tags) && minOffset > 0) {
@@ -4796,6 +4997,16 @@ public class BuildingGenerator {
         if (o == null) return false;
         for (String k : keys) if (o.has(k)) return true;
         return false;
+    }
+
+    private boolean hasAnyNonBlank(JsonObject o, String... keys){
+        if (o == null) return false;
+        for (String k : keys) if (hasNonBlank(o, k)) return true;
+        return false;
+    }
+    private long seedFromFill(Set<Long> fill){
+        int[] bb = bounds(fill);
+        return (((long)bb[0])<<48) ^ (((long)bb[1])<<32) ^ (((long)bb[2])<<16) ^ (long)bb[3];
     }
 
     // relation.tags ⊕ outer-ways.tags (relation главнее; заполняем только отсутствующие)
@@ -5529,5 +5740,35 @@ public class BuildingGenerator {
         int lv = (int)Math.max(1, Math.ceil(hBlocks / (double)LEVEL_HEIGHT));
         out.addProperty("building:levels", lv);
         return out;
+    }
+
+    /** true, если объект явно заявлен как решётчатая конструкция (OSM-стиль tower/mast/pole). */
+    private boolean hasLatticeConstruction(JsonObject tags) {
+        if (tags == null) return false;
+        // Проверяем типичные ключи-носители «конструкции»
+        String[] keys = new String[]{
+            "tower:construction",   // основной для башен/мачт
+            "mast:construction",    // иногда так
+            "pole:construction",    // встречается на опорах
+            "structure",            // редкий, но попадается
+            "support:structure"     // редкий вариант
+        };
+        for (String k : keys) {
+            if (hasNonBlank(tags, k)) {
+                String v = normalize(optString(tags, k));
+                if ("lattice".equals(v)) return true;
+            }
+        }
+        // На всякий случай: любое *_construction=lattice
+        try {
+            for (Map.Entry<String, JsonElement> e : tags.entrySet()) {
+                String k = e.getKey();
+                if (k != null && k.endsWith(":construction")) {
+                    String v = normalize(optString(tags, k));
+                    if ("lattice".equals(v)) return true;
+                }
+            }
+        } catch (Throwable ignore) {}
+        return false;
     }
 }
