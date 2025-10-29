@@ -44,6 +44,10 @@ public class FenceAndBarrierGenerator {
     private final List<GatePoint> gatePoints = new ArrayList<>();
     private final List<GatePoint> gapPoints  = new ArrayList<>(); // «проезд/заезд» → разрыв
 
+    // NO-FENCE: клетки, где запрещено ставить ограждения (мосты/туннели, дороги на них)
+    private final Set<Long> noFenceMask = new HashSet<>();
+    private static final int NOFENCE_BUFFER = 2; // радиус (в блоках) по обе стороны линии
+
     // ===== Геометрия зон =====
     private static final class Ring {
         final int[] xs, zs; final int n;
@@ -151,6 +155,11 @@ public class FenceAndBarrierGenerator {
                         // Пропускаем здания — тут не работаем по building*
                         if (hasAnyKey(tags, k -> k.startsWith("building"))) continue;
 
+                        // === NO-FENCE MASK: мосты/туннели и дороги на них
+                        if (isBridgeOrTunnel(tags) && hasGeometry(e)) {
+                            markNoFenceAlongGeometry(e, centerLat, centerLng, east, west, north, south, sizeMeters, centerX, centerZ);
+                        }
+
                         // 1b. Линейные барьеры (включая guard_rail, jersey_barrier)
                         if (isBarrierLine(tags) && hasGeometry(e)) {
                             BarrierLine bl = toBarrierLine(e, centerLat, centerLng, east, west, north, south, sizeMeters, centerX, centerZ);
@@ -184,6 +193,11 @@ public class FenceAndBarrierGenerator {
 
                     if (hasAnyKey(tags, k -> k.startsWith("building"))) continue;
 
+                    // === NO-FENCE MASK: мосты/туннели и дороги на них
+                    if (isBridgeOrTunnel(tags) && hasGeometry(e)) {
+                        markNoFenceAlongGeometry(e, centerLat, centerLng, east, west, north, south, sizeMeters, centerX, centerZ);
+                    }
+                    
                     if (isBarrierLine(tags) && hasGeometry(e)) {
                         BarrierLine bl = toBarrierLine(e, centerLat, centerLng, east, west, north, south, sizeMeters, centerX, centerZ);
                         if (bl != null) barriers.add(bl);
@@ -431,6 +445,9 @@ public class FenceAndBarrierGenerator {
         for (int idx=0; idx<pts.size(); idx++) {
             int x = pts.get(idx)[0], z = pts.get(idx)[1];
             if (x < wMinX || x > wMaxX || z < wMinZ || z > wMaxZ) continue;
+
+            // <<< ГЛАВНЫЙ ФИЛЬТР: НИЧЕГО НЕ СТАВИМ на мостах/в туннелях >>>
+            if (noFenceAt(x, z)) continue;
 
             boolean isGate = nearPoint(x, z, gatePoints);
             boolean isGap  = nearPoint(x, z, gapPoints);
@@ -688,6 +705,87 @@ public class FenceAndBarrierGenerator {
             }
         } catch (Throwable ignore) {}
         return false;
+    }
+
+private boolean truthy(String v){
+    if (v == null) return false;
+    v = v.trim().toLowerCase(Locale.ROOT);
+    return !v.isEmpty() && !"no".equals(v);
+}
+
+/** Является ли объект мостом/туннелем ИЛИ дорогой на мосту/в туннеле */
+private boolean isBridgeOrTunnel(JsonObject t){
+    if (t == null) return false;
+    String highway = low(optString(t,"highway"));
+    String railway = low(optString(t,"railway"));
+    String bridge  = low(optString(t,"bridge"));
+    String tunnel  = low(optString(t,"tunnel"));
+    String manmade = low(optString(t,"man_made"));
+    String rtype   = low(optString(t,"type")); // relation type=bridge
+
+    boolean onWay   = (highway != null || railway != null);
+    boolean isBridge = truthy(bridge) || "viaduct".equals(bridge) || "aqueduct".equals(bridge) || "boardwalk".equals(bridge)
+                       || "bridge".equals(manmade) || "bridge".equals(rtype);
+    boolean isTunnel = truthy(tunnel) || "culvert".equals(tunnel) || "building_passage".equals(tunnel);
+
+    // «дорога на мосту/в туннеле» ИЛИ само место помечено как мост/туннель
+    if (isBridge && (onWay || "bridge".equals(manmade) || "bridge".equals(rtype))) return true;
+    if (isTunnel && (onWay || "tunnel".equals(rtype))) return true;
+    return false;
+}
+
+    /** Пометить клетки вдоль геометрии как «запрещённые для ограждений» + буфер по радиусу */
+    private void markNoFenceAlongGeometry(JsonObject e,
+                                        double centerLat, double centerLng,
+                                        double east, double west, double north, double south,
+                                        int sizeMeters, int centerX, int centerZ) {
+        JsonArray g = geometryArray(e);
+        if (g != null && g.size() >= 2) {
+            int[] prev = null;
+            for (JsonElement pe : g) {
+                JsonObject p = pe.getAsJsonObject();
+                int[] xz = latlngToBlock(p.get("lat").getAsDouble(), p.get("lon").getAsDouble(),
+                        centerLat, centerLng, east, west, north, south, sizeMeters, centerX, centerZ);
+                if (prev != null) {
+                    for (int[] q : bresenhamLine(prev[0], prev[1], xz[0], xz[1])) {
+                        stampNoFence(q[0], q[1], NOFENCE_BUFFER);
+                    }
+                }
+                prev = xz;
+            }
+        }
+        // На случай relation без top-level geometry — пройдёмся по members
+        if ("relation".equals(optString(e,"type")) && e.has("members") && e.get("members").isJsonArray()) {
+            for (JsonElement mEl : e.getAsJsonArray("members")) {
+                JsonObject m = mEl.getAsJsonObject();
+                JsonArray mg = geometryArray(m);
+                if (mg == null || mg.size() < 2) continue;
+                int[] prev = null;
+                for (JsonElement pe : mg) {
+                    JsonObject p = pe.getAsJsonObject();
+                    int[] xz = latlngToBlock(p.get("lat").getAsDouble(), p.get("lon").getAsDouble(),
+                            centerLat, centerLng, east, west, north, south, sizeMeters, centerX, centerZ);
+                    if (prev != null) {
+                        for (int[] q : bresenhamLine(prev[0], prev[1], xz[0], xz[1])) {
+                            stampNoFence(q[0], q[1], NOFENCE_BUFFER);
+                        }
+                    }
+                    prev = xz;
+                }
+            }
+        }
+    }
+
+    private void stampNoFence(int x, int z, int r){
+        for (int dx = -r; dx <= r; dx++) {
+            for (int dz = -r; dz <= r; dz++) {
+                noFenceMask.add(BlockPos.asLong(x + dx, 0, z + dz));
+            }
+        }
+    }
+
+    private boolean noFenceAt(int x, int z){
+        return noFenceMask.contains(BlockPos.asLong(x, 0, z));
     }
 
     // ======== Низкоуровневые сеттеры и рельеф ========
