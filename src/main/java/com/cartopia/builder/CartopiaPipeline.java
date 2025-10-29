@@ -178,17 +178,11 @@ public class CartopiaPipeline {
             SubstationGenerator subGen = new SubstationGenerator(level, coords, store);
             subGen.generate();
             broadcast(level, "Подстанции готовы.");
-
-
-
-
-
-
-// Опоры ЛЭП разные столбы + провода по линиям (забором черным) , power - Высоковольтные линии
-
-
-
-
+            // ЛЭП: столбы, вышки и провода
+            broadcast(level, "Старт генерации ЛЭП (столбы/вышки/провода)…");
+            PowerLinesGenerator plGen = new PowerLinesGenerator(level, coords, store);
+            plGen.generate();
+            broadcast(level, "ЛЭП готовы.");
             // Бензоколонки на АЗС
             broadcast(level, "Старт генерации бензоколонок…");
             FuelPumpGenerator fuelGen = new FuelPumpGenerator(level, coords, store);
@@ -204,6 +198,9 @@ public class CartopiaPipeline {
             ElectricChargerGenerator evGen = new ElectricChargerGenerator(level, coords, store);
             evGen.generate();
             broadcast(level, "Электрозарядки готовы.");
+
+
+
 
 
 
@@ -228,7 +225,7 @@ public class CartopiaPipeline {
 
 // Скамейки
 // Велопарковки
-// Надземные трубы
+// Надземные трубы - сами трубы на высоте +5
 // камеры наблюдения и скорости: highway=speed_camera, видеонаблюдение: man_made=surveillance (+ surveillance:type=camera) и тп камеры
 // успокоители трафика, лежач полицейские: traffic_calming=table|hump|bump|cushion|chicane|island (ways) - полублоками, столбиками
 // паркоматы: amenity=parking_meter, amenity	vending_machine, parking_tickets
