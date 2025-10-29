@@ -1365,25 +1365,35 @@ public class BuildingGenerator {
                     mp.outers.forEach(o -> buildCanopy(o, eff, minX, maxX, minZ, maxZ));
                 } else {
                     Set<Long> fill = rasterizeMultiPolygon(mp.outers, mp.inners, minX, maxX, minZ, maxZ);
-                    fill.removeAll(partFootprint);
+
+                    // Если контур здания начинается выше нулевого уровня (min_level/min_height),
+                    // НЕ вырезаем пересечения с building:part и строим только по воздуху —
+                    // это позволяет надстраивать этажи над «подиумом» из building:part.
+                    int moCandidate = effectiveMinOffsetForPart(eff);
+                    boolean isRaised = (moCandidate > 0);
+                    if (!isRaised) {
+                        fill.removeAll(partFootprint);
+                    }
+
                     if (!fill.isEmpty()) {
                         JsonObject effAug =
                             (store != null)
                             ? augmentHeightFromInteriorUsingHints(tags, fill, interiorHints, centerLat, centerLng, east, west, north, south, sizeMeters, centerX, centerZ)
-
                             : augmentHeightFromInteriorIfMissing(
                                   eff, fill, elements,
                                   centerLat, centerLng, east, west, north, south,
                                   sizeMeters, centerX, centerZ);
-                        effAug = inheritAppearanceFromParent(effAug, fill); 
+                        effAug = inheritAppearanceFromParent(effAug, fill);
 
-                        // NEW: опоры для «парящего» контура здания (если начинается не с земли)
+                        // Опоры — если здание действительно начинается выше земли
                         int moForBuilding = effectiveMinOffsetForPart(effAug);
                         if (moForBuilding > 0) {
                             maybePlaceSupportPillarsAtCorners(fill, mp.outers, moForBuilding);
                         }
 
-                        buildFromFill(fill, mp.outers, effAug, entrances, passages, minX, maxX, minZ, maxZ, false);
+                        // Строим по воздуху, если это надстройка
+                        boolean airOnly = isRaised;
+                        buildFromFill(fill, mp.outers, effAug, entrances, passages, minX, maxX, minZ, maxZ, airOnly);
                     }
                 }
             });
@@ -1419,25 +1429,32 @@ public class BuildingGenerator {
                     if (geom != null && geom.size() >= 3) {
                         List<int[]> ring = toRingTiles(geom, centerLat, centerLng, east, west, north, south, sizeMeters, centerX, centerZ);
                         Set<Long> fill = rasterizePolygon(ring, minX, maxX, minZ, maxZ);
-                        fill.removeAll(partFootprint);
+
+                        // Way с min_level/min_height — надстройка: не вырезаем пересечения и строим только по воздуху
+                        int moCandidate = effectiveMinOffsetForPart(tags);
+                        boolean isRaised = (moCandidate > 0);
+                        if (!isRaised) {
+                            fill.removeAll(partFootprint);
+                        }
+
                         if (!fill.isEmpty()) {
                             List<List<int[]>> outers = Collections.singletonList(ring);
                             JsonObject eff =
                                 (store != null)
                                 ? augmentHeightFromInteriorUsingHints(tags, fill, interiorHints, centerLat, centerLng, east, west, north, south, sizeMeters, centerX, centerZ)
-
                                 : augmentHeightFromInteriorIfMissing(
                                       tags, fill, elements,
                                       centerLat, centerLng, east, west, north, south,
                                       sizeMeters, centerX, centerZ);
                             eff = inheritAppearanceFromParent(eff, fill);
 
-                            // NEW: опоры для «парящего» контура здания (если начинается не с земли)
                             int moForBuilding2 = effectiveMinOffsetForPart(eff);
                             if (moForBuilding2 > 0) {
                                 maybePlaceSupportPillarsAtCorners(fill, outers, moForBuilding2);
                             }
-                            buildFromFill(fill, outers, eff, entrances, passages, minX, maxX, minZ, maxZ, false);
+
+                            boolean airOnly = isRaised;
+                            buildFromFill(fill, outers, eff, entrances, passages, minX, maxX, minZ, maxZ, airOnly);
                         }
                     }
                 }
@@ -1651,19 +1668,31 @@ public class BuildingGenerator {
                     for (List<int[]> o : mp.outers) buildCanopy(o, (mp.tags != null ? mp.tags : tags), minX, maxX, minZ, maxZ);
                 } else {
                     Set<Long> fill = rasterizeMultiPolygon(mp.outers, mp.inners, minX, maxX, minZ, maxZ);
-                    fill.removeAll(partFootprint);
-                    if (!fill.isEmpty()) {
-                        JsonObject eff =
-                            augmentHeightFromInteriorUsingHints(tags, fill, interiorHints, centerLat, centerLng, east, west, north, south, sizeMeters, centerX, centerZ);
 
-                        eff = inheritAppearanceFromParent(eff, fill);
-                        
-                        // NEW: опоры для «парящего» relation-контуры здания (stream)
-                        int moForRel = effectiveMinOffsetForPart(eff);
-                        if (moForRel > 0) {
-                            maybePlaceSupportPillarsAtCorners(fill, mp.outers, moForRel);
+                    // Streaming: если контур здания начинается выше (min_level/min_height), не вырезаем пересечения
+                    JsonObject eff = (mp.tags != null ? mp.tags : tags);
+                    int moCandidate = effectiveMinOffsetForPart(eff);
+                    boolean isRaised = (moCandidate > 0);
+                    if (isRaised) broadcast(level, "Streaming: raised building shell detected (min offset > 0)");
+                    if (!isRaised) {
+                        fill.removeAll(partFootprint);
+                    }
+
+                    if (!fill.isEmpty()) {
+                        JsonObject effAug =
+                            augmentHeightFromInteriorUsingHints(eff, fill, interiorHints,
+                                centerLat, centerLng, east, west, north, south,
+                                sizeMeters, centerX, centerZ);
+                        effAug = inheritAppearanceFromParent(effAug, fill);
+
+                        int moForBuilding = effectiveMinOffsetForPart(effAug);
+                        if (moForBuilding > 0) {
+                            maybePlaceSupportPillarsAtCorners(fill, mp.outers, moForBuilding);
                         }
-                        buildFromFill(fill, mp.outers, eff, entrances, passages, minX, maxX, minZ, maxZ, false);
+
+                        boolean airOnly = isRaised;
+                        buildFromFill(fill, mp.outers, effAug, entrances, passages,
+                                    minX, maxX, minZ, maxZ, airOnly);
                     }
                 }
             }
@@ -1698,21 +1727,31 @@ public class BuildingGenerator {
 
                 List<int[]> ring = toRingTiles(geom, centerLat, centerLng, east, west, north, south, sizeMeters, centerX, centerZ);
                 Set<Long> fill = rasterizePolygon(ring, minX, maxX, minZ, maxZ);
-                fill.removeAll(partFootprint);
-                if (fill.isEmpty()) continue;
 
-                List<List<int[]>> outers = Collections.singletonList(ring);
-                JsonObject eff =
-                    augmentHeightFromInteriorUsingHints(tags, fill, interiorHints, centerLat, centerLng, east, west, north, south, sizeMeters, centerX, centerZ);
-
-                eff = inheritAppearanceFromParent(eff, fill);
-                
-                // NEW: опоры для «парящего» way-контуры здания (stream)
-                int moForWay = effectiveMinOffsetForPart(eff);
-                if (moForWay > 0) {
-                    maybePlaceSupportPillarsAtCorners(fill, outers, moForWay);
+                // Streaming: Way с min_level/min_height — надстройка: не вырезаем пересечения и строим по воздуху
+                int moCandidate = effectiveMinOffsetForPart(tags);
+                boolean isRaised = (moCandidate > 0);
+                if (!isRaised) {
+                    fill.removeAll(partFootprint);
                 }
-                buildFromFill(fill, outers, eff, entrances, passages, minX, maxX, minZ, maxZ, false);
+
+                if (!fill.isEmpty()) {
+                    List<List<int[]>> outers = Collections.singletonList(ring);
+                    JsonObject eff =
+                        augmentHeightFromInteriorUsingHints(tags, fill, interiorHints,
+                            centerLat, centerLng, east, west, north, south,
+                            sizeMeters, centerX, centerZ);
+                    eff = inheritAppearanceFromParent(eff, fill);
+
+                    int moForBuilding2 = effectiveMinOffsetForPart(eff);
+                    if (moForBuilding2 > 0) {
+                        maybePlaceSupportPillarsAtCorners(fill, outers, moForBuilding2);
+                    }
+
+                    boolean airOnly = isRaised;
+                    buildFromFill(fill, outers, eff, entrances, passages,
+                                minX, maxX, minZ, maxZ, airOnly);
+                }
             }
         } catch (Exception ex) {
             broadcast(level, "Ошибка чтения NDJSON (Pass F, way buildings): " + ex.getMessage());
