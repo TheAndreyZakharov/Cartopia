@@ -168,15 +168,18 @@ public class CartopiaPipeline {
             UtilityTankTowerGenerator tankGen = new UtilityTankTowerGenerator(level, coords, store);
             tankGen.generate();
             broadcast(level, "Башни-резервуары готовы.");
-            // Солнечные панели 9.35444 78.38444
+            // Солнечные панели
             broadcast(level, "Старт генерации солнечных зон…");
             SolarPanelGenerator solarGen = new SolarPanelGenerator(level, coords, store);
             solarGen.generate();
             broadcast(level, "Солнечные зоны готовы.");
+            // Электроподстанции
+            broadcast(level, "Старт генерации электроподстанций…");
+            SubstationAreaGenerator subGen = new SubstationAreaGenerator(level, coords, store);
+            subGen.generate();
+            broadcast(level, "Подстанции готовы.");
 
 
-
-// зоны - Подстанции - substation, transmission и все остальные
 
 
 // Опоры ЛЭП разные столбы + провода по линиям (забором черным) , power - Высоковольтные линии
@@ -205,7 +208,6 @@ public class CartopiaPipeline {
 
 
 
-// =============================================
 
 
 
@@ -233,13 +235,9 @@ public class CartopiaPipeline {
 // На аэродромах инфраструктура для ветра и тд aeroway=windsock
 // флагштоки: man_made=flagpole
 
-// =============================================
 
 // Источники воды, колодцы, с питьевой водой
 // Фонтаны
-
-// =============================================
-
 // Памятники, Арт-объекты
 
 // =============================================
@@ -247,12 +245,9 @@ public class CartopiaPipeline {
 // Места строек отдельно оформить - заборы, башенные краны, кучи кирпичей, досок, песка
 // Краны башенные отдельно  man_made	crane , некоторые как зоны отмечены - crane:mobile	rail
 
-// =============================================
-
 // Драг лифты - поверхностные подъёмники
 // Фуникулёры  aerialway
 
-// =============================================
 
 // Открытые ископаемые в шахтах
 // Пасеки, Фермы
