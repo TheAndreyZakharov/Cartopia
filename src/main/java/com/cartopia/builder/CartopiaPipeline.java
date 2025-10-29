@@ -175,14 +175,17 @@ public class CartopiaPipeline {
             broadcast(level, "Солнечные зоны готовы.");
             // Электроподстанции
             broadcast(level, "Старт генерации электроподстанций…");
-            SubstationAreaGenerator subGen = new SubstationAreaGenerator(level, coords, store);
+            SubstationGenerator subGen = new SubstationGenerator(level, coords, store);
             subGen.generate();
             broadcast(level, "Подстанции готовы.");
 
 
 
 
+
+
 // Опоры ЛЭП разные столбы + провода по линиям (забором черным) , power - Высоковольтные линии
+
 
 
 

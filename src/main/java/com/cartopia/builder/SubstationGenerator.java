@@ -21,7 +21,7 @@ import net.minecraft.world.level.levelgen.Heightmap;
 import java.util.*;
 
 
-public class SubstationAreaGenerator {
+public class SubstationGenerator {
 
     // ---- Материалы и размеры ----
     private static final Block SLAB_BLOCK          = Blocks.SMOOTH_QUARTZ_SLAB;      // периметр: гладкий кварц
@@ -44,7 +44,7 @@ public class SubstationAreaGenerator {
     private final JsonObject coords;
     private final GenerationStore store;
 
-    public SubstationAreaGenerator(ServerLevel level, JsonObject coords, GenerationStore store) {
+    public SubstationGenerator(ServerLevel level, JsonObject coords, GenerationStore store) {
         this.level  = level;
         this.coords = coords;
         this.store  = store;
