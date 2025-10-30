@@ -208,6 +208,11 @@ public class CartopiaPipeline {
             LeisureRestGenerator leisureGen = new LeisureRestGenerator(level, coords, store);
             leisureGen.generate();
             broadcast(level, "Места отдыха готовы.");
+            // Пляжный отдых (лежаки)
+            broadcast(level, "Старт генерации пляжных зон…");
+            BeachResortGenerator beachGen = new BeachResortGenerator(level, coords, store);
+            beachGen.generate();
+            broadcast(level, "Пляжные зоны готовы.");
             // Спортплощадки: футбол, баскетбол, теннис, волейбол/бадминтон, гольф, стрельбища, фитнес
             broadcast(level, "Старт генерации спортплощадок…");
             SportsFacilitiesGenerator sportsGen = new SportsFacilitiesGenerator(level, coords, store);
@@ -216,11 +221,9 @@ public class CartopiaPipeline {
 
 
 
+// natural=arete кряжа
 
 
-
-
-// пляжный оттдых
 
 // Десткие площадки
 
