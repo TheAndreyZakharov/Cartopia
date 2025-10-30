@@ -208,6 +208,11 @@ public class CartopiaPipeline {
             LeisureRestGenerator leisureGen = new LeisureRestGenerator(level, coords, store);
             leisureGen.generate();
             broadcast(level, "Места отдыха готовы.");
+            // Спортплощадки: футбол, баскетбол, теннис, волейбол/бадминтон, гольф, стрельбища, фитнес
+            broadcast(level, "Старт генерации спортплощадок…");
+            SportsFacilitiesGenerator sportsGen = new SportsFacilitiesGenerator(level, coords, store);
+            sportsGen.generate();
+            broadcast(level, "Спортплощадки готовы.");
 
 
 
@@ -215,10 +220,9 @@ public class CartopiaPipeline {
 
 
 
+// пляжный оттдых
 
-// Спорт площадки - в зависимоти от типа разными сделать - футбол/гандбол, баскетбол, тенис-бадминтон, волейбол, гольф лунки, стрельбища - мишени
-
-// Десткие площадки ? 
+// Десткие площадки
 
 // Урны, Места мусорных баков Tags amenity	урны - waste_basket, мысорки? - waste_disposal, recycling
 
@@ -236,9 +240,10 @@ public class CartopiaPipeline {
 // Информационнын стенды, гиды, знаки
 // пасеки, фермы
 // Открытые ископаемые в шахтах
-// Здания без полигонов и тегов. 
+// Здания без полигонов и тегов. выше по пайплайну, сделать первым в инфраструктуре. разные теповые дома. разные материалы, формы крыш, этажность, размеры - на рандом выбирается
 
 
+// горы, океаны чек
 
 
 // =============================================
