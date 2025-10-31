@@ -263,14 +263,16 @@ public class CartopiaPipeline {
             FireHydrantGenerator hydrGen = new FireHydrantGenerator(level, coords, store);
             hydrGen.generate();
             broadcast(level, "Пожарные гидранты готовы.");
+            // Паркоматы и автоматы оплаты парковки
+            broadcast(level, "Старт генерации паркоматов…");
+            ParkingMetersGenerator pmGen = new ParkingMetersGenerator(level, coords, store);
+            pmGen.generate();
+            broadcast(level, "Паркоматы готовы.");
 
 
 
 
 
-
-// Пожарные гидранты - ред незер брик волл
-// паркоматы: amenity=parking_meter, amenity	vending_machine, parking_tickets - варпед фенс два друг на друга
 // Велопарковки - подряд в линию 5 лайтнинг род
 // почтовые ящики: amenity=post_box - дубовый забор и на него сундук
 // камеры наблюдения и скорости: highway=speed_camera, видеонаблюдение: man_made=surveillance (+ surveillance:type=camera) и тп камеры - 3 андезитовых забора друг на друга, на это ставим чизлд стоун брикс, и вокрг со всех сторон этого чизлд стоун брикс ставим кнопки полишд блекстоун боттом
