@@ -218,7 +218,10 @@ public class CartopiaPipeline {
             SportsFacilitiesGenerator sportsGen = new SportsFacilitiesGenerator(level, coords, store);
             sportsGen.generate();
             broadcast(level, "Спортплощадки готовы.");
-
+            // Мусорная инфраструктура: урны, переработка, площадки под мусор
+            broadcast(level, "Старт генерации мусорной инфраструктуры…");
+            WasteGenerator wasteGen = new WasteGenerator(level, coords, store);
+            wasteGen.generate();
 
 
 
