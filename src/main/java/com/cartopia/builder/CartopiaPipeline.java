@@ -243,18 +243,21 @@ public class CartopiaPipeline {
             FlagpoleGenerator fpGen = new FlagpoleGenerator(level, coords, store);
             fpGen.generate();
             broadcast(level, "Флагштоки готовы.");
-
+            // Кладбища (надгробия)
+            broadcast(level, "Старт генерации кладбищ…");
+            CemeteryGravesGenerator cemGen = new CemeteryGravesGenerator(level, coords, store);
+            cemGen.generate();
+            broadcast(level, "Кладбища готовы.");
             
 
 
 
-// Кладбища ? 
 
 
 // Источники воды, колонки, колодцы, с питьевой водой
 // хоппер и рядом стоун брикс
 
-// успокоители трафика, лежач полицейские: traffic_calming=table|hump|bump|cushion|chicane|island (ways) - полублоками, столбиками
+// успокоители трафика - лежач полицейские и столбики: traffic_calming=table|hump|bump|cushion|chicane|island (ways) - полублоками, столбиками
 // бамбу слеб, бамбу фенс
 
 // Пожарные гидранты
