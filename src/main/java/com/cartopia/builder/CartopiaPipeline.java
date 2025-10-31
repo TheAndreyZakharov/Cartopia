@@ -290,12 +290,11 @@ public class CartopiaPipeline {
             InfoBoardsGenerator infoGen = new InfoBoardsGenerator(level, coords, store);
             infoGen.generate();
             broadcast(level, "Инфостенды готовы.");
-
-
-
-
-
-
+            // Ульи и пасеки
+            broadcast(level, "Старт генерации ульев…");
+            ApiaryBeehivesGenerator bees = new ApiaryBeehivesGenerator(level, coords, store);
+            bees.generate();
+            broadcast(level, "Ульи готовы.");
 
 
 
@@ -309,6 +308,7 @@ public class CartopiaPipeline {
 
 // Мельницы
 
+
 // ? Рекламные щиты, сденды, билборды, рекламные телевизоры на домах? - картинами
 // advertising	billboard - на ножке сделать стенд.
 // advertising	board, advertising	screen - прикрепить к ближайшей стене картинку размером 1 на 1 
@@ -317,6 +317,7 @@ public class CartopiaPipeline {
 
 
 // man_made	offshore_platform	node area	Offshore platform, oil platform or offshore drilling rig
+
 
 // =============================================
 
