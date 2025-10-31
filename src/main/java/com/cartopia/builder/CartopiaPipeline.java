@@ -222,6 +222,7 @@ public class CartopiaPipeline {
             broadcast(level, "Старт генерации мусорной инфраструктуры…");
             WasteGenerator wasteGen = new WasteGenerator(level, coords, store);
             wasteGen.generate();
+            broadcast(level, "мусорная инфраструктура готова.");
             // Надземные трубопроводы
             broadcast(level, "Старт генерации надземных труб…");
             OvergroundPipelinesGenerator pipesGen = new OvergroundPipelinesGenerator(level, coords, store);
@@ -232,32 +233,50 @@ public class CartopiaPipeline {
             PublicTransportShelterGenerator shelterGen = new PublicTransportShelterGenerator(level, coords, store);
             shelterGen.generate();
             broadcast(level, "Павильоны готовы.");
+            // Светофоры
+            broadcast(level, "Старт генерации светофоров…");
+            TrafficLightGenerator tlGen = new TrafficLightGenerator(level, coords, store);
+            tlGen.generate();
+            broadcast(level, "Светофоры готовы.");
 
 
+            
 
 // Светофоры
+
+// флагштоки: man_made=flagpole и тп
+// дефолт - материал металлический блок, высота 15, форма 2 на 2 блока. так же слушаемся высоту из тегов. если больше, 20, то 3 на 3, а если больше 40, то круг диаметром 4 должен подниматься 
+
 // Кладбища ? 
+
+
 // Источники воды, колонки, колодцы, с питьевой водой
+
+// успокоители трафика, лежач полицейские: traffic_calming=table|hump|bump|cushion|chicane|island (ways) - полублоками, столбиками
 
 // Пожарные гидранты
 // паркоматы: amenity=parking_meter, amenity	vending_machine, parking_tickets
 // Велопарковки
 // почтовые ящики: amenity=post_box
 // камеры наблюдения и скорости: highway=speed_camera, видеонаблюдение: man_made=surveillance (+ surveillance:type=camera) и тп камеры
-// успокоители трафика, лежач полицейские: traffic_calming=table|hump|bump|cushion|chicane|island (ways) - полублоками, столбиками
 // Информационнын стенды, гиды, знаки
+
 // пасеки, фермы
 // Открытые ископаемые в шахтах
-// флагштоки: man_made=flagpole
+
 // Здания без полигонов и тегов. выше по пайплайну, сделать первым в инфраструктуре. разные теповые дома. разные материалы, формы крыш, этажность, размеры - на рандом выбирается
+
 
 // ? Рекламные щиты, сденды, билборды, рекламные телевизоры на домах? - картинами
 // advertising	billboard - на ножке сделать стенд.
 // advertising	board, advertising	screen - прикрепить к ближайшей стене картинку размером 1 на 1 
-// advertising	tarp, advertising	wall_painting - прикрепить к ближайшей стене картинку со стену
+// advertising	tarp, advertising	wall_painting, man_made	video_wall - прикрепить к ближайшей стене картинку со стену
 // advertising	column, advertising	flag, advertising	poster_box, advertising	sculpture, advertising	sign, advertising	totem - 2 на 2 высотой 5 и завешать картинами. и по дефолтку для остальных тегов это же 
 
 
+// Мельницы
+
+// man_made	offshore_platform	node area	Offshore platform, oil platform or offshore drilling rig
 
 // =============================================
 
@@ -266,7 +285,7 @@ public class CartopiaPipeline {
 
 // На аэродромах инфраструктура для ветра и тд aeroway=windsock
 // Фонтаны
-// Памятники, Арт-объекты
+// Памятники, Арт-объекты, обелиски и тд и тп
 // Места строек отдельно оформить - заборы, башенные краны, кучи кирпичей, досок, песка
 // Краны башенные отдельно  man_made	crane , некоторые как зоны отмечены - crane:mobile	rail
 // Драг лифты - поверхностные подъёмники
