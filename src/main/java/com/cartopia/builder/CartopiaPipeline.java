@@ -295,14 +295,18 @@ public class CartopiaPipeline {
             ApiaryBeehivesGenerator bees = new ApiaryBeehivesGenerator(level, coords, store);
             bees.generate();
             broadcast(level, "Ульи готовы.");
+            // Карьеры, шахты
+            broadcast(level, "Старт генерации ископаемых…");
+            MiningOresScatterGenerator miningGen = new MiningOresScatterGenerator(level, coords, store);
+            miningGen.generate();
+            broadcast(level, "Ископаемые готовы.");
 
 
 
 
+// На аэродромах инфраструктура для ветра и тд aeroway=windsock
 
-// пасеки пчелы ульи 
-
-// Открытые ископаемые в шахтах
+// Места строек отдельно оформить - заборы, башенные краны, кучи кирпичей, досок, песка
 
 // Здания без полигонов и тегов. выше по пайплайну, сделать первым в инфраструктуре. разные теповые дома. разные материалы, формы крыш, этажность, размеры - на рандом выбирается
 
@@ -318,19 +322,21 @@ public class CartopiaPipeline {
 
 // man_made	offshore_platform	node area	Offshore platform, oil platform or offshore drilling rig
 
+// Краны башенные отдельно  man_made	crane , некоторые как зоны отмечены - crane:mobile	rail
+
+
+
+
+// Фонтаны
+// Памятники, Арт-объекты, обелиски и тд и тп
+// Драг лифты - поверхностные подъёмники
+// Фуникулёры  aerialway
 
 // =============================================
 
 
 
 
-// На аэродромах инфраструктура для ветра и тд aeroway=windsock
-// Фонтаны
-// Памятники, Арт-объекты, обелиски и тд и тп
-// Места строек отдельно оформить - заборы, башенные краны, кучи кирпичей, досок, песка
-// Краны башенные отдельно  man_made	crane , некоторые как зоны отмечены - crane:mobile	rail
-// Драг лифты - поверхностные подъёмники
-// Фуникулёры  aerialway
 
 
 
