@@ -515,8 +515,8 @@ function updateAreaInfo() {
   const sideStr = Number.isFinite(side) ? side.toLocaleString() : String(side);
   const areaStr = Number.isFinite(area) ? area.toLocaleString() : String(area);
   areaInfo.innerHTML = side >= 1_000_000
-    ? `Approx. area: ${sideStr} × ${sideStr} m²<br>= ${areaStr} m²`
-    : `Approx. area: ${sideStr} × ${sideStr} m² = ${areaStr} m²`;
+    ? `Approx. area: ${sideStr} m × ${sideStr} m<br>= ${areaStr} m²`
+    : `Approx. area: ${sideStr} m × ${sideStr} m = ${areaStr} m²`;
 }
 function getMapScreenCenterLatLng() {
   const mapSize = map.getSize();
