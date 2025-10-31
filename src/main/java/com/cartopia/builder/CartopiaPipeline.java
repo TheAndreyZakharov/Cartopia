@@ -222,12 +222,17 @@ public class CartopiaPipeline {
             broadcast(level, "Старт генерации мусорной инфраструктуры…");
             WasteGenerator wasteGen = new WasteGenerator(level, coords, store);
             wasteGen.generate();
+            // Надземные трубопроводы
+            broadcast(level, "Старт генерации надземных труб…");
+            OvergroundPipelinesGenerator pipesGen = new OvergroundPipelinesGenerator(level, coords, store);
+            pipesGen.generate();
+            broadcast(level, "Надземные трубы готовы.");
 
 
-
-// railway	buffer_stop
 
 // Надземные трубы - сами трубы на высоте +5
+
+// fix фронт метров квадратных
 
 // Остановки общественного транспорта
 // Светофоры
@@ -238,13 +243,13 @@ public class CartopiaPipeline {
 // паркоматы: amenity=parking_meter, amenity	vending_machine, parking_tickets
 // Велопарковки
 // почтовые ящики: amenity=post_box
+// камеры наблюдения и скорости: highway=speed_camera, видеонаблюдение: man_made=surveillance (+ surveillance:type=camera) и тп камеры
+// успокоители трафика, лежач полицейские: traffic_calming=table|hump|bump|cushion|chicane|island (ways) - полублоками, столбиками
 // Информационнын стенды, гиды, знаки
 // пасеки, фермы
 // Открытые ископаемые в шахтах
-// Здания без полигонов и тегов. выше по пайплайну, сделать первым в инфраструктуре. разные теповые дома. разные материалы, формы крыш, этажность, размеры - на рандом выбирается
 // флагштоки: man_made=flagpole
-// камеры наблюдения и скорости: highway=speed_camera, видеонаблюдение: man_made=surveillance (+ surveillance:type=camera) и тп камеры
-// успокоители трафика, лежач полицейские: traffic_calming=table|hump|bump|cushion|chicane|island (ways) - полублоками, столбиками
+// Здания без полигонов и тегов. выше по пайплайну, сделать первым в инфраструктуре. разные теповые дома. разные материалы, формы крыш, этажность, размеры - на рандом выбирается
 
 
 
