@@ -248,14 +248,16 @@ public class CartopiaPipeline {
             CemeteryGravesGenerator cemGen = new CemeteryGravesGenerator(level, coords, store);
             cemGen.generate();
             broadcast(level, "Кладбища готовы.");
-            
+            // Источники воды (колонки/колодцы/питьевые точки)
+            broadcast(level, "Старт генерации источников воды…");
+            WaterSourcesGenerator waterGen = new WaterSourcesGenerator(level, coords, store);
+            waterGen.generate();
+            broadcast(level, "Источники воды готовы.");
 
 
 
 
 
-// Источники воды, колонки, колодцы, с питьевой водой
-// хоппер и рядом стоун брикс
 
 // успокоители трафика - лежач полицейские и столбики: traffic_calming=table|hump|bump|cushion|chicane|island (ways) - полублоками, столбиками
 // бамбу слеб, бамбу фенс
@@ -272,6 +274,7 @@ public class CartopiaPipeline {
 
 // Здания без полигонов и тегов. выше по пайплайну, сделать первым в инфраструктуре. разные теповые дома. разные материалы, формы крыш, этажность, размеры - на рандом выбирается
 
+// Мельницы
 
 // ? Рекламные щиты, сденды, билборды, рекламные телевизоры на домах? - картинами
 // advertising	billboard - на ножке сделать стенд.
@@ -279,8 +282,6 @@ public class CartopiaPipeline {
 // advertising	tarp, advertising	wall_painting, man_made	video_wall - прикрепить к ближайшей стене картинку со стену
 // advertising	column, advertising	flag, advertising	poster_box, advertising	sculpture, advertising	sign, advertising	totem - 2 на 2 высотой 5 и завешать картинами. и по дефолтку для остальных тегов это же 
 
-
-// Мельницы
 
 // man_made	offshore_platform	node area	Offshore platform, oil platform or offshore drilling rig
 
