@@ -273,12 +273,16 @@ public class CartopiaPipeline {
             BicycleParkingGenerator bpGen = new BicycleParkingGenerator(level, coords, store);
             bpGen.generate();
             broadcast(level, "Велопарковки готовы.");
+            // Почтовые ящики
+            broadcast(level, "Старт генерации почтовых ящиков…");
+            PostBoxGenerator postGen = new PostBoxGenerator(level, coords, store);
+            postGen.generate();
+            broadcast(level, "Почтовые ящики готовы.");
 
 
 
 
 
-// почтовые ящики: amenity=post_box - дубовый забор и на него сундук
 // камеры наблюдения и скорости: highway=speed_camera, видеонаблюдение: man_made=surveillance (+ surveillance:type=camera) и тп камеры - 3 андезитовых забора друг на друга, на это ставим чизлд стоун брикс, и вокрг со всех сторон этого чизлд стоун брикс ставим кнопки полишд блекстоун боттом
 // Информационнын стенды, гиды, знаки 
 
