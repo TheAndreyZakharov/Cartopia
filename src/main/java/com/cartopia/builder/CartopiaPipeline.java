@@ -300,7 +300,11 @@ public class CartopiaPipeline {
             MiningOresScatterGenerator miningGen = new MiningOresScatterGenerator(level, coords, store);
             miningGen.generate();
             broadcast(level, "Ископаемые готовы.");
-
+            // Аэродромные флажки (windsock)
+            broadcast(level, "Старт генерации флажков (windsock)...");
+            WindsockFlagsGenerator windsockGen = new WindsockFlagsGenerator(level, coords, store);
+            windsockGen.generate();
+            broadcast(level, "Флажки готовы.");
 
 
 
