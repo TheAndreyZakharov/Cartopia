@@ -258,7 +258,11 @@ public class CartopiaPipeline {
             TrafficCalmingGenerator tcGen = new TrafficCalmingGenerator(level, coords, store);
             tcGen.generate();
             broadcast(level, "Успокоители трафика готовы.");
-
+            // Пожарные гидранты
+            broadcast(level, "Старт генерации пожарных гидрантов…");
+            FireHydrantGenerator hydrGen = new FireHydrantGenerator(level, coords, store);
+            hydrGen.generate();
+            broadcast(level, "Пожарные гидранты готовы.");
 
 
 
