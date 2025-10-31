@@ -95,6 +95,7 @@ public class RailGenerator {
 
         Block cobble = resolveBlock("minecraft:cobblestone");
         Block rail   = resolveBlock("minecraft:rail");
+        Block andesiteWall = resolveBlock("minecraft:andesite_wall");
 
         // === РЕЖИМ 1: есть store ⇒ читаем features построчно из NDJSON
         if (store != null) {
@@ -117,6 +118,16 @@ public class RailGenerator {
                     JsonObject tags = (e.has("tags") && e.get("tags").isJsonObject())
                             ? e.getAsJsonObject("tags") : null;
                     if (tags == null) continue;
+
+                    // --- buffer stop (узел на конце пути) ---
+                    if (isBufferStop(tags)) {
+                        int[] xz = featureToBlockXZ(e, centerLat, centerLng, east, west, north, south, sizeMeters, centerX, centerZ);
+                        if (xz != null) {
+                            buildBufferStop(xz[0], xz[1], minX, maxX, minZ, maxZ, andesiteWall);
+                        }
+                        continue; // обработали — идём к следующему элементу
+                    }
+
                     if (!isRailLike(tags)) continue;
                     if (!"way".equals(optString(e,"type"))) continue;
 
@@ -210,6 +221,16 @@ public class RailGenerator {
             JsonObject e = el.getAsJsonObject();
             JsonObject tags = e.has("tags") && e.get("tags").isJsonObject() ? e.getAsJsonObject("tags") : null;
             if (tags == null) continue;
+
+            // --- buffer stop (узел на конце пути) ---
+            if (isBufferStop(tags)) {
+                int[] xz = featureToBlockXZ(e, centerLat, centerLng, east, west, north, south, sizeMeters, centerX, centerZ);
+                if (xz != null) {
+                    buildBufferStop(xz[0], xz[1], minX, maxX, minZ, maxZ, andesiteWall);
+                }
+                continue; // обработали — к следующему элементу
+            }
+
             if (!isRailLike(tags)) continue;
             if (!"way".equals(optString(e,"type"))) continue;
 
@@ -513,4 +534,57 @@ public class RailGenerator {
         }
         return Integer.MIN_VALUE;
     }
+
+    /** railway=buffer_stop ? */
+    private static boolean isBufferStop(JsonObject tags) {
+        String v = optString(tags, "railway");
+        return v != null && v.trim().equalsIgnoreCase("buffer_stop");
+    }
+
+    /** Поставить две ANDESITE_WALL друг на друга на месте буфер-стопа. */
+    private void buildBufferStop(int x, int z,
+                                int minX, int maxX, int minZ, int maxZ,
+                                Block wallBlock) {
+        if (x < minX || x > maxX || z < minZ || z > maxZ) return;
+
+        @SuppressWarnings("unused")
+        final int worldMin = level.getMinBuildHeight();
+        final int worldMax = level.getMaxBuildHeight() - 1;
+
+        int yBase = terrainYViaStoreOrWorld(x, z, null); // верх непрозрачного/не-air блока
+        if (yBase == Integer.MIN_VALUE) return;
+        if (yBase + 2 > worldMax) return; // нехватает высоты
+
+        // Ставим две стены: на yBase+1 и yBase+2
+        level.setBlock(new BlockPos(x, yBase + 1, z), wallBlock.defaultBlockState(), 3);
+        level.setBlock(new BlockPos(x, yBase + 2, z), wallBlock.defaultBlockState(), 3);
+    }
+
+    /** Получить XZ точки (node или первая точка geometry). */
+    private static int[] featureToBlockXZ(JsonObject e,
+                                        double centerLat, double centerLng,
+                                        double east, double west, double north, double south,
+                                        int sizeMeters, int centerX, int centerZ) {
+        String type = optString(e, "type");
+        try {
+            if ("node".equals(type)) {
+                if (e.has("lat") && e.has("lon")) {
+                    double lat = e.get("lat").getAsDouble();
+                    double lon = e.get("lon").getAsDouble();
+                    return latlngToBlock(lat, lon, centerLat, centerLng, east, west, north, south, sizeMeters, centerX, centerZ);
+                }
+            }
+            if (e.has("geometry") && e.get("geometry").isJsonArray()) {
+                JsonArray g = e.getAsJsonArray("geometry");
+                if (g.size() > 0) {
+                    JsonObject p = g.get(0).getAsJsonObject();
+                    double lat = p.get("lat").getAsDouble();
+                    double lon = p.get("lon").getAsDouble();
+                    return latlngToBlock(lat, lon, centerLat, centerLng, east, west, north, south, sizeMeters, centerX, centerZ);
+                }
+            }
+        } catch (Throwable ignore) {}
+        return null;
+    }
+
 }

@@ -225,8 +225,7 @@ public class CartopiaPipeline {
 
 
 
-
-// Урны, Места мусорных баков Tags amenity	урны - waste_basket, мысорки? - waste_disposal, recycling
+// railway	buffer_stop
 
 // Надземные трубы - сами трубы на высоте +5
 
