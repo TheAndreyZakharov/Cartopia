@@ -36,6 +36,7 @@ public class LeisureRestGenerator {
     private static final Block BBQ_WORKBENCH     = Blocks.CRAFTING_TABLE;
     private static final Block FIRE_PIT_FLOOR    = Blocks.COBBLESTONE;
     private static final Block FIRE_PIT_CENTER   = Blocks.CAMPFIRE;
+    private static final Block TENT_BLOCK         = Blocks.ORANGE_CONCRETE;
 
     // Внутренние коллекции
     private static final class Pt { final int x,z; Pt(int x,int z){this.x=x; this.z=z;} }
@@ -47,6 +48,7 @@ public class LeisureRestGenerator {
     private final List<Pt> shelters = new ArrayList<>();
     private final List<Pt> theatres = new ArrayList<>();
     private final List<Pt> firepits = new ArrayList<>();
+    private final List<Pt> tents    = new ArrayList<>();
     private final List<Polyline> roads = new ArrayList<>();
 
     private final ServerLevel level;
@@ -118,7 +120,7 @@ public class LeisureRestGenerator {
         }
 
         // === 2) Постройка (каждый блок — по локальному рельефу)
-        int total = benches.size() + tables.size() + bbqSites.size() + shelters.size() + theatres.size() + firepits.size();
+        int total = benches.size() + tables.size() + bbqSites.size() + shelters.size() + theatres.size() + firepits.size() + tents.size();
         int done = 0;
 
         for (Pt p : benches)   { if (inBounds(p, minX, maxX, minZ, maxZ)) buildBench(p.x, p.z);      done++; progress(done, total); }
@@ -127,6 +129,7 @@ public class LeisureRestGenerator {
         for (Pt p : shelters)  { if (inBounds(p, minX, maxX, minZ, maxZ)) buildShelter(p.x, p.z);    done++; progress(done, total); }
         for (Pt p : theatres)  { if (inBounds(p, minX, maxX, minZ, maxZ)) buildOpenAirTheatre(p.x, p.z); done++; progress(done, total); }
         for (Pt p : firepits)  { if (inBounds(p, minX, maxX, minZ, maxZ)) buildFirepit(p.x, p.z);    done++; progress(done, total); }
+        for (Pt p : tents)     { if (inBounds(p, minX, maxX, minZ, maxZ)) buildTent(p.x, p.z);       done++; progress(done, total); }
 
         broadcast(level, "LeisureRestGenerator: готово.");
     }
@@ -183,6 +186,7 @@ public class LeisureRestGenerator {
         boolean isTheatre    = ("theatre".equals(amenity) && ( "yes".equals(low(opt(t,"open_air"))) || "yes".equals(low(opt(t,"outdoor")))))
                                || "amphitheatre".equals(leisure) || "amphitheater".equals(leisure);
         boolean isFirepit    = "firepit".equals(amenity) || "firepit".equals(leisure) || containsValueLike(t, "campfire") || containsValueLike(t, "firepit");
+        boolean isTent       = isTentTag(t);
 
         if (isBench) benches.add(pos);
         else if (isTable) tables.add(pos);
@@ -190,6 +194,7 @@ public class LeisureRestGenerator {
         else if (isShelter) shelters.add(pos);
         else if (isTheatre) theatres.add(pos);
         else if (isFirepit) firepits.add(pos);
+        else if (isTent) tents.add(pos);
         else if (isAnyLeisureResty(t)) benches.add(pos);
     }
 
@@ -202,6 +207,29 @@ public class LeisureRestGenerator {
             if (l != null && (l.contains("picnic") || l.contains("outdoor") || l.contains("amphi"))) return true;
             if (r != null && r.contains("picnic")) return true;
         }
+        return false;
+    }
+
+    private static boolean isTentTag(JsonObject t) {
+        if (t == null) return false;
+
+        String tourism = low(opt(t, "tourism"));
+        if ("camp_site".equals(tourism) || "camp_pitch".equals(tourism)) return true;
+
+        String tents = low(opt(t, "tents"));
+        if ("yes".equals(tents)) return true;
+
+        // Иногда встречаются уточнения в нестандартных ключах
+        String campSite = low(opt(t, "camp_site"));
+        if (campSite != null && (campSite.contains("tent") || campSite.contains("pitch"))) return true;
+
+        String campPitch = low(opt(t, "camp_pitch"));
+        if (campPitch != null && (campPitch.contains("tent") || campPitch.contains("pitch"))) return true;
+
+        // Мягкий запасной вариант — если в значениях вообще встречается 'tent'
+        // (например, source/description с пометкой tent). Оставляем в конце, чтобы не ловить лишнего.
+        if (containsValueLike(t, "tent")) return true;
+
         return false;
     }
 
@@ -345,6 +373,56 @@ public class LeisureRestGenerator {
         placeBlockOnTerrain(x, z, FIRE_PIT_CENTER);
     }
 
+
+    private void buildTent(int x, int z) {
+        // Ориентация по дороге
+        Direction axisDir = roadAxisAt(x, z);      // вдоль дороги
+        int[] axis = dirToStep(axisDir);           // (ax, az)
+        int[] nor  = new int[]{-axis[1], axis[0]}; // нормаль к дороге
+
+        // --- 1) Снимаем СЛЕПОК исходного рельефа для всех клеток палатки ДО установки блоков
+        int[] offsetsAll = new int[]{-2, +2, -1, +1, 0}; // все потенциальные линии
+        java.util.HashMap<Long, Integer> base = new java.util.HashMap<>();
+
+        for (int off : offsetsAll) {
+            for (int i = -1; i <= 2; i++) { // 4 блока вдоль оси: -1,0,1,2
+                int bx = x + axis[0] * i + nor[0] * off;
+                int bz = z + axis[1] * i + nor[1] * off;
+                int gy = groundY(bx, bz);                 // читаем ТОЛЬКО исходный рельеф на этот тик
+                if (gy == Integer.MIN_VALUE) continue;
+                base.put(pack(bx, bz), gy);
+            }
+        }
+
+        // --- 2) Вспомогалка: ставим линию из 4 блоков, пользуясь базовой высотой из "base"
+        java.util.function.BiConsumer<Integer, Integer> placeLineAtOffsetAndLayer = (off, layer) -> {
+            for (int i = -1; i <= 2; i++) {
+                int bx = x + axis[0] * i + nor[0] * off;
+                int bz = z + axis[1] * i + nor[1] * off;
+                Integer gy = base.get(pack(bx, bz));
+                if (gy == null) continue; // вне рельефной сетки — пропускаем
+                setBlock(bx, gy + 1 + layer, bz, TENT_BLOCK); // НЕ звоним в groundY второй раз
+            }
+        };
+
+        // --- 3) «Объёмная Л»: 2 линии (нижний слой), 2 линии (средний), 1 центральная (верхний)
+        placeLineAtOffsetAndLayer.accept(-2, 0);
+        placeLineAtOffsetAndLayer.accept(+2, 0);
+
+        placeLineAtOffsetAndLayer.accept(-1, 1);
+        placeLineAtOffsetAndLayer.accept(+1, 1);
+
+        placeLineAtOffsetAndLayer.accept(0, 2);
+    }
+
+    @SuppressWarnings("unused")
+    /** Поставить блок на (groundY(x,z) + 1 + layerOffset). */
+    private void placeBlockOnTerrainLayer(int x, int z, Block b, int layerOffset) {
+        int y = groundY(x, z);
+        if (y == Integer.MIN_VALUE) return;
+        setBlock(x, y + 1 + layerOffset, z, b);
+    }
+
     // === низкоуровневые строительные примитивы ===
 
     private void placeStairsOnTerrain(int x, int z, Direction facing) {
@@ -434,6 +512,11 @@ public class LeisureRestGenerator {
     private static Direction stepToDir(int dx, int dz) {
         if (Math.abs(dx) >= Math.abs(dz)) return (dx >= 0) ? Direction.EAST : Direction.WEST;
         return (dz >= 0) ? Direction.SOUTH : Direction.NORTH;
+    }
+
+    /** Упаковка (x,z) в long-ключ для HashMap. */
+    private static long pack(int x, int z) {
+        return (((long) x) << 32) ^ (z & 0xffffffffL);
     }
 
     // === преобразования/утилиты данных ===
