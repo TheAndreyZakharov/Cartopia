@@ -238,21 +238,24 @@ public class CartopiaPipeline {
             TrafficLightGenerator tlGen = new TrafficLightGenerator(level, coords, store);
             tlGen.generate();
             broadcast(level, "Светофоры готовы.");
-
+            // Флагштоки
+            broadcast(level, "Старт генерации флагштоков…");
+            FlagpoleGenerator fpGen = new FlagpoleGenerator(level, coords, store);
+            fpGen.generate();
+            broadcast(level, "Флагштоки готовы.");
 
             
 
-// Светофоры
 
-// флагштоки: man_made=flagpole и тп
-// дефолт - материал металлический блок, высота 15, форма 2 на 2 блока. так же слушаемся высоту из тегов. если больше, 20, то 3 на 3, а если больше 40, то круг диаметром 4 должен подниматься 
 
 // Кладбища ? 
 
 
 // Источники воды, колонки, колодцы, с питьевой водой
+// хоппер и рядом стоун брикс
 
 // успокоители трафика, лежач полицейские: traffic_calming=table|hump|bump|cushion|chicane|island (ways) - полублоками, столбиками
+// бамбу слеб, бамбу фенс
 
 // Пожарные гидранты
 // паркоматы: amenity=parking_meter, amenity	vending_machine, parking_tickets
