@@ -55,6 +55,14 @@ public class SurfaceGenerator {
     private static final int SURFACE_BLUR_ITERS = 8;
     private static final int SURFACE_BLUR_MIN_MAJORITY = 4;
 
+    // Теги, которые обрабатываем как «утёс/крутой борт/кряжа» (линейные)
+    private static final Set<String> CLIFFLIKE_NATURALS = Set.of(
+            "cliff",        
+            "earth_bank",   
+            "arete",       
+            "ridge"        
+    );
+
     private final ServerLevel level;
     private final JsonObject coordsJson;
     private final File demFile;
@@ -169,6 +177,15 @@ public class SurfaceGenerator {
         ZONE_MATERIALS.put("natural=tidalflat",   "muddy_mangrove_roots"); // если хочешь — можно вернуть sandstone
         // на всякий случай (редкие теги)
         ZONE_MATERIALS.put("landuse=wetland",     "muddy_mangrove_roots");
+
+        // --- Ice / Glaciers (OSM полигоны) ---
+        // Лёд кладём синим льдом поверх рельефа (поведение как у болот).
+        ZONE_MATERIALS.put("natural=glacier",         "blue_ice");
+        ZONE_MATERIALS.put("natural=ice",             "blue_ice");       // редкий, но встречается
+        ZONE_MATERIALS.put("natural=sea_ice",         "blue_ice");       // морской лёд
+        ZONE_MATERIALS.put("natural=ice_shelf",       "blue_ice");       // шельфовый лёд (если размечен как natural)
+        ZONE_MATERIALS.put("landcover=ice",           "blue_ice");       // неофициальный, но применимый
+        ZONE_MATERIALS.put("landcover=snow_and_ice",  "blue_ice");
     }
 
     /** OLM: класс → блок */
@@ -425,17 +442,26 @@ public class SurfaceGenerator {
                 if (bestMat != null) {
                     String cur = surface.get(k);
 
+                    // ICE override: синий лёд может перекрыть ЛЮБУЮ воду (и OLM, и OSM/морскую)
+                    boolean isIceOverlay = "blue_ice".equals(bestMat) || "muddy_mangrove_roots".equals(bestMat);
+
                     if ("water".equals(cur)) {
-                        // если вода именно из OLM (и не защищена), даём OSM-зоне её перекрыть
-                        if (waterFromOLM.contains(k)) {
+                        if (isIceOverlay) {
                             surface.put(k, bestMat);
                             lockedOSM.add(k);
-                            waterFromOLM.remove(k); // это место больше не считается OLM-вода
-                            // waterProtected тут не трогаем — теперь это суша от OSM
+                            // снимаем любые защиты воды, чтобы далее сглаживание/перья не мешали
+                            waterFromOLM.remove(k);
+                            waterProtected.remove(k);
+                        } else if (waterFromOLM.contains(k)) {
+                            // обычное поведение: не-лёд может перекрывать только OLM-воду
+                            surface.put(k, bestMat);
+                            lockedOSM.add(k);
+                            waterFromOLM.remove(k);
+                            // waterProtected не трогаем — теперь это суша
                         }
-                        // иначе (OSM- или морская вода) — оставляем как есть
+                        // если вода защищённая (OSM/морская) и это не лёд — оставляем как есть
                     } else {
-                        // обычный случай: текущая клетка не вода — кладём материал OSM
+                        // текущая клетка не вода — кладём материал OSM
                         surface.put(k, bestMat);
                         lockedOSM.add(k);
                     }
@@ -1458,9 +1484,9 @@ public class SurfaceGenerator {
         if ("riverbank".equals(optString(tags, "waterway"))) return new MatMatch("water", "waterway=riverbank");
         if ("water".equals(optString(tags, "natural")))      return new MatMatch("water", "natural=water");
         if ("reservoir".equals(optString(tags, "landuse")))  return new MatMatch("water", "landuse=reservoir");
-        if (tags.has("water"))                                return new MatMatch("water", "water=*");
+        if (tags.has("water"))                               return new MatMatch("water", "water=*");
 
-        // --- NEW: любые wetlands считаем болотом (грязные мангровые корни)
+        // --- WETLANDS / болота ---
         String nat = optString(tags, "natural");
         if ("wetland".equals(nat)) {
             return new MatMatch("muddy_mangrove_roots", "natural=wetland");
@@ -1472,19 +1498,32 @@ public class SurfaceGenerator {
                 case "marsh": case "swamp": case "bog": case "fen":
                 case "mire": case "reedbed": case "wet_meadow":
                 case "saltmarsh": case "salt_marsh": case "string_bog":
-                case "mangrove": // хотим тоже в muddy roots
-                case "tidalflat": // если предпочитаешь песок: верни "sandstone"
+                case "mangrove":
+                case "tidalflat":
                     return new MatMatch("muddy_mangrove_roots", "wetland=" + wet);
             }
             // по умолчанию любые неизвестные подтипы — тоже болото
             return new MatMatch("muddy_mangrove_roots", "wetland=" + wet);
         }
 
+        // --- ICE / GLACIERS (blue_ice overlay на рельеф) ---
+        String natIce = optString(tags, "natural");
+        if ("glacier".equals(natIce) || "ice".equals(natIce) || "sea_ice".equals(natIce) || "ice_shelf".equals(natIce)) {
+            return new MatMatch("blue_ice", "natural=" + natIce);
+        }
+        // Признаки “это точно про ледники”, даже если natural не выставлен явно:
+        if (tags.has("glacier") || tags.has("glacier:type") || tags.has("glacier:status")) {
+            return new MatMatch("blue_ice", "glacier=*");
+        }
+        String lcIce = optString(tags, "landcover");
+        if ("ice".equals(lcIce) || "snow_and_ice".equals(lcIce)) {
+            return new MatMatch("blue_ice", "landcover=" + lcIce);
+        }
+
         // --- DAM areas (waterway=dam / man_made=dam): заливаем как площадную зону
         String wwDam = optString(tags, "waterway");
         String mmDam = optString(tags, "man_made");
         if ("dam".equals(wwDam) || "dam".equals(mmDam)) {
-            // по умолчанию камень, но если указан material/surface — используем его
             String matDam = pickDamBlockFromTags(tags, "stone");
             String srcKV  = "dam".equals(wwDam) ? "waterway=dam" : "man_made=dam";
             return new MatMatch(matDam, srcKV);
@@ -2088,17 +2127,31 @@ public class SurfaceGenerator {
 
     private static boolean isCliffLike(JsonObject tags) {
         if (tags == null) return false;
-        String nat = optString(tags, "natural");
-        String mm  = optString(tags, "man_made");
-        String barr= optString(tags, "barrier");
-        String emb = optString(tags, "embankment");
 
-        if ("cliff".equals(nat)) return true;
-        if ("earth_bank".equals(nat)) return true;
+        String nat  = optString(tags, "natural");
+        String geo  = optString(tags, "geological");
+        String mm   = optString(tags, "man_made");
+        String barr = optString(tags, "barrier");
+        String emb  = optString(tags, "embankment");
+        String ridgeYes = optString(tags, "ridge"); // редкая форма ridge=yes
+
+        // natural=cliff/earth_bank/arete/ridge — обрабатываем как утёсы
+        if (nat != null && CLIFFLIKE_NATURALS.contains(nat)) return true;
+
+        // Некоторые мапят через geological=*, поддержим это тоже
+        if ("arete".equals(geo) || "ridge".equals(geo)) return true;
+
+        // Дамба/бермоукрепление/подпорная стена
         if ("embankment".equals(mm)) return true;
         if ("yes".equals(emb)) return true;
         if ("retaining_wall".equals(barr)) return true;
         if ("retaining_wall".equals(mm)) return true;
+
+        //  выемки (cutting) часто дают резкий борт вдоль дорог — тоже делаем как утёс
+        if ("cutting".equals(mm)) return true;
+
+        // Редкая де-факто форма ridge=yes
+        if ("yes".equalsIgnoreCase(ridgeYes)) return true;
 
         return false;
     }
