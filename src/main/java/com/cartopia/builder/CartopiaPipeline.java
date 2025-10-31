@@ -285,6 +285,11 @@ public class CartopiaPipeline {
             CameraGenerator camGen = new CameraGenerator(level, coords, store);
             camGen.generate();
             broadcast(level, "Камеры готовы.");
+            // Информационные стенды / табло / указатели 
+            broadcast(level, "Старт генерации инфостендов…");
+            InfoBoardsGenerator infoGen = new InfoBoardsGenerator(level, coords, store);
+            infoGen.generate();
+            broadcast(level, "Инфостенды готовы.");
 
 
 
@@ -295,9 +300,6 @@ public class CartopiaPipeline {
 
 
 
-
-
-// Информационнын стенды, гиды, знаки 
 
 // пасеки пчелы ульи 
 
