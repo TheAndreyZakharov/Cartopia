@@ -253,23 +253,26 @@ public class CartopiaPipeline {
             WaterSourcesGenerator waterGen = new WaterSourcesGenerator(level, coords, store);
             waterGen.generate();
             broadcast(level, "Источники воды готовы.");
+            // Успокоители трафика (traffic calming)
+            broadcast(level, "Старт генерации успокоителей трафика…");
+            TrafficCalmingGenerator tcGen = new TrafficCalmingGenerator(level, coords, store);
+            tcGen.generate();
+            broadcast(level, "Успокоители трафика готовы.");
 
 
 
 
 
 
-// успокоители трафика - лежач полицейские и столбики: traffic_calming=table|hump|bump|cushion|chicane|island (ways) - полублоками, столбиками
-// бамбу слеб, бамбу фенс
 
-// Пожарные гидранты
-// паркоматы: amenity=parking_meter, amenity	vending_machine, parking_tickets
-// Велопарковки
-// почтовые ящики: amenity=post_box
-// камеры наблюдения и скорости: highway=speed_camera, видеонаблюдение: man_made=surveillance (+ surveillance:type=camera) и тп камеры
-// Информационнын стенды, гиды, знаки
+// Пожарные гидранты - ред незер брик волл
+// паркоматы: amenity=parking_meter, amenity	vending_machine, parking_tickets - варпед фенс два друг на друга
+// Велопарковки - подряд в линию 5 лайтнинг род
+// почтовые ящики: amenity=post_box - дубовый забор и на него сундук
+// камеры наблюдения и скорости: highway=speed_camera, видеонаблюдение: man_made=surveillance (+ surveillance:type=camera) и тп камеры - 3 андезитовых забора друг на друга, на это ставим чизлд стоун брикс, и вокрг со всех сторон этого чизлд стоун брикс ставим кнопки полишд блекстоун боттом
+// Информационнын стенды, гиды, знаки 
 
-// пасеки, фермы
+// пасеки пчелы ульи 
 // Открытые ископаемые в шахтах
 
 // Здания без полигонов и тегов. выше по пайплайну, сделать первым в инфраструктуре. разные теповые дома. разные материалы, формы крыш, этажность, размеры - на рандом выбирается
@@ -297,6 +300,34 @@ public class CartopiaPipeline {
 // Краны башенные отдельно  man_made	crane , некоторые как зоны отмечены - crane:mobile	rail
 // Драг лифты - поверхностные подъёмники
 // Фуникулёры  aerialway
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
