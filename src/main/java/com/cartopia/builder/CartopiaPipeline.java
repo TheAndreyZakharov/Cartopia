@@ -227,11 +227,14 @@ public class CartopiaPipeline {
             OvergroundPipelinesGenerator pipesGen = new OvergroundPipelinesGenerator(level, coords, store);
             pipesGen.generate();
             broadcast(level, "Надземные трубы готовы.");
+            // Остановочные павильоны
+            broadcast(level, "Старт генерации остановочных павильонов…");
+            PublicTransportShelterGenerator shelterGen = new PublicTransportShelterGenerator(level, coords, store);
+            shelterGen.generate();
+            broadcast(level, "Павильоны готовы.");
 
 
 
-
-// Остановки общественного транспорта
 // Светофоры
 // Кладбища ? 
 // Источники воды, колонки, колодцы, с питьевой водой
@@ -248,13 +251,20 @@ public class CartopiaPipeline {
 // флагштоки: man_made=flagpole
 // Здания без полигонов и тегов. выше по пайплайну, сделать первым в инфраструктуре. разные теповые дома. разные материалы, формы крыш, этажность, размеры - на рандом выбирается
 
+// ? Рекламные щиты, сденды, билборды, рекламные телевизоры на домах? - картинами
+// advertising	billboard - на ножке сделать стенд.
+// advertising	board, advertising	screen - прикрепить к ближайшей стене картинку размером 1 на 1 
+// advertising	tarp, advertising	wall_painting - прикрепить к ближайшей стене картинку со стену
+// advertising	column, advertising	flag, advertising	poster_box, advertising	sculpture, advertising	sign, advertising	totem - 2 на 2 высотой 5 и завешать картинами. и по дефолтку для остальных тегов это же 
+
 
 
 // =============================================
 
 
+
+
 // На аэродромах инфраструктура для ветра и тд aeroway=windsock
-// ? Рекламные щиты, сденды, билборды, рекламные телевизоры на домах? - картинами
 // Фонтаны
 // Памятники, Арт-объекты
 // Места строек отдельно оформить - заборы, башенные краны, кучи кирпичей, досок, песка
