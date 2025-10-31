@@ -3,9 +3,11 @@ import com.cartopia.spawn.CartopiaSurfaceSpawn;
 import com.cartopia.clean.DroppedEntitiesCleaner;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
+
 import net.minecraft.network.chat.Component;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
+
 import java.io.File;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -278,15 +280,27 @@ public class CartopiaPipeline {
             PostBoxGenerator postGen = new PostBoxGenerator(level, coords, store);
             postGen.generate();
             broadcast(level, "Почтовые ящики готовы.");
+            // Камеры (скорости и видеонаблюдение)
+            broadcast(level, "Старт генерации камер…");
+            CameraGenerator camGen = new CameraGenerator(level, coords, store);
+            camGen.generate();
+            broadcast(level, "Камеры готовы.");
 
 
 
 
 
-// камеры наблюдения и скорости: highway=speed_camera, видеонаблюдение: man_made=surveillance (+ surveillance:type=camera) и тп камеры - 3 андезитовых забора друг на друга, на это ставим чизлд стоун брикс, и вокрг со всех сторон этого чизлд стоун брикс ставим кнопки полишд блекстоун боттом
+
+
+
+
+
+
+
 // Информационнын стенды, гиды, знаки 
 
 // пасеки пчелы ульи 
+
 // Открытые ископаемые в шахтах
 
 // Здания без полигонов и тегов. выше по пайплайну, сделать первым в инфраструктуре. разные теповые дома. разные материалы, формы крыш, этажность, размеры - на рандом выбирается
