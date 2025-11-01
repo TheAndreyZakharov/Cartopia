@@ -20,7 +20,7 @@ import java.util.*;
 public class ConstructionSiteDecorator {
 
     // ---- Материалы / размеры ----
-    private static final Block SAND_BLOCK       = Blocks.SAND;        // песок (гравитационный, но на основании ок)
+    private static final Block SAND_BLOCK       = Blocks.SMOOTH_SANDSTONE;
     private static final Block BRICK_BLOCK      = Blocks.BRICKS;      // стопки кирпичей
     private static final Block PLANK_BLOCK      = Blocks.OAK_PLANKS;  // поддоны и стопки досок
 
