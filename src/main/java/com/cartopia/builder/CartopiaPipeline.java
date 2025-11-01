@@ -320,6 +320,11 @@ public class CartopiaPipeline {
             ConstructionSiteDecorator cons = new ConstructionSiteDecorator(level, coords, store);
             cons.generate();
             broadcast(level, "Стройплощадки оформлены.");
+            // Краны 
+            broadcast(level, "Старт генерации кранов (категория 1)...");
+            CraneGenerator craneGen = new CraneGenerator(level, coords, store);
+            craneGen.generate(); // сейчас рисует только категорию 1
+            broadcast(level, "Краны (категория 1) готовы.");
 
 
 
@@ -329,13 +334,8 @@ public class CartopiaPipeline {
 
 
 
-// Краны башенные отдельно  man_made	crane , некоторые как зоны отмечены - crane:mobile	rail
-// строим из желтого бетона. высота 30 метров
 
-
-
-
-// man_made	offshore_platform	node area	Offshore platform, oil platform or offshore drilling rig
+// man_made	offshore_platform	node area	Offshore platform, oil platform or offshore drilling rig - просто зонами над водой 100 на 100 метров
 
 
 
