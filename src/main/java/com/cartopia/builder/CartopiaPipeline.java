@@ -330,6 +330,11 @@ public class CartopiaPipeline {
             AdvertisingGenerator adGen = new AdvertisingGenerator(level, coords, store);
             adGen.generate();
             broadcast(level, "Реклама готова.");
+            // Фонтаны
+            broadcast(level, "Старт генерации фонтанов…");
+            FountainGenerator fGen = new FountainGenerator(level, coords, store);
+            fGen.generate();
+            broadcast(level, "Фонтаны готовы.");
 
 
 
@@ -338,17 +343,19 @@ public class CartopiaPipeline {
 
 
 
-// Фонтаны
-// из блоков смус кварц блок строим.
-// на уровне земли ставим квадрат со стороной 5 блоков
-// далее по периметру этого квадрата ставим еще блоки на один уровень
-// далее в центре нашего квадрата ставим столб из блоков (по дефолтку 5 блоков, если не указана высота фонатана, а если указана - то берем ее)
-// и на верхушку этого столба ставим источник воды
+
 
 
 
 
 // Памятники, Арт-объекты, обелиски и тд и тп
+// 
+
+
+
+
+
+
 // Драг лифты - поверхностные подъёмники
 // Фуникулёры  aerialway
 
