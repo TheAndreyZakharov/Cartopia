@@ -305,15 +305,12 @@ public class CartopiaPipeline {
             WindsockFlagsGenerator windsockGen = new WindsockFlagsGenerator(level, coords, store);
             windsockGen.generate();
             broadcast(level, "Флажки готовы.");
+            // Стройплощадки (landuse=construction)
+            broadcast(level, "Старт благоустройства стройплощадок…");
+            ConstructionSiteDecorator cons = new ConstructionSiteDecorator(level, coords, store);
+            cons.generate();
+            broadcast(level, "Стройплощадки оформлены.");
 
-
-
-
-// Места строек отдельно оформить 
-// на местах строек landuse	construction в рандомных местах зоны ставим:
-// кучи песка - пирамидка из каменного песка. диаетр начальный 10 - и к верху сужаемся. и таких рядом штуки 3 впритык друг к другу в линию
-// блок кирпичей - ставим квадрат 4 на 4 из дубовых досок. и на них ставим 4 на 4 и высотой 3 блоков кирпичей
-// кучи досок - ставим из дубовых досок 6 на 3 высотой 3 
 
 
 
@@ -321,7 +318,8 @@ public class CartopiaPipeline {
 
 
 // Здания без полигонов и тегов. выше по пайплайну, сделать первым в инфраструктуре. разные теповые дома. разные материалы, формы крыш, этажность, размеры - на рандом выбирается
-// 
+// все параметры выбираются на рандом
+// матераилы - доски дубовые, доски
 
 // Мельницы
 
