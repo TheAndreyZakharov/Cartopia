@@ -335,6 +335,11 @@ public class CartopiaPipeline {
             FountainGenerator fGen = new FountainGenerator(level, coords, store);
             fGen.generate();
             broadcast(level, "Фонтаны готовы.");
+            // Памятники, арт-объекты, монументы
+            broadcast(level, "Старт генерации памятников…");
+            MonumentGenerator monGen = new MonumentGenerator(level, coords, store);
+            monGen.generate();
+            broadcast(level, "Памятники готовы.");
 
 
 
@@ -342,14 +347,6 @@ public class CartopiaPipeline {
 
 
 
-
-
-
-
-
-
-// Памятники, Арт-объекты, обелиски и тд и тп
-// 
 
 
 
