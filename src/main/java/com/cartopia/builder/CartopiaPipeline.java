@@ -323,34 +323,31 @@ public class CartopiaPipeline {
             // Краны 
             broadcast(level, "Старт генерации кранов (категория 1)...");
             CraneGenerator craneGen = new CraneGenerator(level, coords, store);
-            craneGen.generate(); // сейчас рисует только категорию 1
+            craneGen.generate();
             broadcast(level, "Краны (категория 1) готовы.");
+            // Реклама
+            broadcast(level, "Старт генерации рекламы…");
+            AdvertisingGenerator adGen = new AdvertisingGenerator(level, coords, store);
+            adGen.generate();
+            broadcast(level, "Реклама готова.");
 
 
 
 
 
 
-
-
-
-
-// man_made	offshore_platform	node area	Offshore platform, oil platform or offshore drilling rig - просто зонами над водой 100 на 100 метров
-
-
-
-
-// ? Рекламные щиты, сденды, билборды, рекламные телевизоры на домах? - картинами
-// advertising	billboard - на ножке сделать стенд.
-// advertising	board, advertising	screen - прикрепить к ближайшей стене картинку размером 1 на 1 
-// advertising	tarp, advertising	wall_painting, man_made	video_wall - прикрепить к ближайшей стене картинку со стену
-// advertising	column, advertising	flag, advertising	poster_box, advertising	sculpture, advertising	sign, advertising	totem - 2 на 2 высотой 5 и завешать картинами. и по дефолтку для остальных тегов это же 
-
-
-// =============================================
 
 
 // Фонтаны
+// из блоков смус кварц блок строим.
+// на уровне земли ставим квадрат со стороной 5 блоков
+// далее по периметру этого квадрата ставим еще блоки на один уровень
+// далее в центре нашего квадрата ставим столб из блоков (по дефолтку 5 блоков, если не указана высота фонатана, а если указана - то берем ее)
+// и на верхушку этого столба ставим источник воды
+
+
+
+
 // Памятники, Арт-объекты, обелиски и тд и тп
 // Драг лифты - поверхностные подъёмники
 // Фуникулёры  aerialway
@@ -403,6 +400,11 @@ public class CartopiaPipeline {
 // Учитывать зоны - просеки под ЛЭП и тд
 // Рассаживать везде, но учитывать интенсивность от зон
 // кусты leaf_type	broadleaved natural	tree_row и тп
+// отдельные деревья natural	tree
+// 	tree_row стены из деревьев
+// barrier	hedge добавить в заборы из листвы
+
+
 
 
             // ===== ОЖИВЛЕНИЕ =====
