@@ -109,12 +109,12 @@ public class SurfaceGenerator {
         ZONE_MATERIALS.put("waterway=riverbank","water");
 
         // Природные покрытия
-        ZONE_MATERIALS.put("natural=sand","sandstone");
-        ZONE_MATERIALS.put("natural=beach","sandstone");
+        ZONE_MATERIALS.put("natural=sand","smooth_sandstone");
+        ZONE_MATERIALS.put("natural=beach","smooth_sandstone");
         ZONE_MATERIALS.put("natural=bare_rock","stone");
         ZONE_MATERIALS.put("natural=grassland","moss_block");
         ZONE_MATERIALS.put("natural=wood","moss_block");
-        ZONE_MATERIALS.put("natural=desert","sandstone");
+        ZONE_MATERIALS.put("natural=desert","smooth_sandstone");
         ZONE_MATERIALS.put("natural=jungle","moss_block");
         ZONE_MATERIALS.put("natural=swamp","muddy_mangrove_roots");
         ZONE_MATERIALS.put("natural=savanna","red_sandstone");
@@ -194,9 +194,9 @@ public class SurfaceGenerator {
         // см. старый Python-словарь
         LANDCOVER_CLASS_TO_BLOCK.put(210, "water");              // Water body
         LANDCOVER_CLASS_TO_BLOCK.put(220, "snow_block");         // Permanent ice and snow
-        LANDCOVER_CLASS_TO_BLOCK.put(200, "sandstone");          // Bare areas
+        LANDCOVER_CLASS_TO_BLOCK.put(200, "smooth_sandstone");          // Bare areas
         LANDCOVER_CLASS_TO_BLOCK.put(201, "moss_block");         // Consolidated bare areas
-        LANDCOVER_CLASS_TO_BLOCK.put(202, "sandstone");          // Unconsolidated bare areas
+        LANDCOVER_CLASS_TO_BLOCK.put(202, "smooth_sandstone");          // Unconsolidated bare areas
         LANDCOVER_CLASS_TO_BLOCK.put(130, "moss_block");         // Grassland
         LANDCOVER_CLASS_TO_BLOCK.put(120, "moss_block");         // Shrubland
         LANDCOVER_CLASS_TO_BLOCK.put(121, "moss_block");
@@ -221,10 +221,10 @@ public class SurfaceGenerator {
         LANDCOVER_CLASS_TO_BLOCK.put(181, "muddy_mangrove_roots"); // Swamp
         LANDCOVER_CLASS_TO_BLOCK.put(182, "muddy_mangrove_roots"); // Marsh
         LANDCOVER_CLASS_TO_BLOCK.put(183, "muddy_mangrove_roots"); // Flooded flat
-        LANDCOVER_CLASS_TO_BLOCK.put(184, "sandstone");          // Saline
+        LANDCOVER_CLASS_TO_BLOCK.put(184, "smooth_sandstone");          // Saline
         LANDCOVER_CLASS_TO_BLOCK.put(185, "muddy_mangrove_roots");       // Mangrove
         LANDCOVER_CLASS_TO_BLOCK.put(186, "muddy_mangrove_roots"); // Salt marsh
-        LANDCOVER_CLASS_TO_BLOCK.put(187, "sandstone");          // Tidal flat
+        LANDCOVER_CLASS_TO_BLOCK.put(187, "smooth_sandstone");          // Tidal flat
         LANDCOVER_CLASS_TO_BLOCK.put(190, "moss_block");         // Impervious (города)
         LANDCOVER_CLASS_TO_BLOCK.put(140, "snow_block");         // Lichens and mosses
         LANDCOVER_CLASS_TO_BLOCK.put(0,   "water");              // no-data → вода
@@ -1486,6 +1486,35 @@ public class SurfaceGenerator {
         if ("reservoir".equals(optString(tags, "landuse")))  return new MatMatch("water", "landuse=reservoir");
         if (tags.has("water"))                               return new MatMatch("water", "water=*");
 
+        // Крупные именованные акватории (моря/океаны/заливы/проливы/лагуны и т.п.)
+        if (tagMeansBigWater(tags)) {
+            // для отладки можно вернуть исходный ключ, но материал — вода
+            String nat   = optString(tags, "natural");
+            String place = optString(tags, "place");
+            String water = optString(tags, "water");
+            String srcKV = nat != null ? "natural=" + nat
+                        : place != null ? "place=" + place
+                        : water != null ? "water=" + water
+                        : "water=big";
+            return new MatMatch("water", srcKV);
+        }
+
+        // крупные водные акватории (бухта/море/пролив/лагуна/фьорд/зунд) — это тоже вода
+        String nat2 = optString(tags, "natural");
+        if ("bay".equals(nat2) || "sea".equals(nat2) || "strait".equals(nat2) ||
+            "lagoon".equals(nat2) || "fjord".equals(nat2) || "sound".equals(nat2)) {
+            return new MatMatch("water", "natural=" + nat2);
+        }
+        // альтернативные ключи
+        String place = optString(tags, "place");
+        if ("sea".equals(place) || "ocean".equals(place)) {
+            return new MatMatch("water", "place=" + place);
+        }
+        String waterVal = optString(tags, "water");
+        if ("sea".equals(waterVal) || "bay".equals(waterVal) || "lagoon".equals(waterVal)) {
+            return new MatMatch("water", "water=" + waterVal);
+        }
+
         // --- WETLANDS / болота ---
         String nat = optString(tags, "natural");
         if ("wetland".equals(nat)) {
@@ -1634,9 +1663,17 @@ public class SurfaceGenerator {
                     List<double[][]> outers = stitchSegmentsToRings(outerSegs);
                     List<double[][]> inners = stitchSegmentsToRings(innerSegs);
 
+                    String natW = optString(tags, "natural");
+                    String placeW = optString(tags, "place");
+                    String waterW = optString(tags, "water");
                     boolean isWaterArea = "water".equals(mat)
                             || "riverbank".equals(optString(tags, "waterway"))
-                            || "river".equals(optString(tags, "water"));
+                            || "river".equals(waterW)
+                            || "bay".equals(natW) || "sea".equals(natW) || "strait".equals(natW)
+                            || "lagoon".equals(natW) || "fjord".equals(natW) || "sound".equals(natW)
+                            || "sea".equals(placeW) || "ocean".equals(placeW)
+                            || "sea".equals(waterW) || "bay".equals(waterW) || "lagoon".equals(waterW) || tagMeansBigWater(tags);
+
                     for (double[][] r : outers) {
                         if (isWaterArea) out.add(new ZonePoly(r[0], r[1], "water", false, tagKV));
                         else if (mat != null) out.add(new ZonePoly(r[0], r[1], mat, false, tagKV));
@@ -1689,31 +1726,43 @@ public class SurfaceGenerator {
                     }
 
                     // линейная гидрография → расширяем до «ленты»
+                    // ЛИНЕЙНАЯ ГИДРОГРАФИЯ → «лента» нужной ширины (учитываем width=*), замыкаем кольцо!
                     if (isLinearWater(tags)) {
                         int n = geom.size();
                         double[] lats = new double[n], lons = new double[n];
-                        for (int i=0;i<n;i++){ JsonObject p=geom.get(i).getAsJsonObject(); lats[i]=p.get("lat").getAsDouble(); lons[i]=p.get("lon").getAsDouble(); }
-
-                        double widen = 0.0;
-                        String wTag = optString(tags, "width");
-                        if (wTag == null) wTag = optString(tags, "width:river");
-                        if (wTag == null) wTag = optString(tags, "est_width");
-                        if (wTag != null) try { widen = Double.parseDouble(wTag.replace(",", ".")); } catch (Exception ignore) {}
-                        if (widen <= 0) {
-                            String w = optString(tags, "waterway");
-                            widen = ("river".equals(w) ? 8 : "canal".equals(w) ? 4 : 1);
+                        for (int i = 0; i < n; i++) {
+                            JsonObject p = geom.get(i).getAsJsonObject();
+                            lats[i] = p.get("lat").getAsDouble();
+                            lons[i] = p.get("lon").getAsDouble();
                         }
 
-                        double midLat = lats[Math.max(0, n/2)];
-                        double dLat = widen / 111320.0;
-                        double dLon = widen / (111320.0 * Math.max(0.35, Math.cos(Math.toRadians(midLat))));
+                        // 1) Читаем width в метрах (если есть). Это ПОЛНАЯ ширина в OSM → половинное смещение.
+                        double widthM = parseWidthMeters(tags); // NaN если нет
+                        // 2) Дефолт «как раньше»: ТВОЁ старое значение — это сразу смещение (половина ширины).
+                        String wType = optString(tags, "waterway");
+                        double defaultOffsetMeters = ("river".equals(wType) ? 8.0 : "canal".equals(wType) ? 4.0 : 1.0);
 
-                        double[] la = new double[2*n], lo = new double[2*n];
-                        for (int i=0;i<n;i++) {
-                            la[i]           = lats[i] + dLat; lo[i]           = lons[i] + dLon;
-                            la[2*n-1 - i]   = lats[i] - dLat; lo[2*n-1 - i]   = lons[i] - dLon;
+                        // Если width задан — берём половину как оффсет; иначе оставляем прежний дефолт (чтобы визуально ничего не «съехало»).
+                        double offsetM = (Double.isNaN(widthM) || widthM <= 0) ? defaultOffsetMeters : (widthM / 2.0);
+
+                        // Константный сдвиг в градусах (аппроксимация по широте трека)
+                        double midLat = lats[Math.max(0, n / 2)];
+                        double dLat = offsetM / 111320.0;
+                        double dLon = offsetM / (111320.0 * Math.max(0.35, Math.cos(Math.toRadians(midLat))));
+
+                        // 3) Формируем ЗАМКНУТОЕ кольцо: верхняя кромка туда, нижняя обратно + повторяем первую точку.
+                        int m = 2 * n;
+                        double[] la = new double[m + 1];
+                        double[] lo = new double[m + 1];
+                        for (int i = 0; i < n; i++) {
+                            la[i]       = lats[i] + dLat;  lo[i]       = lons[i] + dLon;  // «верх»
+                            la[m - 1 - i] = lats[i] - dLat;  lo[m - 1 - i] = lons[i] - dLon;  // «низ»
                         }
-                        out.add(new ZonePoly(la, lo, "water", false, "waterway=" + optString(tags,"waterway")));
+                        // замыкаем кольцо — критично, иначе клетки «внутри ленты» могут не попасть!
+                        la[m] = la[0];
+                        lo[m] = lo[0];
+
+                        out.add(new ZonePoly(la, lo, "water", false, "waterway=" + wType));
                     }
                 }
 
@@ -1780,7 +1829,17 @@ public class SurfaceGenerator {
                 List<double[][]> outers = stitchSegmentsToRings(outerSegs);
                 List<double[][]> inners = stitchSegmentsToRings(innerSegs);
 
-                boolean isWaterArea = "water".equals(mat);
+                String natW = optString(tags, "natural");
+                String placeW = optString(tags, "place");
+                String waterW = optString(tags, "water");
+                boolean isWaterArea = "water".equals(mat)
+                        || "riverbank".equals(optString(tags, "waterway"))
+                        || "river".equals(waterW)
+                        || "bay".equals(natW) || "sea".equals(natW) || "strait".equals(natW)
+                        || "lagoon".equals(natW) || "fjord".equals(natW) || "sound".equals(natW)
+                        || "sea".equals(placeW) || "ocean".equals(placeW)
+                        || "sea".equals(waterW) || "bay".equals(waterW) || "lagoon".equals(waterW) || tagMeansBigWater(tags);
+
                 for (double[][] r : outers) {
                     if (isWaterArea) {
                         out.add(new ZonePoly(r[0], r[1], "water", false, tagKV));
@@ -1811,31 +1870,43 @@ public class SurfaceGenerator {
                 }
 
                 // линейная гидрография
+                // ЛИНЕЙНАЯ ГИДРОГРАФИЯ → «лента» нужной ширины (учитываем width=*), замыкаем кольцо!
                 if (isLinearWater(tags)) {
                     int n = geom.size();
                     double[] lats = new double[n], lons = new double[n];
-                    for (int i=0;i<n;i++){ JsonObject p=geom.get(i).getAsJsonObject(); lats[i]=p.get("lat").getAsDouble(); lons[i]=p.get("lon").getAsDouble(); }
-
-                    double widen = 0.0;
-                    String wTag = optString(tags, "width");
-                    if (wTag == null) wTag = optString(tags, "width:river");
-                    if (wTag == null) wTag = optString(tags, "est_width");
-                    if (wTag != null) try { widen = Double.parseDouble(wTag.replace(",", ".")); } catch (Exception ignore) {}
-                    if (widen <= 0) {
-                        String w = optString(tags, "waterway");
-                        widen = ("river".equals(w) ? 8 : "canal".equals(w) ? 4 : 1);
+                    for (int i = 0; i < n; i++) {
+                        JsonObject p = geom.get(i).getAsJsonObject();
+                        lats[i] = p.get("lat").getAsDouble();
+                        lons[i] = p.get("lon").getAsDouble();
                     }
 
-                    double midLat = lats[Math.max(0, n/2)];
-                    double dLat = widen / 111320.0;
-                    double dLon = widen / (111320.0 * Math.max(0.35, Math.cos(Math.toRadians(midLat))));
+                    // 1) Читаем width в метрах (если есть). Это ПОЛНАЯ ширина в OSM → половинное смещение.
+                    double widthM = parseWidthMeters(tags); // NaN если нет
+                    // 2) Дефолт «как раньше»: ТВОЁ старое значение — это сразу смещение (половина ширины).
+                    String wType = optString(tags, "waterway");
+                    double defaultOffsetMeters = ("river".equals(wType) ? 8.0 : "canal".equals(wType) ? 4.0 : 1.0);
 
-                    double[] la = new double[2*n], lo = new double[2*n];
-                    for (int i=0;i<n;i++) {
-                        la[i]           = lats[i] + dLat; lo[i]           = lons[i] + dLon;
-                        la[2*n-1 - i]   = lats[i] - dLat; lo[2*n-1 - i]   = lons[i] - dLon;
+                    // Если width задан — берём половину как оффсет; иначе оставляем прежний дефолт (чтобы визуально ничего не «съехало»).
+                    double offsetM = (Double.isNaN(widthM) || widthM <= 0) ? defaultOffsetMeters : (widthM / 2.0);
+
+                    // Константный сдвиг в градусах (аппроксимация по широте трека)
+                    double midLat = lats[Math.max(0, n / 2)];
+                    double dLat = offsetM / 111320.0;
+                    double dLon = offsetM / (111320.0 * Math.max(0.35, Math.cos(Math.toRadians(midLat))));
+
+                    // 3) Формируем ЗАМКНУТОЕ кольцо: верхняя кромка туда, нижняя обратно + повторяем первую точку.
+                    int m = 2 * n;
+                    double[] la = new double[m + 1];
+                    double[] lo = new double[m + 1];
+                    for (int i = 0; i < n; i++) {
+                        la[i]       = lats[i] + dLat;  lo[i]       = lons[i] + dLon;  // «верх»
+                        la[m - 1 - i] = lats[i] - dLat;  lo[m - 1 - i] = lons[i] - dLon;  // «низ»
                     }
-                    out.add(new ZonePoly(la, lo, "water", false, "waterway=" + optString(tags,"waterway")));
+                    // замыкаем кольцо — критично, иначе клетки «внутри ленты» могут не попасть!
+                    la[m] = la[0];
+                    lo[m] = lo[0];
+
+                    out.add(new ZonePoly(la, lo, "water", false, "waterway=" + wType));
                 }
             }
 
@@ -2727,6 +2798,61 @@ public class SurfaceGenerator {
     private static String optString(JsonObject o, String k) {
         try { return o.has(k) && !o.get(k).isJsonNull() ? o.get(k).getAsString() : null; }
         catch (Throwable ignore) { return null; }
+    }
+
+    // Парсер ширины в метрах из тегов вида width, width:river, width:canal, est_width, width:est.
+    // Понимает "8", "8.0", "8,5", "8 m". Возвращает Double.NaN если нет валидного числа.
+    private static double parseWidthMeters(JsonObject tags) {
+        if (tags == null) return Double.NaN;
+        String[] keys = { "width", "width:river", "width:canal", "est_width", "width:est" };
+        for (String k : keys) {
+            String v = optString(tags, k);
+            if (v == null) continue;
+            String s = v.trim().toLowerCase(Locale.ROOT).replace(',', '.');
+            // Вытащим первое число из строки
+            StringBuilder sb = new StringBuilder();
+            boolean dotSeen = false;
+            for (int i = 0; i < s.length(); i++) {
+                char c = s.charAt(i);
+                if ((c >= '0' && c <= '9') || c == '.') {
+                    if (c == '.') {
+                        if (dotSeen) break;
+                        dotSeen = true;
+                    }
+                    sb.append(c);
+                } else if (sb.length() > 0) {
+                    break;
+                }
+            }
+            if (sb.length() > 0) {
+                try {
+                    double vNum = Double.parseDouble(sb.toString());
+                    if (vNum > 0) return vNum;
+                } catch (Exception ignore) {}
+            }
+        }
+        return Double.NaN;
+    }
+
+    private static boolean tagMeansBigWater(JsonObject tags) {
+        if (tags == null) return false;
+        String nat   = optString(tags, "natural");
+        String place = optString(tags, "place");
+        String water = optString(tags, "water");
+
+        // natural=* — встречается для bay/иногда sea
+        if ("bay".equals(nat) || "sea".equals(nat)) return true;
+
+        // общий список типов крупных водных объектов
+        Set<String> BIG = Set.of(
+            "sea","ocean","bay","strait","sound","channel","gulf",
+            "inlet","estuary","lagoon","fjord","loch","harbour","basin"
+        );
+
+        if (place != null && BIG.contains(place)) return true;
+        if (water != null && BIG.contains(water)) return true;
+
+        return false;
     }
 
     /** Материал плитки/мощения для площадных зон по surface/material; возвращает имя блока без префикса minecraft:. */
