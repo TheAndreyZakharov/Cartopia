@@ -134,6 +134,10 @@ public class SurfaceGenerator {
         ZONE_MATERIALS.put("leisure=stadium","moss_block");
         ZONE_MATERIALS.put("leisure=pitch","moss_block");
         ZONE_MATERIALS.put("leisure=garden","moss_block");
+        ZONE_MATERIALS.put("leisure=grass","moss_block");
+        ZONE_MATERIALS.put("landcover=grass", "moss_block"); 
+        ZONE_MATERIALS.put("landuse=grass","moss_block"); 
+
 
         // Объекты
         ZONE_MATERIALS.put("amenity=school","moss_block");
