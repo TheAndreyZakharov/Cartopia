@@ -19,22 +19,41 @@ import java.util.Locale;
 
 public class WindTurbineGenerator {
 
-    // ===== Конфиг =====
+    // ===== Конфиг (крупные турбины — как было) =====
     private static final int DEFAULT_HEIGHT = 100;         // дефолт высота башни
-    private static final int BLADE_LENGTH   = 50;          // длина лопастей
+    private static final int BLADE_LENGTH_DEFAULT = 50;    // дефолтная длина лопасти (радиус) для крупных, если нет diameter
     private static final int TOWER_RADIUS   = 3;           // диаметр 7 ⇒ радиус 3
-    private static final Block MATERIAL     = Blocks.SMOOTH_QUARTZ; // гладкий кварц
+    private static final Block MATERIAL     = Blocks.SMOOTH_QUARTZ; // материал
 
-    // Гондола (всегда «смотрит» на юг, bulk назад)
+    // Гондола (крупная, «смотрит» на юг)
     private static final int NAC_LEN  = 15;   // длина по Z
     private static final int NAC_WID  = 7;    // ширина по X
     private static final int NAC_HEI  = 7;    // высота по Y
     private static final int NAC_FRONT_PROTRUSION = 3; // сколько вперёд от оси башни
-    private static final int NAC_SHIFT_SOUTH      = 2; // ДОП. смещение всей гондолы на юг (чтоб лопасти не были впритык)
+    private static final int NAC_SHIFT_SOUTH      = 2; // смещение всей гондолы на юг
 
-    // Небольшой «нос-конический» переход перед ступицей
+    // Нос-конический переход (крупная)
     private static final int HUB_CONE_LEN   = 4;  // длина по +Z
     private static final int HUB_CONE_R0    = 3;  // стартовый радиус сечения (в плоскости X–Y)
+
+    // ===== Режим «маленький ротор» (тонкие линии) =====
+    // Порог по диаметру ротора (м), ниже/равно — считаем маленьким и рисуем «мерседес» без объёма
+    private static final double SMALL_ROTOR_DIAM_MAX_M = 6.0;
+
+    // Ножка маленькой турбины: квадрат 2×2
+    @SuppressWarnings("unused")
+    private static final int SMALL_TOWER_SIZE = 2; // 2×2
+
+    // Гондола маленькой: 3×3×5 (X×Y×Z), чуть смещена вперёд
+    private static final int SMALL_NAC_WID  = 3;
+    private static final int SMALL_NAC_HEI  = 3;
+    private static final int SMALL_NAC_LEN  = 5;
+    private static final int SMALL_NAC_FRONT_PROTRUSION = 1;
+    private static final int SMALL_NAC_SHIFT_SOUTH      = 1;
+
+    // Ограничители длин лопастей (в блоках) при вычислении из диаметра
+    private static final int MIN_BLADE_LEN = 2;     // чтобы мелкое хоть видно было
+    private static final int MAX_BLADE_LEN = 128;   // безопасный предел от странных тегов
 
     private final ServerLevel level;
     private final JsonObject coords;
@@ -73,7 +92,11 @@ public class WindTurbineGenerator {
     }
     private static final class Turbine {
         final int x, z;
-        int height;
+        int heightBlocks;           // высота башни в блоках
+        @SuppressWarnings("unused")
+        Double rotorDiameterM;      // диаметр ротора (м), если есть
+        boolean smallRotor;         // режим маленького ротора
+        int bladeLenBlocks;         // длина (радиус) лопасти в блоках, уже посчитанный
         Turbine(int x, int z) { this.x = x; this.z = z; }
     }
 
@@ -150,7 +173,7 @@ public class WindTurbineGenerator {
         for (Turbine t : list) {
             try {
                 if (t.x<minX||t.x>maxX||t.z<minZ||t.z>maxZ) continue;
-                renderTurbine(t);
+                if (t.smallRotor) renderSmallTurbine(t); else renderBigTurbine(t);
             } catch (Exception ex) {
                 broadcast(level, "WindTurbineGenerator: ошибка на ("+t.x+","+t.z+"): " + ex.getMessage());
             }
@@ -204,7 +227,21 @@ public class WindTurbineGenerator {
         } else return;
 
         Turbine t = new Turbine(tx, tz);
-        t.height = extractHeightBlocks(tags);
+        t.heightBlocks   = extractHeightBlocks(tags);
+
+        Double diam = extractRotorDiameterMeters(tags);
+        t.rotorDiameterM = diam;
+
+        // Вычисляем длину лопасти (радиус) в блоках
+        if (diam != null && diam > 0) {
+            int byDiam = clampInt((int)Math.round(diam / 2.0), MIN_BLADE_LEN, MAX_BLADE_LEN);
+            t.bladeLenBlocks = byDiam;
+            t.smallRotor = (diam <= SMALL_ROTOR_DIAM_MAX_M);
+        } else {
+            t.bladeLenBlocks = BLADE_LENGTH_DEFAULT;
+            t.smallRotor = false; // без диаметра — считаем «крупной» (как было)
+        }
+
         out.add(t);
     }
 
@@ -237,86 +274,164 @@ public class WindTurbineGenerator {
         return DEFAULT_HEIGHT;
     }
 
+    private Double extractRotorDiameterMeters(JsonObject t) {
+        String[] keys = new String[] {
+                "rotor:diameter", "rotor:diametre", "rotor_diameter", "rotor:radius" // radius будет трактоваться как диаметр≈2r? но оставим как есть ниже
+        };
+        for (String k : keys) {
+            String v = optString(t, k);
+            if (v != null) {
+                Double d = parseFirstDouble(v);
+                if (d != null && d > 0) {
+                    if ("rotor:radius".equals(k)) return d * 2.0; // если вдруг радиус — конвертируем в диаметр
+                    return d;
+                }
+            }
+        }
+        return null;
+    }
+
     private static Integer parseFirstInt(String s) {
         int len = s.length();
         int i = 0;
         while (i < len && !Character.isDigit(s.charAt(i))) i++;
         if (i == len) return null;
         int j = i;
-        while (j < len && Character.isDigit(s.charAt(j))) j++;
+        while (j < len && (Character.isDigit(s.charAt(j)))) j++;
         try { return Integer.parseInt(s.substring(i, j)); } catch (Exception ignore) { return null; }
     }
 
-    // ===== Рендер одной турбины =====
-    private void renderTurbine(Turbine t) {
-        final int H = Math.max(2, t.height);
+    private static Double parseFirstDouble(String s) {
+        // простенький парсинг первой [цифры][.цифры] в строке
+        int len = s.length();
+        int i = 0;
+        while (i < len && !((s.charAt(i) >= '0' && s.charAt(i) <= '9') || s.charAt(i) == '.' || s.charAt(i) == '-')) i++;
+        if (i == len) return null;
+        int j = i+1;
+        boolean dotSeen = (s.charAt(i)=='.');
+        while (j < len) {
+            char c = s.charAt(j);
+            if ((c >= '0' && c <= '9') || (!dotSeen && c == '.')) {
+                if (c == '.') dotSeen = true;
+                j++;
+            } else break;
+        }
+        try { return Double.parseDouble(s.substring(i, j)); } catch (Exception ignore) { return null; }
+    }
 
-        // 1) Башня-цилиндр: КАЖДАЯ колонка «сидит» на своём рельефе, высота ровно H
+    private static int clampInt(int v, int lo, int hi){ return Math.max(lo, Math.min(hi, v)); }
+
+    // ===== Рендер крупной турбины (как было, но с переменной длиной лопасти) =====
+    private void renderBigTurbine(Turbine t) {
+        final int H = Math.max(2, t.heightBlocks);
+        final int bladeLen = t.bladeLenBlocks > 0 ? t.bladeLenBlocks : BLADE_LENGTH_DEFAULT;
+
+        // Башня-цилиндр (каждая колонка «сидит» на своём рельефе)
         List<int[]> disk = diskOffsets(TOWER_RADIUS);
-        int yTopMax = Integer.MIN_VALUE; // максимальная вершина для всех колонок
+        int yTopMax = Integer.MIN_VALUE;
         for (int[] d : disk) {
             int x = t.x + d[0], z = t.z + d[1];
             int yBase = terrainYFromCoordsOrWorld(x, z, null);
             if (yBase == Integer.MIN_VALUE) continue;
             int yStart = yBase + 1;
             int yEnd   = yStart + H - 1;
-            for (int y = yStart; y <= yEnd; y++) {
-                setBlockSafe(x, y, z, MATERIAL);
-            }
+            for (int y = yStart; y <= yEnd; y++) setBlockSafe(x, y, z, MATERIAL);
             yTopMax = Math.max(yTopMax, yEnd + 1);
         }
         if (yTopMax == Integer.MIN_VALUE) return;
 
-        // 2) Гондола 15×7×7 с рельефной базой и срезанным «задом», вынесена вперёд на +2 блока
-        final int halfW = NAC_WID / 2;  // 3
-
-        // вычисляем южную грань и северную с учётом смещения и выступа вперёд
+        // Гондола 15×7×7, скос «хвоста»
+        final int halfW = NAC_WID / 2;
         final int nacMaxZ = t.z + NAC_FRONT_PROTRUSION + NAC_SHIFT_SOUTH; // южная грань
-        final int nacMinZ = nacMaxZ - (NAC_LEN - 1);                       // северная грань (длина ровно NAC_LEN)
+        final int nacMinZ = nacMaxZ - (NAC_LEN - 1);                       // северная грань
 
         for (int z = nacMinZ; z <= nacMaxZ; z++) {
-            // Срез задней части: у самых «хвостовых» слоёв уменьшаем верх и ширину
-            int backK = z - nacMinZ; // 0 у самого хвоста
-            int topCut  = Math.max(0, 2 - backK);   // урезаем верх на 2/1/0
-            int sideCut = Math.max(0, 2 - backK);   // и бока на 2/1/0
+            int backK = z - nacMinZ; // 0 у хвоста
+            int topCut  = Math.max(0, 2 - backK);
+            int sideCut = Math.max(0, 2 - backK);
 
             int allowHalfW = Math.max(0, halfW - sideCut);
             int minX = t.x - allowHalfW;
             int maxX = t.x + allowHalfW;
 
             for (int x = minX; x <= maxX; x++) {
-                // База гондолы «по рельефу» + высота башни → стоит ровно на столбе
-                int yBaseLocal = localTopY(x, z, H);
+                int yBaseLocal = localTopY(t, x, z, H);
                 if (yBaseLocal == Integer.MIN_VALUE) continue;
-
                 int yMin = yBaseLocal;
-                int yMax = yBaseLocal + NAC_HEI - 1 - topCut; // скос по верху
-
-                for (int y = yMin; y <= yMax; y++) {
-                    setBlockSafe(x, y, z, MATERIAL);
-                }
+                int yMax = yBaseLocal + NAC_HEI - 1 - topCut;
+                for (int y = yMin; y <= yMax; y++) setBlockSafe(x, y, z, MATERIAL);
             }
         }
 
-        // 3) Ступица и небольшой горизонтальный конус по +Z (к югу)
+        // Ступица/нос
         final int hubX = t.x;
-        final int hubZ = nacMaxZ + 1;                       // сразу южнее гондолы
-        final int hubY = localTopY(t.x, nacMaxZ, H) + NAC_HEI / 2; // центр по высоте южной стенки
+        final int hubZ = nacMaxZ + 1;
+        final int hubY = localTopY(t, t.x, nacMaxZ, H) + NAC_HEI / 2;
 
-        // Пластина 3×3 на южной стенке (узел крепления)
+        // Плитка 3×3
         fillSquareXY(hubX, hubY, hubZ, 1, MATERIAL);
-
-        // Нос-«конус» вдоль +Z
+        // Конус
         buildHorizontalConeZ(hubX, hubY, hubZ + 1, HUB_CONE_LEN, HUB_CONE_R0, MATERIAL);
 
-        // 4) Три лопасти «мерседес», теперь объёмные и по Z (толщина)
-        drawBladeTapered3D(hubX, hubY, hubZ, BLADE_LENGTH, Math.toRadians(90));   // вверх
-        drawBladeTapered3D(hubX, hubY, hubZ, BLADE_LENGTH, Math.toRadians(210));  // вниз-влево
-        drawBladeTapered3D(hubX, hubY, hubZ, BLADE_LENGTH, Math.toRadians(330));  // вниз-вправо
+        // Три объёмные лопасти (мерседес)
+        drawBladeTapered3D(hubX, hubY, hubZ, bladeLen, Math.toRadians(90));   // вверх
+        drawBladeTapered3D(hubX, hubY, hubZ, bladeLen, Math.toRadians(210));  // вниз-влево
+        drawBladeTapered3D(hubX, hubY, hubZ, bladeLen, Math.toRadians(330));  // вниз-вправо
+    }
+
+    // ===== Рендер маленькой турбины (тонкие линии, гондола 3×3×5, ножка 2×2) =====
+    private void renderSmallTurbine(Turbine t) {
+        final int H = Math.max(2, t.heightBlocks);
+        final int bladeLen = clampInt(t.bladeLenBlocks > 0 ? t.bladeLenBlocks : 3, MIN_BLADE_LEN, 48);
+
+        // Ножка 2×2: колонки сидят на местном рельефе, высота ровно H
+        // Возьмём квадрат с углом в (t.x, t.z): {(0,0),(1,0),(0,1),(1,1)}
+        int[][] sq = new int[][] { {0,0}, {1,0}, {0,1}, {1,1} };
+        int yTopMax = Integer.MIN_VALUE;
+        for (int[] o : sq) {
+            int x = t.x + o[0], z = t.z + o[1];
+            int yBase = terrainYFromCoordsOrWorld(x, z, null);
+            if (yBase == Integer.MIN_VALUE) continue;
+            int yStart = yBase + 1;
+            int yEnd   = yStart + H - 1;
+            for (int y = yStart; y <= yEnd; y++) setBlockSafe(x, y, z, MATERIAL);
+            yTopMax = Math.max(yTopMax, yEnd + 1);
+        }
+        if (yTopMax == Integer.MIN_VALUE) return;
+
+        // Маленькая гондола 3×3×5, чуть смещена вперёд и на юг
+        final int halfW = SMALL_NAC_WID / 2; // 1
+        final int nacMaxZ = t.z + SMALL_NAC_FRONT_PROTRUSION + SMALL_NAC_SHIFT_SOUTH;
+        final int nacMinZ = nacMaxZ - (SMALL_NAC_LEN - 1);
+
+        for (int z = nacMinZ; z <= nacMaxZ; z++) {
+            int minX = t.x - halfW;
+            int maxX = t.x + halfW;
+            for (int x = minX; x <= maxX; x++) {
+                int yBaseLocal = localTopY(t, x, z, H);
+                if (yBaseLocal == Integer.MIN_VALUE) continue;
+                int yMin = yBaseLocal;
+                int yMax = yBaseLocal + SMALL_NAC_HEI - 1;
+                for (int y = yMin; y <= yMax; y++) setBlockSafe(x, y, z, MATERIAL);
+            }
+        }
+
+        // Узел и центр лопастей
+        final int hubX = t.x;
+        final int hubZ = nacMaxZ + 1;
+        final int hubY = localTopY(t, t.x, nacMaxZ, H) + SMALL_NAC_HEI / 2;
+
+        // Маленькая центральная точка (1×1)
+        setBlockSafe(hubX, hubY, hubZ, MATERIAL);
+
+        // Три ТОНКИЕ лопасти «мерседес» (без объёма, толщина 1 блок)
+        drawBladeLine2D(hubX, hubY, hubZ, bladeLen, Math.toRadians(90));   // вверх
+        drawBladeLine2D(hubX, hubY, hubZ, bladeLen, Math.toRadians(210));  // вниз-влево
+        drawBladeLine2D(hubX, hubY, hubZ, bladeLen, Math.toRadians(330));  // вниз-вправо
     }
 
     /** Локальный «верх башни» для (x,z): terrain+1+H. */
-    private int localTopY(int x, int z, int H) {
+    private int localTopY(Turbine t, int x, int z, int H) {
         int yBase = terrainYFromCoordsOrWorld(x, z, null);
         if (yBase == Integer.MIN_VALUE) return Integer.MIN_VALUE;
         return yBase + 1 + H;
@@ -355,17 +470,15 @@ public class WindTurbineGenerator {
             int xi = cx + (int)Math.round(dx * s);
             int yi = cy + (int)Math.round(dy * s);
 
-            // профиль радиусов по длине лопасти
             int rxy, rz;
-            if (s < 6) {                 // у корня
+            if (s < 6) {                  // у корня
                 rxy = 2; rz = 1;
             } else if (s < (int)(len * 0.7)) { // основная часть
                 rxy = 1; rz = 1;
-            } else {                      // кончик
+            } else {                       // кончик
                 rxy = 0; rz = 0;
             }
 
-            // интерполируем между prev и текущей точкой с объёмной «толстой» линией
             rasterLineZVariableCube(prevX, prevY, xi, yi, baseZ, prevRxy, rxy, prevRz, rz, MATERIAL);
 
             prevX = xi;
@@ -399,6 +512,37 @@ public class WindTurbineGenerator {
         }
     }
 
+    /** Тонкая лопасть (линия 1 блок толщиной) в плоскости X–Y при фиксированном Z. */
+    private void drawBladeLine2D(int cx, int cy, int baseZ, int len, double angleRad) {
+        double dx = Math.cos(angleRad);
+        double dy = Math.sin(angleRad);
+
+        int x0 = cx;
+        int y0 = cy;
+        int x1 = cx + (int)Math.round(dx * len);
+        int y1 = cy + (int)Math.round(dy * len);
+
+        rasterLineThin(x0, y0, x1, y1, baseZ, MATERIAL);
+    }
+
+    /** Обычный Брезенхэм, кладём по одному блоку на каждом шаге. */
+    private void rasterLineThin(int x0, int y0, int x1, int y1, int z, Block block) {
+        int dx = Math.abs(x1 - x0);
+        int dy = Math.abs(y1 - y0);
+        int sx = x0 < x1 ? 1 : -1;
+        int sy = y0 < y1 ? 1 : -1;
+        int err = dx - dy;
+
+        int x = x0, y = y0;
+        while (true) {
+            setBlockSafe(x, y, z, block);
+            if (x == x1 && y == y1) break;
+            int e2 = 2 * err;
+            if (e2 > -dy) { err -= dy; x += sx; }
+            if (e2 <  dx) { err += dx; y += sy; }
+        }
+    }
+
     /** Горизонтальный «нос»-конус: по +Z, радиус плавно уменьшается с r0 до 0 (линейно по слоям). */
     private void buildHorizontalConeZ(int cx, int cy, int zStart, int len, int r0, Block block) {
         if (len <= 0 || r0 <= 0) return;
@@ -408,7 +552,6 @@ public class WindTurbineGenerator {
             double rf = r0 * (1.0 - t);                             // плавное сужение
             int r = Math.max(0, (int)Math.round(rf));
 
-            // чтобы конус не «обрывался» слишком рано: держим толщину >=1 до предпоследнего слоя
             if (r == 0 && k < len - 1) r = 1;
 
             int rr = r * r;
