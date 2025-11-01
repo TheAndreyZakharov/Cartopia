@@ -135,11 +135,6 @@ public class CartopiaPipeline {
             railLamps.generate();
             broadcast(level, "Фонари вдоль рельсов готовы.");
             // ===== ИНФРАСТРУКТУРА =====
-            // Адресные точки → простые дома (только node с addr:*)
-            broadcast(level, "Старт генерации адресных домов…");
-            AddressPointBuildingsGenerator addrGen = new AddressPointBuildingsGenerator(level, coords, store);
-            addrGen.generate();
-            broadcast(level, "Адресные дома построены.");
             // Утилитарные уличные боксы однотипно
             broadcast(level, "Старт генерации утилитарных боксов…");
             UtilityBoxGenerator utilBoxGen = new UtilityBoxGenerator(level, coords, store);
@@ -155,17 +150,11 @@ public class CartopiaPipeline {
             WindTurbineGenerator wtGen = new WindTurbineGenerator(level, coords, store);
             wtGen.generate();
             broadcast(level, "Ветряки готовы.");
-
-
-
-
-
-
-// Мельницы
-
-
-
-
+            // Ветряные мельницы 
+            broadcast(level, "Старт генерации мельниц…");
+            ClassicWindmillGenerator wmGen = new ClassicWindmillGenerator(level, coords, store);
+            wmGen.generate();
+            broadcast(level, "Мельницы готовы.");
             // Наблюдательные вышки
             broadcast(level, "Старт генерации наблюдательных вышек…");
             WatchtowerGenerator wtowerGen = new WatchtowerGenerator(level, coords, store);
@@ -216,11 +205,6 @@ public class CartopiaPipeline {
             ElectricChargerGenerator evGen = new ElectricChargerGenerator(level, coords, store);
             evGen.generate();
             broadcast(level, "Электрозарядки готовы.");
-            // Ограждения, заборы, отбойники
-            broadcast(level, "Старт генерации ограждений/заборов/отбойников…");
-            FenceAndBarrierGenerator fenceGen = new FenceAndBarrierGenerator(level, coords, store);
-            fenceGen.generate();
-            broadcast(level, "Ограждения/заборы/отбойники готовы.");
             // Места отдыха: скамейки, столы, BBQ, беседки, палатки
             broadcast(level, "Старт генерации мест отдыха…");
             LeisureRestGenerator leisureGen = new LeisureRestGenerator(level, coords, store);
@@ -261,6 +245,16 @@ public class CartopiaPipeline {
             FlagpoleGenerator fpGen = new FlagpoleGenerator(level, coords, store);
             fpGen.generate();
             broadcast(level, "Флагштоки готовы.");
+            // Адресные точки - простые дома 
+            broadcast(level, "Старт генерации адресных домов…");
+            AddressPointBuildingsGenerator addrGen = new AddressPointBuildingsGenerator(level, coords, store);
+            addrGen.generate();
+            broadcast(level, "Адресные дома построены.");
+            // Ограждения, заборы, отбойники
+            broadcast(level, "Старт генерации ограждений/заборов/отбойников…");
+            FenceAndBarrierGenerator fenceGen = new FenceAndBarrierGenerator(level, coords, store);
+            fenceGen.generate();
+            broadcast(level, "Ограждения/заборы/отбойники готовы.");
             // Кладбища (надгробия)
             broadcast(level, "Старт генерации кладбищ…");
             CemeteryGravesGenerator cemGen = new CemeteryGravesGenerator(level, coords, store);
@@ -336,6 +330,10 @@ public class CartopiaPipeline {
 
 
 // Краны башенные отдельно  man_made	crane , некоторые как зоны отмечены - crane:mobile	rail
+// строим из желтого бетона. высота 30 метров
+
+
+
 
 // man_made	offshore_platform	node area	Offshore platform, oil platform or offshore drilling rig
 
