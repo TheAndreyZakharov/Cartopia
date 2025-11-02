@@ -12,7 +12,7 @@ displayURL="https://github.com/TheAndreyZakharov/Cartopia"
 issueTrackerURL="https://github.com/TheAndreyZakharov/Cartopia/issues"
 
 authors="Andrey Zakharov"
-credits="OpenStreetMap, OpenLandMap, OpenTopography, GMRT"
+credits="OpenStreetMap, OpenLandMap, Open-Meteo, OpenTopography, GMRT"
 
 description='''
 Cartopia turns real places into Minecraft worlds. Choose any location on Earth, set the area, confirm — and get a world generated from open map data.

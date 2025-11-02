@@ -864,7 +864,7 @@ requestAnimationFrame(() => {
   }
 
   function updateClasses({ noAnim } = {}){
-    const wantCompact = window.innerWidth <= 760;
+    const wantCompact = window.innerWidth <= 900;
     const wantTiny    = window.innerWidth <= 420;
 
     const hasCompact = footer.classList.contains('compact');
