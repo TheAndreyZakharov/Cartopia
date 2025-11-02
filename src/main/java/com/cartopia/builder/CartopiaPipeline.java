@@ -340,55 +340,11 @@ public class CartopiaPipeline {
             MonumentGenerator monGen = new MonumentGenerator(level, coords, store);
             monGen.generate();
             broadcast(level, "Памятники готовы.");
-
-
-
-
-
-
-
-
-
-
-
-
-
-// Драг лифты - поверхностные подъёмники
-// Фуникулёры  aerialway
-
-// =============================================
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+            // Подъёмники
+            broadcast(level, "Старт генерации подъёмников (aerialway)…");
+            AerialwayGenerator awGen = new AerialwayGenerator(level, coords, store);
+            awGen.generate();
+            broadcast(level, "Подъёмники готовы.");
 
 
 
