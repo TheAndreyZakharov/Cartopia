@@ -48,10 +48,11 @@ public class CartopiaPipeline {
         broadcast(level, "Старт генерации поверхности (DEM + покраска) …");
         try {
 
+
             
 
 
-
+// ==========================================================================================
             // ===== РЕЛЬЕФ И ЕГО РАСКРАСКА, ДОРОГИ, ЖД =====
             // Рельеф
             SurfaceGenerator surface = new SurfaceGenerator(level, coords, demTifFile, landcoverTifFileOrNull, store);
@@ -75,6 +76,7 @@ public class CartopiaPipeline {
             PierGenerator piers = new PierGenerator(level, coords, store);
             piers.generate();
             broadcast(level, "Пирсы готовы.");
+// ==========================================================================================
             // ===== РАЗМЕТКА =====
             // Пешеходные переходы
             broadcast(level, "Старт разметки пешеходных переходов…");
@@ -101,6 +103,7 @@ public class CartopiaPipeline {
             ParkingStallGenerator stalls = new ParkingStallGenerator(level, coords, store);
             stalls.generate();
             broadcast(level, "Парковочные места готовы.");
+// ==========================================================================================
             // ===== МОСТЫ / ТУННЕЛИ =====
             // Мосты/эстакады (без тоннелей)
             broadcast(level, "Старт генерации мостов/эстакад…");
@@ -117,12 +120,14 @@ public class CartopiaPipeline {
             RoadButtonMarkingGenerator roadButtons = new RoadButtonMarkingGenerator(level, coords, store);
             roadButtons.generate();
             broadcast(level, "Дорожная кнопочная разметка готова.");
+// ==========================================================================================
             // ===== ЗДАНИЯ =====
             // Здания
             broadcast(level, "Старт генерации зданий…");
             BuildingGenerator buildings = new BuildingGenerator(level, coords, store);
             buildings.generate();
             broadcast(level, "Здания готовы.");
+// ==========================================================================================
             // ===== ОСВЕЩЕНИЕ =====
             // Дорожные фонари
             broadcast(level, "Старт расстановки дорожных фонарей…");
@@ -134,6 +139,7 @@ public class CartopiaPipeline {
             RailLampGenerator railLamps = new RailLampGenerator(level, coords, store);
             railLamps.generate();
             broadcast(level, "Фонари вдоль рельсов готовы.");
+// ==========================================================================================
             // ===== ИНФРАСТРУКТУРА =====
             // Утилитарные уличные боксы однотипно
             broadcast(level, "Старт генерации утилитарных боксов…");
@@ -321,10 +327,10 @@ public class CartopiaPipeline {
             cons.generate();
             broadcast(level, "Стройплощадки оформлены.");
             // Краны 
-            broadcast(level, "Старт генерации кранов (категория 1)...");
+            broadcast(level, "Старт генерации кранов ...");
             CraneGenerator craneGen = new CraneGenerator(level, coords, store);
             craneGen.generate();
-            broadcast(level, "Краны (категория 1) готовы.");
+            broadcast(level, "Краны готовы.");
             // Реклама
             broadcast(level, "Старт генерации рекламы…");
             AdvertisingGenerator adGen = new AdvertisingGenerator(level, coords, store);
@@ -345,28 +351,110 @@ public class CartopiaPipeline {
             AerialwayGenerator awGen = new AerialwayGenerator(level, coords, store);
             awGen.generate();
             broadcast(level, "Подъёмники готовы.");
+            // Входы в пещеры
+            broadcast(level, "Старт генерации входов в пещеры…");
+            CaveEntranceGenerator caveGen = new CaveEntranceGenerator(level, coords, store);
+            caveGen.generate();
+            broadcast(level, "Входы в пещеры готовы.");
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
 // ==========================================================================================
-
-
-
-
-
             // ===== РАСТИТЕЛЬНОСТЬ ======
-// Поля с посевами - по цветам
+
+
+
+// landuse=meadow - Луг или пастбище
+// landuse=grass - Трава
+// landuse=farmland - Сельскохозяйственные поля
+// natural=grassland - Злаки и похожие
+// landuse=village_green - Зелёная зона
+// landuse=orchard - Фруктовый сад
+// natural=scrub - Кустарник крупный дикий, мелкие деревья
+// natural=heath - пустошь, Карликовые кустарники
+// landuse=vineyard - виноградники
+// natural=tree - отдельное дерево
+// 	tree_row стены из деревьев
+// natural=wood лес
+// landuse=forest лес
+// landuse=orchard как лес
+// natural=heath лес из кустов
+// natural=scrub редкие кустарники
+// landuse=vineyard виноградники
+// natural=shrubbery кустарники ухоженные
+// barrier=hedge живая изгородь (добавить в барьеры)
+// natural=grassland высокая трава
+// landuse=grass просто трава 
+// natural=meadow луга и пастбища
+// leaf_type=broadleaved Лиственный лес.
+// leaf_type=needleleaved Хвойный лес.
+// leaf_type=mixed Смешанный лес
+// leaf_type=leafless Безлистная растительность	(кактусы колючки и тп)
+// natural=tundra травы мох лишайники карликовые кусты
+// wetland, swomp и тп болота в одном стиле сделать - травой кустами и тп
+/*
+ * где есть трава всякая
+ * leisure=dog_park
+ * leisure=garden
+ * leisure=golf_course 
+ * leisure=park 
+ * leisure=pitch 
+ * natural=grassland
+ * landuse=meadow
+ * landuse=recreation_ground 
+ * landuse=village_green
+ * natural=heath
+ * natural=scrub 
+ * natural=wetland
+ * landcover=grass
+ */
+
+
+
+
+
+
+
+// Поля с посевами - по цветам (по зонам разное)
 // Всё засадить соответствующими типами деревьев, травы и тд
-// Учитывать зоны - просеки под ЛЭП и тд
+// Учитывать зоны - просеки под ЛЭП и тд, зоны по типам деревьев
 // Рассаживать везде, но учитывать интенсивность от зон
 // кусты leaf_type	broadleaved natural	tree_row и тп
 // отдельные деревья natural	tree
-// 	tree_row стены из деревьев
-// barrier	hedge добавить в заборы из листвы
 
 
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+// ==========================================================================================
             // ===== ОЖИВЛЕНИЕ =====
 // Где точно зона лесов - спавн волков, лис, медведей, лошадей и тд
 // Где зона ферм и тд - спавн овец, коров, куриц, лошадей и тд
@@ -374,21 +462,15 @@ public class CartopiaPipeline {
 // Где пасеки - спавн пчел
 // На тропинках, тротуарах, в парках, на парковках, жилых зонах и тд спавн жителей - чтобы они не выходили за свои зоны
 // Логика "автомобилей", плавно "ездящих" по дорогам
-
-
+// ==========================================================================================
             // ===== ВРЕМЯ =====
 // Устанавливать время в игре, соответствующее реальному времени в генерируемой зоне
 // Сопоставлять координаты, нахождение игрока и перепроверять время на этих координатах
-
-
+// ==========================================================================================
             // ===== ПОГОДА =====
 // Устанавливать погоду в игре, соответствующую реальной погоде в генерируемой зоне
 // Сопоставлять координаты, нахождение игрока и перепроверять погоду на этих координатах
-
-
-
-
-
+// ==========================================================================================
             // ===== СОХРАНЕНИЕ =====
             broadcast(level, "Сохраняю мир…");
             level.save(null, true, false);
