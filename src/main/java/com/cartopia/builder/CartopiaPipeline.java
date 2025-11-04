@@ -317,7 +317,7 @@ public class CartopiaPipeline {
             miningGen.generate();
             broadcast(level, "Ископаемые готовы.");
             // Аэродромные флажки (windsock)
-            broadcast(level, "Старт генерации флажков (windsock)...");
+            broadcast(level, "Старт генерации флажков");
             WindsockFlagsGenerator windsockGen = new WindsockFlagsGenerator(level, coords, store);
             windsockGen.generate();
             broadcast(level, "Флажки готовы.");
@@ -347,67 +347,28 @@ public class CartopiaPipeline {
             monGen.generate();
             broadcast(level, "Памятники готовы.");
             // Подъёмники
-            broadcast(level, "Старт генерации подъёмников (aerialway)…");
+            broadcast(level, "Старт генерации подъёмников");
             AerialwayGenerator awGen = new AerialwayGenerator(level, coords, store);
             awGen.generate();
             broadcast(level, "Подъёмники готовы.");
             // Входы в пещеры
-            broadcast(level, "Старт генерации входов в пещеры…");
+            broadcast(level, "Старт генерации входов в пещеры");
             CaveEntranceGenerator caveGen = new CaveEntranceGenerator(level, coords, store);
             caveGen.generate();
             broadcast(level, "Входы в пещеры готовы.");
-
-
-
 // ==========================================================================================
             // ===== РАСТИТЕЛЬНОСТЬ ======
+            // Растительность
+            broadcast(level, "Старт генерации растительности…");
+            VegetationScatterGenerator vegGen = new VegetationScatterGenerator(level, coords, store);
+            vegGen.generate();
+            broadcast(level, "Растительность готова.");
 
 
 
-// landuse=meadow - Луг или пастбище
-// landuse=grass - Трава
-// landuse=farmland - Сельскохозяйственные поля
-// natural=grassland - Злаки и похожие
-// landuse=village_green - Зелёная зона
-// landuse=orchard - Фруктовый сад
-// natural=scrub - Кустарник крупный дикий, мелкие деревья
-// natural=heath - пустошь, Карликовые кустарники
-// landuse=vineyard - виноградники
-// natural=tree - отдельное дерево
-// 	tree_row стены из деревьев
-// natural=wood лес
-// landuse=forest лес
-// landuse=orchard как лес
-// natural=heath лес из кустов
-// natural=scrub редкие кустарники
-// landuse=vineyard виноградники
-// natural=shrubbery кустарники ухоженные
-// barrier=hedge живая изгородь (добавить в барьеры)
-// natural=grassland высокая трава
-// landuse=grass просто трава 
-// natural=meadow луга и пастбища
-// leaf_type=broadleaved Лиственный лес.
-// leaf_type=needleleaved Хвойный лес.
-// leaf_type=mixed Смешанный лес
-// leaf_type=leafless Безлистная растительность	(кактусы колючки и тп)
-// natural=tundra травы мох лишайники карликовые кусты
-// wetland, swomp и тп болота в одном стиле сделать - травой кустами и тп
-/*
- * где есть трава всякая
- * leisure=dog_park
- * leisure=garden
- * leisure=golf_course 
- * leisure=park 
- * leisure=pitch 
- * natural=grassland
- * landuse=meadow
- * landuse=recreation_ground 
- * landuse=village_green
- * natural=heath
- * natural=scrub 
- * natural=wetland
- * landcover=grass
- */
+
+// применять время через пару минуту-две после генерации, чтобы всё выросло. постепенно от дня к нужному времени меняем в течении времени
+// добавить тумблеры вкл/выкл придерживаться реального времени (по умолчанию вкл) 
 
 
 
@@ -415,23 +376,20 @@ public class CartopiaPipeline {
 
 
 
-// Поля с посевами - по цветам (по зонам разное)
-// Всё засадить соответствующими типами деревьев, травы и тд
-// Учитывать зоны - просеки под ЛЭП и тд, зоны по типам деревьев
-// Рассаживать везде, но учитывать интенсивность от зон
-// кусты leaf_type	broadleaved natural	tree_row и тп
-// отдельные деревья natural	tree
 
 
 
+// ====
 
 
 // перевод на англ системных сообщений
 // изменить внешний вид кнопок в майне. добавить еще кнопок, объяснений на букву М
-// попробовать добавить тумблеры вкл/выкл функций генерации (время как минимум, как максимум для каждого пункта сделать такое)
 
 
+// ====
 
+
+//оптимизация Читаю DEM…, Читаю OpenLandMap landcover…
 
 
 
@@ -440,12 +398,12 @@ public class CartopiaPipeline {
 
 // ==========================================================================================
             // ===== ПОГОДА И ВРЕМЯ =====
-            try {
-                com.cartopia.weather.WeatherTimeController.start(level, coords);
-                broadcast(level, "Контроллер времени/погоды запущен (1 запрос/час, прошлый час).");
-            } catch (Exception e) {
-                broadcast(level, "Не удалось запустить контроллер погоды/времени: " + e.getMessage());
-            }
+            //try {
+            //    com.cartopia.weather.WeatherTimeController.start(level, coords);
+            //    broadcast(level, "Контроллер времени/погоды запущен (1 запрос/час, прошлый час).");
+            //} catch (Exception e) {
+            //    broadcast(level, "Не удалось запустить контроллер погоды/времени: " + e.getMessage());
+            //}
 // ==========================================================================================
             // ===== СОХРАНЕНИЕ =====
             broadcast(level, "Сохраняю мир…");

@@ -397,9 +397,15 @@ public class FenceAndBarrierGenerator {
         boolean hasBrickish = containsAnyValue(t, v -> v.contains("brick"));
         boolean hasGranite  = containsAnyValue(t, v -> v.contains("granite"));
 
-        // guard_rail / jersey_barrier → andesite wall (по ТЗ)
+        // guard_rail / jersey_barrier → andesite wall 
         if ("guard_rail".equals(barrier) || "jersey_barrier".equals(barrier)) {
             FenceStyle f = new FenceStyle(ANDESITE_WALL, 1, 1);
+            return applyHeightOverrideFromTags(t, f);
+        }
+
+        // живая изгородь (barrier=hedge) — только flowering azalea leaves
+        if ("hedge".equals(barrier)) {
+            FenceStyle f = new FenceStyle(Blocks.FLOWERING_AZALEA_LEAVES, 1, 1);
             return applyHeightOverrideFromTags(t, f);
         }
 
@@ -477,8 +483,16 @@ public class FenceAndBarrierGenerator {
     private void placeFenceColumn(int x, int z, Block block, int height) {
         int yBase = groundY(x, z);
         if (yBase == Integer.MIN_VALUE) return;
-        for (int h=1; h<=height; h++) {
-            setBlock(x, yBase + h, z, block);
+        for (int h = 1; h <= height; h++) {
+            BlockState st = block.defaultBlockState();
+            // Для листьев: делаем их «постоянными», чтобы не разлагались
+            if (st.hasProperty(BlockStateProperties.PERSISTENT)) {
+                st = st.setValue(BlockStateProperties.PERSISTENT, true);
+            }
+            if (st.hasProperty(BlockStateProperties.DISTANCE)) {
+                st = st.setValue(BlockStateProperties.DISTANCE, 1);
+            }
+            level.setBlock(new BlockPos(x, yBase + h, z), st, 3);
         }
     }
 
@@ -788,6 +802,7 @@ private boolean isBridgeOrTunnel(JsonObject t){
         return noFenceMask.contains(BlockPos.asLong(x, 0, z));
     }
 
+    @SuppressWarnings("unused")
     // ======== Низкоуровневые сеттеры и рельеф ========
     private void setBlock(int x, int y, int z, Block b) {
         level.setBlock(new BlockPos(x,y,z), b.defaultBlockState(), 3);
