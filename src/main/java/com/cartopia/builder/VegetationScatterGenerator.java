@@ -352,7 +352,8 @@ public class VegetationScatterGenerator {
                 // мангрув — только в болотах, одиночные по данным вне болот игнорируем
                 continue;
             }
-            if (placeTreeWithMoss(level, tp.x, tp.z, sap, true, false)) tpPlaced++;
+            if (placeTreeWithMoss(level, tp.x, tp.z, sap, true, false,
+                                worldMinX, worldMaxX, worldMinZ, worldMaxZ)) tpPlaced++;
         }
         broadcast(level, "VegetationScatter: поставлено одиночных деревьев: " + tpPlaced);
 
@@ -362,7 +363,7 @@ public class VegetationScatterGenerator {
         int trIdx = 0;
         for (TreeRow row : treeRows) {
             trIdx++;
-            trPlaced += placeTreeRow(row, 5); // шаг 5 блоков
+            trPlaced += placeTreeRow(row, 5, worldMinX, worldMaxX, worldMinZ, worldMaxZ); // шаг 5 блоков
             if (trIdx % 50 == 0) broadcast(level, "Рядов обработано: " + trIdx + "…");
         }
         broadcast(level, "VegetationScatter: посажено деревьев в рядах: " + trPlaced);
@@ -684,26 +685,37 @@ public class VegetationScatterGenerator {
     }
 
     // --- Дерево с мхом (для одиночных/рядов и болот) ---
-    private boolean placeTreeWithMoss(LevelAccessor lvl, int x, int z, Block sapling, boolean forceReplaceTop, boolean swampPlatform) {
+    private boolean placeTreeWithMoss(LevelAccessor lvl, int x, int z, Block sapling,
+                                    boolean forceReplaceTop, boolean swampPlatform,
+                                    int wMinX, int wMaxX, int wMinZ, int wMaxZ) {
+
+        // за пределы — ни шагу
+        if (x < wMinX || x > wMaxX || z < wMinZ || z > wMaxZ) return false;
+
         int y = terrainYFromCoordsOrWorld(x, z);
         BlockPos ground = new BlockPos(x, y, z);
         BlockPos above  = new BlockPos(x, y+1, z);
 
         if (swampPlatform) {
-            // 10×10 «ковёр» мха по рельефу, центр — (x,z)
-            for (int dx=-5; dx<=4; dx++) {
-                for (int dz=-5; dz<=4; dz++) {
-                    int yy = terrainYFromCoordsOrWorld(x+dx, z+dz);
-                    BlockPos gg = new BlockPos(x+dx, yy, z+dz);
+            // ковёр 10×10, но НЕ вываливаемся за bbox
+            for (int dx = -5; dx <= 4; dx++) {
+                for (int dz = -5; dz <= 4; dz++) {
+                    int xx = x + dx, zz = z + dz;
+                    if (xx < wMinX || xx > wMaxX || zz < wMinZ || zz > wMaxZ) continue;
+                    int yy = terrainYFromCoordsOrWorld(xx, zz);
+                    BlockPos gg = new BlockPos(xx, yy, zz);
                     level.setBlock(gg, Blocks.MOSS_BLOCK.defaultBlockState(), 3);
                 }
             }
         } else {
-            placeMoss(ground);
+            // один блок мха под деревом
+            level.setBlock(ground, Blocks.MOSS_BLOCK.defaultBlockState(), 3);
         }
 
+        // если не хотим насильно затирать верхний блок — можно уйти
         if (!lvl.isEmptyBlock(above) && !forceReplaceTop) return false;
-        // разрешено заменить верх (исключение для natural=tree)
+
+        // форсим посадку: "несмотря ни на что"
         lvl.setBlock(above, sapling.defaultBlockState(), 3);
         return true;
     }
@@ -716,7 +728,8 @@ public class VegetationScatterGenerator {
         return true;
     }
 
-    private long placeTreeRow(TreeRow row, int step) {
+    private long placeTreeRow(TreeRow row, int step,
+                            int wMinX, int wMaxX, int wMinZ, int wMaxZ) {
         long placed = 0;
         if (row.polyline.isEmpty()) return 0;
         Random rnd = new Random(0xCCAA33L ^ row.polyline.size());
@@ -741,7 +754,12 @@ public class VegetationScatterGenerator {
                 else if ("broadleaved".equals(row.leafType)) sap = sapPickBroad;
                 else sap = pickBroadleaved(rnd); // дефолт дуб/лиственные
                 if (sap == MANGROVE) sap = pickBroadleaved(rnd); // мангровые не для рядов
-                if (placeTreeWithMoss(level, x, z, sap, false, false)) placed++;
+                // не ставим, если точка вне bbox
+                if (x < wMinX || x > wMaxX || z < wMinZ || z > wMaxZ) continue;
+
+                // РЯДЫ — как одиночные: мох + форс-замена верхнего блока
+                if (placeTreeWithMoss(level, x, z, sap, true, false,
+                                    wMinX, wMaxX, wMinZ, wMaxZ)) placed++;
             }
         }
         return placed;
@@ -928,7 +946,8 @@ public class VegetationScatterGenerator {
                     }
 
                     // Под саженец — мох. Для болот — площадка 10×10 и в центр.
-                    if (placeTreeWithMoss(level, x, z, sap, false, swampPlat)) placed++;
+                    if (placeTreeWithMoss(level, x, z, sap, false, swampPlat,
+                                        wMinX, wMaxX, wMinZ, wMaxZ)) placed++;
                 }
 
                 if (seen % step == 0) {
