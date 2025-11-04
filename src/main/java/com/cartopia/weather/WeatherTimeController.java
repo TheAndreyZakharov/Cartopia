@@ -7,6 +7,8 @@ import net.minecraftforge.common.MinecraftForge;
 import net.minecraftforge.event.TickEvent;
 import net.minecraftforge.eventbus.api.SubscribeEvent;
 import net.minecraftforge.server.ServerLifecycleHooks;
+import net.minecraft.world.level.GameRules;
+import net.minecraft.world.level.storage.ServerLevelData;
 
 import java.net.URI;
 import java.net.URLEncoder;
@@ -41,6 +43,15 @@ public final class WeatherTimeController {
         volatile double anchorDayTime = 0.0;   // к какому dayTime привязались
         volatile double ticksPerMs   = 1000.0 / 3_600_000.0; // 1000 тиков / 1 реальный час
         volatile long   lastSetMs    = 0L;     // чтобы не спамить setDayTime
+        // === SNAPSHOT оригинального состояния при включении ===
+        volatile Long    snapDayTimeTicks = null;
+        volatile Boolean snapRaining = null;
+        volatile Boolean snapThundering = null;
+        volatile Integer snapClearTicks = null;
+        volatile Integer snapRainTicks = null;
+        volatile Integer snapThunderTicks = null;
+        volatile Boolean snapRuleDaylight = null;
+        volatile Boolean snapRuleWeather = null;
 
         Instance(ServerLevel level, double lat, double lon, Path outDir){
             this.level = level; this.lat = lat; this.lon = lon; this.outDir = outDir;
@@ -56,14 +67,12 @@ public final class WeatherTimeController {
             Path outDir = Paths.get(coords.getAsJsonObject("paths").get("packDir").getAsString());
 
             Instance inst = new Instance(level, lat, lon, outDir);
-            INSTANCES.put(level, inst);
 
             Instance prev = INSTANCES.put(level, inst);
             if (prev != null) prev.running = false;
 
-            freezeCycles(level);
-            // первый запрос сразу
-            SCHED.execute(() -> fetchAndApply(inst, "initial"));
+            // ВКЛ по умолчанию + снимок ТЕКУЩЕГО ванильного состояния
+            setEnabled(level, true);
         }catch(Exception e){
             e.printStackTrace();
         }
@@ -109,6 +118,7 @@ public final class WeatherTimeController {
     // ===== запрос к Open-Meteo, применение погоды и планирование следующего =====
     private static void fetchAndApply(Instance i, String reason){
         if (INSTANCES.get(i.level) != i) return; // этот Instance уже не актуален
+        if (!i.running) return;    //  если выключили — ничего не делаем
         try{
             String hourly = String.join(",",
                 "weather_code","precipitation","rain","showers","snowfall","temperature_2m"
@@ -187,21 +197,25 @@ public final class WeatherTimeController {
             } catch (Exception ignore){}
 
             // применяем погоду
-            Weather w = mapWeather(code, precip, snowcm, t2m);
-            MinecraftServer s = i.level.getServer();
-            s.execute(() -> applyWeather(i.level, w));
+            if (i.running) { // NEW: на всякий случай ещё раз
+                Weather w = mapWeather(code, precip, snowcm, t2m);
+                MinecraftServer s = i.level.getServer();
+                s.execute(() -> applyWeather(i.level, w));
+            }
 
-            // планируем следующий запуск на локальное «HH:05»
-            ZonedDateTime nowZ = ZonedDateTime.now(i.zoneId);
-            ZonedDateTime next = nowZ.withMinute(5).withSecond(0).withNano(0);
-            if (!next.isAfter(nowZ)) next = next.plusHours(1);
-            long delayMs = Duration.between(ZonedDateTime.now(i.zoneId), next).toMillis();
-            SCHED.schedule(() -> fetchAndApply(i, "hourly"), Math.max(1000, delayMs), TimeUnit.MILLISECONDS);
+            // планируем следующий запуск...
+            if (i.running) { // NEW: планируем только когда включено
+                ZonedDateTime nowZ = ZonedDateTime.now(i.zoneId);
+                ZonedDateTime next = nowZ.withMinute(5).withSecond(0).withNano(0);
+                if (!next.isAfter(nowZ)) next = next.plusHours(1);
+                long delayMs = Duration.between(ZonedDateTime.now(i.zoneId), next).toMillis();
+                SCHED.schedule(() -> fetchAndApply(i, "hourly"), Math.max(1000, delayMs), TimeUnit.MILLISECONDS);
+            }
 
-        }catch(Exception e){
+        } catch(Exception e){
             e.printStackTrace();
-            // повтора хватит через 5 минут
-            SCHED.schedule(() -> fetchAndApply(i, "retry"), 5, TimeUnit.MINUTES);
+            // повтора хватит через 5 минут, но тоже только если включено
+            SCHED.schedule(() -> { if (i.running) fetchAndApply(i, "retry"); }, 5, TimeUnit.MINUTES);
         }
     }
 
@@ -267,4 +281,160 @@ public final class WeatherTimeController {
     private static double getD(JsonObject h, String key, double def){
         try { return h.getAsJsonArray(key).get(0).getAsDouble(); } catch (Exception e) { return def; }
     }
+
+
+
+    // Узнать, активен ли синк на уровне
+    public static boolean isEnabled(ServerLevel level) {
+        Instance i = INSTANCES.get(level);
+        return i != null && i.running;
+    }
+
+    @SuppressWarnings("unused")
+    // Включить/выключить синк на уровне: при ВКЛ делаем снапшот, при ВЫКЛ — восстанавливаем
+    public static void setEnabled(ServerLevel level, boolean enabled) {
+        Instance i = INSTANCES.get(level);
+        if (i == null) return;
+
+        if (enabled) {
+            // --- Снимок текущего "ванильного" состояния ДО любых изменений ---
+            try {
+                // Время (сохраним фазы суток; setDayTime работает по 0..23999, getDayTime в long)
+                long dt = level.getDayTime();
+                i.snapDayTimeTicks = dt % 24000L;
+
+                // Погода
+                try {
+                    ServerLevelData data = (ServerLevelData) level.getLevelData();
+                    i.snapRaining       = data.isRaining();
+                    i.snapThundering    = data.isThundering();
+                    i.snapClearTicks    = data.getClearWeatherTime();
+                    i.snapRainTicks     = data.getRainTime();
+                    i.snapThunderTicks  = data.getThunderTime();
+                } catch (Throwable t) {
+                    // Фоллбек, если класс/методы отличаются
+                    i.snapRaining    = level.isRaining();
+                    i.snapThundering = level.isThundering();
+                    // разумные длительности по умолчанию
+                    i.snapClearTicks   = i.snapRaining ? 0 : 6000;
+                    i.snapRainTicks    = i.snapRaining ? 6000 : 0;
+                    i.snapThunderTicks = i.snapThundering ? 6000 : 0;
+                }
+
+                // Геймерулы
+                i.snapRuleDaylight = level.getGameRules().getBoolean(GameRules.RULE_DAYLIGHT);
+                i.snapRuleWeather  = level.getGameRules().getBoolean(GameRules.RULE_WEATHER_CYCLE);
+            } catch (Throwable ignore) {}
+
+            // --- Включаем синк и замораживаем ванильные циклы ---
+            i.running = true;
+            freezeCycles(level);
+
+            // «Пинок»: сразу подтянем реальное время/погоду
+            i.anchorWallMs = System.currentTimeMillis();
+            try {
+                SCHED.execute(() -> {
+                    if (!i.running) return;
+                    fetchAndApply(i, "manual-enable");
+                });
+            } catch (Throwable ignore) {}
+
+        } else {
+            // --- Выключаем синк и возвращаем ВСЁ как было в момент включения ---
+            i.running = false;
+
+            MinecraftServer s = level.getServer();
+            s.execute(() -> {
+                // 1) Время
+                if (i.snapDayTimeTicks != null) {
+                    try { level.setDayTime(i.snapDayTimeTicks); }
+                    catch (Throwable t) {
+                        try {
+                            s.getCommands().performPrefixedCommand(
+                                s.createCommandSourceStack().withLevel(level).withSuppressedOutput(),
+                                "time set " + i.snapDayTimeTicks
+                            );
+                        } catch (Throwable ignored) {}
+                    }
+                }
+                // 2) Погода
+                
+                try {
+                    int clearTicks   = (i.snapClearTicks   != null ? i.snapClearTicks   : (i.snapRaining != null && i.snapRaining ? 0 : 6000));
+                    int rainTicks    = (i.snapRainTicks    != null ? i.snapRainTicks    : (i.snapRaining != null && i.snapRaining ? 6000 : 0));
+                    int thunderTicks = (i.snapThunderTicks != null ? i.snapThunderTicks : (i.snapThundering != null && i.snapThundering ? 6000 : 0));
+                    boolean raining  = (i.snapRaining    != null && i.snapRaining);
+                    boolean thunder  = (i.snapThundering != null && i.snapThundering);
+
+                    level.setWeatherParameters(clearTicks, rainTicks, raining, thunder);
+                } catch (Throwable t) {
+                    try {
+                        String cmd = "weather " + ((i.snapThundering != null && i.snapThundering) ? "thunder"
+                                : (i.snapRaining != null && i.snapRaining) ? "rain" : "clear") + " 300";
+                        s.getCommands().performPrefixedCommand(
+                            s.createCommandSourceStack().withLevel(level).withSuppressedOutput(),
+                            cmd
+                        );
+                    } catch (Throwable ignored) {}
+                }
+
+                // 3) Вернём геймерулы к сохранённым значениям (именно к тем, что были при включении)
+                try {
+                    if (i.snapRuleDaylight != null) {
+                        level.getGameRules().getRule(GameRules.RULE_DAYLIGHT).set(i.snapRuleDaylight, s);
+                    }
+                } catch (Throwable t) {
+                    try {
+                        s.getCommands().performPrefixedCommand(
+                            s.createCommandSourceStack().withLevel(level).withSuppressedOutput(),
+                            "gamerule doDaylightCycle " + ((i.snapRuleDaylight != null && i.snapRuleDaylight) ? "true" : "false")
+                        );
+                    } catch (Throwable ignored) {}
+                }
+                try {
+                    if (i.snapRuleWeather != null) {
+                        level.getGameRules().getRule(GameRules.RULE_WEATHER_CYCLE).set(i.snapRuleWeather, s);
+                    }
+                } catch (Throwable t) {
+                    try {
+                        s.getCommands().performPrefixedCommand(
+                            s.createCommandSourceStack().withLevel(level).withSuppressedOutput(),
+                            "gamerule doWeatherCycle " + ((i.snapRuleWeather != null && i.snapRuleWeather) ? "true" : "false")
+                        );
+                    } catch (Throwable ignored) {}
+                }
+            });
+        }
+    }
+
+    @SuppressWarnings("unused")
+    // Разморозка правил (вернуть ванильное поведение)
+    private static void unfreezeCycles(ServerLevel level){
+        MinecraftServer s = level.getServer();
+        s.execute(() -> {
+            try {
+                level.getGameRules().getRule(net.minecraft.world.level.GameRules.RULE_DAYLIGHT).set(true, s);
+            } catch (Throwable t) {
+                try { s.getCommands().performPrefixedCommand(
+                    s.createCommandSourceStack().withLevel(level).withSuppressedOutput(),
+                    "gamerule doDaylightCycle true"); } catch (Throwable ignored) {}
+            }
+            try {
+                level.getGameRules().getRule(net.minecraft.world.level.GameRules.RULE_WEATHER_CYCLE).set(true, s);
+            } catch (Throwable t) {
+                try { s.getCommands().performPrefixedCommand(
+                    s.createCommandSourceStack().withLevel(level).withSuppressedOutput(),
+                    "gamerule doWeatherCycle true"); } catch (Throwable ignored) {}
+            }
+        });
+    }
+
+    public static boolean hasInstance(ServerLevel level) {
+        return INSTANCES.containsKey(level);
+    }
+
+
+
+
+
 }

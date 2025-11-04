@@ -61,6 +61,8 @@ public class BuildHttpServer {
                 } finally { ex.close(); }
             });
 
+            httpServer.createContext("/realtime", BuildHttpServer::handleRealtime);
+
             httpServer.setExecutor(Executors.newCachedThreadPool());
             httpServer.start();
             System.out.println("[Cartopia] Web server started on 127.0.0.1:" + PORT);
@@ -475,4 +477,48 @@ public class BuildHttpServer {
     private static String isoStamp() {
         return Instant.now().toString().replace("-", "").replace(":", "").replace("T", "_").replaceAll("\\..+", "");
     }
+
+    // ---- Новый эндпоинт /realtime ----
+    // GET  -> {"enabled":true|false}
+    // POST -> body: {"enabled":true|false}
+    private static void handleRealtime(HttpExchange ex) throws IOException {
+        String method = ex.getRequestMethod().toUpperCase(Locale.ROOT);
+        MinecraftServer s = ServerLifecycleHooks.getCurrentServer();
+        if (s == null) { sendText(ex, 503, "{\"error\":\"Server not ready\"}", "application/json"); return; }
+
+        try {
+            if ("GET".equals(method)) {
+                ServerLevel level = s.overworld();
+
+                boolean has = com.cartopia.weather.WeatherTimeController.hasInstance(level);
+                boolean enabled = com.cartopia.weather.WeatherTimeController.isEnabled(level);
+
+                // До первой генерации инстанс ещё не создан — показываем дефолт «ВКЛ»
+                if (!has) {
+                    enabled = true;
+                    sendText(ex, 200, "{\"enabled\":true,\"pending\":true}", "application/json");
+                } else {
+                    sendText(ex, 200, "{\"enabled\":"+enabled+"}", "application/json");
+                }
+                return;
+            }
+            if ("POST".equals(method)) {
+                String body = new String(ex.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
+                boolean enabled = JsonParser.parseString(body).getAsJsonObject().get("enabled").getAsBoolean();
+                s.execute(() -> {
+                    for (ServerLevel lvl : s.getAllLevels()) {
+                        com.cartopia.weather.WeatherTimeController.setEnabled(lvl, enabled);
+                    }
+                    broadcast(s, "[Cartopia] Реальное время/погода: " + (enabled ? "ВКЛ" : "ВЫКЛ"));
+                });
+                sendText(ex, 200, "{\"ok\":true}", "application/json");
+                return;
+            }
+            ex.sendResponseHeaders(405, -1);
+        } finally {
+            ex.close();
+        }
+    }
+
+
 }
