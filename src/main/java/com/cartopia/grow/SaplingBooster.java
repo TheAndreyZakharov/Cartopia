@@ -14,18 +14,10 @@ import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.chunk.LevelChunk;
 import net.minecraft.world.level.levelgen.Heightmap;
 import net.minecraft.tags.BlockTags;
+import net.minecraft.world.level.block.BonemealableBlock;
 
-/**
- * Ускоряет рост растений вокруг игрока.
- * Таргеты:
- *  - саженцы деревьев (SaplingBlock)
- *  - посевы (любой CropBlock: пшеница/морковь/картофель/свёкла и т.п.)
- *  - стебли тыквы/дыни (StemBlock)
- *  - адский нарост (NetherWartBlock)
- *
- * Механика: многократно вызывает randomTick у таргетных блоков (пока они не превратились во «выросшее» состояние),
- * приоритизируя чанки ближайшие к игроку и соблюдая общий бюджет на тик.
- */
+
+
 public class SaplingBooster {
 
     public static void boostAroundPlayer(ServerLevel level,
@@ -106,12 +98,16 @@ public class SaplingBooster {
                     BlockState st = level.getBlockState(pos);
                     if (!isGrowTarget(st)) continue;
 
-                    // Несколько randomTick подряд; если за время цикла блок сменился — останавливаемся
-                    for (int k = 0; k < growTicksEach; k++) {
-                        BlockState cur = level.getBlockState(pos);
-                        if (!isGrowTarget(cur)) break;          // уже вырос/сменился
-                        if (cur.isRandomlyTicking()) cur.randomTick(level, pos, rnd);
+                    // Сначала пробуем "форс-рост", который не зависит от света/погоды.
+                    // Если блок нам незнаком — уходим в прежний randomTick-памп как fallback.
+                    if (!tryForceGrow(level, pos, st, rnd, growTicksEach)) {
+                        for (int k = 0; k < growTicksEach; k++) {
+                            BlockState cur = level.getBlockState(pos);
+                            if (!isGrowTarget(cur)) break;
+                            if (cur.isRandomlyTicking()) cur.randomTick(level, pos, rnd);
+                        }
                     }
+ 
 
                     processed++;
                     if (processed >= budget) return processed; // этот чанк исчерпал бюджет
@@ -119,6 +115,87 @@ public class SaplingBooster {
             }
         }
         return processed;
+    }
+
+
+    @SuppressWarnings("unused")
+    /** Пытаемся вырастить блок "напрямую" (как костной мукой/внутренними методами), игнорируя свет/время. */
+    private static boolean tryForceGrow(ServerLevel level, BlockPos pos, BlockState state,
+                                        RandomSource rnd, int intensity) {
+       Block b = state.getBlock();
+
+        // 1) Саженцы деревьев — минуем проверку света (randomTick её делает, advanceTree — нет)
+        if (b instanceof SaplingBlock sap) {
+            int tries = Math.max(1, Math.min(8, intensity / 8)); // немного попыток
+            for (int i = 0; i < tries; i++) {
+                // advanceTree может не сработать (мало места/особые условия), пробуем несколько раз
+                sap.advanceTree(level, pos, state, rnd);
+                BlockState after = level.getBlockState(pos);
+                if (!(after.getBlock() instanceof SaplingBlock)) return true; // превратился в дерево
+                state = after;
+            }
+            return false; // остался саженцем — fallback попробует randomTick
+        }
+
+        // 2) Обычные культуры (пшеница/морковь/картофель/свёкла и т.п.)
+        if (b instanceof CropBlock crop) {
+            // Доталкиваем до максимального возраста
+            int max = crop.getMaxAge();
+            int safety = 1 + max; // страховка от циклов
+            for (int i = 0; i < safety; i++) {
+                BlockState cur = level.getBlockState(pos);
+                if (!(cur.getBlock() instanceof CropBlock c)) break;
+                if (c.getAge(cur) >= c.getMaxAge()) return true;
+                c.growCrops(level, pos, cur);
+            }
+            return true;
+        }
+
+        // 3) Стебли (тыква/дыня) — растим стебель
+        if (b instanceof StemBlock stem) {
+            int tries = Math.max(1, Math.min(7, intensity / 8));
+            for (int i = 0; i < tries; i++) {
+                BlockState cur = level.getBlockState(pos);
+                if (!(cur.getBlock() instanceof StemBlock s)) break;
+                s.performBonemeal(level, rnd, pos, cur);
+            }
+            return true;
+        }
+
+        // 4) Адский нарост — костной мукой не растёт, поэтому просто ставим макс. возраст
+        if (b instanceof NetherWartBlock) {
+            try {
+                BlockState cur = level.getBlockState(pos);
+                if (cur.getBlock() instanceof NetherWartBlock) {
+                    var AGE = NetherWartBlock.AGE; // IntegerProperty
+                    int curAge = cur.getValue(AGE);
+                    if (curAge < 3) {
+                        level.setBlock(pos, cur.setValue(AGE, 3), 3);
+                        return true;
+                    }
+                }
+            } catch (Throwable ignore) {}
+            return true;
+        }
+
+        // 5) Любые модовые культуры, у которых есть Bonemealable + тег CROPS
+        if (state.is(BlockTags.CROPS) && b instanceof BonemealableBlock bone) {
+            int tries = Math.max(1, Math.min(8, intensity / 8));
+            for (int i = 0; i < tries; i++) {
+                BlockState cur = level.getBlockState(pos);
+                if (!(cur.getBlock() instanceof BonemealableBlock bb)) break;
+                // isValidBonemealTarget обычно не проверяет свет для культур; на всякий случай — проверим шансом
+                if (bb.isValidBonemealTarget(level, pos, cur, false)) {
+                    bb.performBonemeal(level, rnd, pos, cur);
+                } else if (bb.isBonemealSuccess(level, rnd, pos, cur)) {
+                    bb.performBonemeal(level, rnd, pos, cur);
+                }
+            }
+            return true;
+        }
+
+        // Не знаем как "форсить" — пусть отработает старый randomTick-памп
+        return false;
     }
 
     /** Кого считаем целями ускорения. */
