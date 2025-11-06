@@ -738,6 +738,7 @@ public class SurfaceGenerator {
         return new double[]{lat, lng};
     }
 
+    @SuppressWarnings("unused")
     private static void fillMissingHeights(Map<Long, Double> hm, int minX, int maxX, int minZ, int maxZ) {
         for (int x = minX; x <= maxX; x++) {
             for (int z = minZ; z <= maxZ; z++) {
@@ -1035,6 +1036,7 @@ public class SurfaceGenerator {
     }
 
     // ===== Поверхность: сглаживание и перо OLM =====
+    @SuppressWarnings("unused")
     private static void blurSurface(Map<Long,String> srf,
                                     int minX, int maxX, int minZ, int maxZ,
                                     int iters, int minMajority, boolean includeWater,
@@ -1098,6 +1100,7 @@ public class SurfaceGenerator {
      * Меняем ТОЛЬКО те клетки, что пришли из OLM (и воду, и сушу).
      * Клетки из OSM и «морская» вода (waterProtected) не меняются и не голосуют.
      */
+    @SuppressWarnings("unused")
     private static void featherOlmZones(Map<Long,String> srf,
                                         int minX, int maxX, int minZ, int maxZ,
                                         int radius, int iters, int minVotes,
@@ -1187,6 +1190,7 @@ public class SurfaceGenerator {
         srf.putAll(cur);
     }
 
+    @SuppressWarnings("unused")
     private static void limitSlope(Map<Long,Integer> h, int minX, int maxX, int minZ, int maxZ, int maxDiff) {
         boolean changed = true;
         while (changed) {
@@ -1207,6 +1211,7 @@ public class SurfaceGenerator {
         }
     }
 
+    @SuppressWarnings("unused")
     private static void staircase(Map<Long,Integer> h, int minX, int maxX, int minZ, int maxZ) {
         List<int[]> offsets = new ArrayList<>();
         for (int d=1; d<=3; d++) {
@@ -1239,6 +1244,7 @@ public class SurfaceGenerator {
         }
     }
 
+    @SuppressWarnings("unused")
     private static void blurHeight(Map<Long,Integer> h, int minX, int maxX, int minZ, int maxZ, int iters) {
         Map<Long,Integer> cur = new HashMap<>(h);
         Map<Long,Integer> next = new HashMap<>(h.size());
@@ -1262,6 +1268,7 @@ public class SurfaceGenerator {
     }
 
     // === Удаляем бугорки/ямки меньше 5×5 ===
+    @SuppressWarnings("unused")
     private static void despeckleHeights(Map<Long,Integer> h, int minX, int maxX, int minZ, int maxZ, int radius) {
         Map<Long,Integer> tmp = grayscaleOpen(h, minX, maxX, minZ, maxZ, radius);
         tmp = grayscaleClose(tmp, minX, maxX, minZ, maxZ, radius);
@@ -1971,6 +1978,7 @@ public class SurfaceGenerator {
 
     private static final double EPS = 1e-12;
 
+    @SuppressWarnings("unused")
     private static final class RectLL {
         final double minLat, maxLat, minLon, maxLon;
         RectLL(double minLat, double maxLat, double minLon, double maxLon) {
@@ -1978,6 +1986,7 @@ public class SurfaceGenerator {
         }
     }
 
+    @SuppressWarnings("unused")
     private static RectLL cellRectLatLon(int x, int z,
                                          double centerLat, double centerLng,
                                          double east, double west, double north, double south,
@@ -2079,6 +2088,7 @@ public class SurfaceGenerator {
     }
 
     /** Формирует желаемую высоту поверхности воды (см. комментарии в исходнике) */
+    @SuppressWarnings("unused")
     private Map<Long, Integer> computeWaterSurfaceY(Map<Long,String> surface,
                                                     Map<Long,Integer> terrainY,
                                                     int minX, int maxX, int minZ, int maxZ) {
@@ -2778,6 +2788,7 @@ public class SurfaceGenerator {
         return out;
     }
 
+    @SuppressWarnings("unused")
     private static void publishTerrainGrid(JsonObject coordsJson,
                                         Map<Long,Integer> terrainY,
                                         int minX, int maxX, int minZ, int maxZ) {
@@ -3082,6 +3093,7 @@ public class SurfaceGenerator {
     private int[] grayscaleErodeArray(int[] src, int r) {
         int[] out = new int[totalCells];
         for (int x=minX; x<=maxX; x++) for (int z=minZ; z<=maxZ; z++) {
+            @SuppressWarnings("unused")
             int center = src[idx(x,z)];
             int m = Integer.MAX_VALUE;
             for (int dx=-r; dx<=r; dx++) for (int dz=-r; dz<=r; dz++) {
@@ -3096,6 +3108,7 @@ public class SurfaceGenerator {
     private int[] grayscaleDilateArray(int[] src, int r) {
         int[] out = new int[totalCells];
         for (int x=minX; x<=maxX; x++) for (int z=minZ; z<=maxZ; z++) {
+            @SuppressWarnings("unused")
             int center = src[idx(x,z)];
             int M = Integer.MIN_VALUE;
             for (int dx=-r; dx<=r; dx++) for (int dz=-r; dz<=r; dz++) {
@@ -3261,6 +3274,7 @@ public class SurfaceGenerator {
 
             while(!q.isEmpty()) {
                 int[] c = q.poll();
+                @SuppressWarnings("unused")
                 int x=c[0], z=c[1], i=idx(x,z);
                 comp.add(c);
                 for (int[] d:dirs) {
