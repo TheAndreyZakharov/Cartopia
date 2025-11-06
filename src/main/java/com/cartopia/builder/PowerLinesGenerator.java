@@ -168,6 +168,8 @@ public class PowerLinesGenerator {
             }
         }
 
+
+
         broadcast(level, String.format(Locale.ROOT,
                 "Power lines: done. Supports: %d, lines: %d, segments: %d", placedSupports, lines.size(), segs));
     }
