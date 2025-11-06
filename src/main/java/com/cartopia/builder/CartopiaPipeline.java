@@ -368,20 +368,9 @@ public class CartopiaPipeline {
 
 
 
-
-
-
-
-
             
 
 //оптимизация Читаю DEM…, Читаю OpenLandMap landcover…
-
-
-
-
-
-
 
 
 

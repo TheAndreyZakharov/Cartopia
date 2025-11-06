@@ -24,7 +24,6 @@ import java.io.File;
 import java.io.FileInputStream;
 import java.io.IOException;
 import java.util.*;
-
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
@@ -73,6 +72,13 @@ public class SurfaceGenerator {
 
     // уменьшаем аллокации
     private final BlockPos.MutableBlockPos mpos = new BlockPos.MutableBlockPos();
+
+    // размеры рабочей сетки (устанавливаются в generate)
+    private int minX, maxX, minZ, maxZ, width, height, totalCells;
+    // быстрый индекс в плотных массивах: row-major(Z,X)
+    private int idx(int x, int z) { return (z - minZ) * width + (x - minX); }
+    // безопасная проверка границ
+    private boolean inBounds(int x, int z) { return x>=minX && x<=maxX && z>=minZ && z<=maxZ; }
 
     public SurfaceGenerator(ServerLevel level, JsonObject coordsJson, File demFile, File landcoverFileOrNull) {
         this(level, coordsJson, demFile, landcoverFileOrNull, null);
@@ -263,14 +269,14 @@ public class SurfaceGenerator {
 
         int[] a = latlngToBlock(south, west, centerLat, centerLng, east, west, north, south, sizeMeters, centerX, centerZ);
         int[] b = latlngToBlock(north, east, centerLat, centerLng, east, west, north, south, sizeMeters, centerX, centerZ);
-        int minX = Math.min(a[0], b[0]);
-        int maxX = Math.max(a[0], b[0]);
-        int minZ = Math.min(a[1], b[1]);
-        int maxZ = Math.max(a[1], b[1]);
+        minX = Math.min(a[0], b[0]);
+        maxX = Math.max(a[0], b[0]);
+        minZ = Math.min(a[1], b[1]);
+        maxZ = Math.max(a[1], b[1]);
 
-        int width = maxX - minX + 1;
-        int height = maxZ - minZ + 1;
-        int totalCells = Math.max(1, width * height);
+        width = maxX - minX + 1;
+        height = maxZ - minZ + 1;
+        totalCells = Math.max(1, width * height);
 
         broadcast(level, String.format("Area %dx%d blocks (minX=%d, maxX=%d, minZ=%d, maxZ=%d)", width, height, minX, maxX, minZ, maxZ));
         broadcast(level, "Reading DEM...");
@@ -280,7 +286,7 @@ public class SurfaceGenerator {
         }
 
         // ===== DEM → карта высот (метры), затем нормализация в Y мира
-        Map<Long, Double> heightMap = new HashMap<>(totalCells);
+        double[] elevM = new double[totalCells];
         double minElevation = Double.POSITIVE_INFINITY;
 
         try (HeightSampler dem = new HeightSampler(demFile, west, east, south, north)) {
@@ -289,53 +295,50 @@ public class SurfaceGenerator {
                     double[] ll = blockToLatLng(x, z, centerLat, centerLng, east, west, north, south, sizeMeters, centerX, centerZ);
                     double elev = dem.sampleByLatLon(ll[0], ll[1]);
                     if (Double.isNaN(elev)) elev = 0.0;
-                    heightMap.put(key(x,z), elev);
+                    int i = idx(x,z);
+                    elevM[i] = elev;
                     if (elev < minElevation) minElevation = elev;
                 }
             }
         }
 
-        fillMissingHeights(heightMap, minX, maxX, minZ, maxZ);
+        // бывший fillMissingHeights — версия для массива (с теми же правилами)
+        fillMissingHeightsArray(elevM);
 
-        Map<Long, Integer> terrainY = new HashMap<>(heightMap.size());
+        int[] terrainY = new int[totalCells];
         for (int x=minX; x<=maxX; x++) {
             for (int z=minZ; z<=maxZ; z++) {
-                double elev = heightMap.getOrDefault(key(x,z), 0.0);
-                int y = Y_BASE + (int)Math.round(elev - minElevation);
-                terrainY.put(key(x,z), y);
+                int i = idx(x,z);
+                int y = Y_BASE + (int)Math.round(elevM[i] - minElevation);
+                terrainY[i] = y;
             }
         }
 
         // Ограничение уклонов + лесенка + сглаживание
-        limitSlope(terrainY, minX, maxX, minZ, maxZ, MAX_HEIGHT_DIFF);
-        staircase(terrainY, minX, maxX, minZ, maxZ);
-        blurHeight(terrainY, minX, maxX, minZ, maxZ, HEIGHT_BLUR_ITERS);
-
-        // СТРИЖЕМ мелкие бугорки/ямки (окно 5×5 => radius=2)
-        despeckleHeights(terrainY, minX, maxX, minZ, maxZ, 2);
+        limitSlopeArray(terrainY, MAX_HEIGHT_DIFF);
+        staircaseArray(terrainY);
+        blurHeightArray(terrainY, HEIGHT_BLUR_ITERS);
+        despeckleHeightsArray(terrainY, 2);
 
         // ---------- БАЗОВАЯ ПОВЕРХНОСТЬ ----------
-        Map<Long, String> surface = new HashMap<>(terrainY.size());
-        for (int x=minX; x<=maxX; x++) for (int z=minZ; z<=maxZ; z++) surface.put(key(x,z), defaultBlock);
+        String[] surface = new String[totalCells];
+        for (int i=0; i<totalCells; i++) surface[i] = defaultBlock;
 
-        // --- маски источников воды
-        Set<Long> waterFromOLM = new HashSet<>();
-        Set<Long> waterProtected = new HashSet<>(); // OSM и морской уровень — запрещено менять и учитывать в сглаживании
+        // маски как BitSet
+        BitSet waterFromOLM = new BitSet(totalCells);
+        BitSet waterProtected = new BitSet(totalCells);
+        BitSet lockedOSM = new BitSet(totalCells);
+        BitSet olmAll = new BitSet(totalCells);
 
-        // Клетки суши, пришедшие из OSM, которые менять нельзя
-        Set<Long> lockedOSM = new HashSet<>();
-
-        // Все клетки, покрашенные именно из OLM (и вода, и суша)
-        Set<Long> olmAll = new HashSet<>();
 
         // Море/вода по уровню (если задан): это «подложка»
         if (seaLevelMeters != Double.NEGATIVE_INFINITY) {
             for (int x=minX; x<=maxX; x++) for (int z=minZ; z<=maxZ; z++) {
-                long k = key(x,z);
-                double elev = heightMap.get(k);
+                int i = idx(x,z);
+                double elev = elevM[i];
                 if (elev <= seaLevelMeters) {
-                    surface.put(k, "water");
-                    waterProtected.add(k); // морская вода — не сглаживаем и не учитываем
+                    surface[i] = "water";
+                    waterProtected.set(i); // морская вода — не сглаживаем
                 }
             }
         }
@@ -364,23 +367,20 @@ public class SurfaceGenerator {
                 for (int x=minX; x<=maxX; x++) {
                     for (int z=minZ; z<=maxZ; z++) {
                         double[] ll = blockToLatLng(x, z, centerLat, centerLng, east, west, north, south, sizeMeters, centerX, centerZ);
-                        int cls = lcov.sampleClassByLatLon(ll[0], ll[1]);
 
-                        // вне растра/нет данных → вода
+                        int i = idx(x,z);
+                        int cls = lcov.sampleClassByLatLon(ll[0], ll[1]);
                         String block = (cls == Integer.MIN_VALUE) ? "water" : blockForLandcoverClass(cls);
                         if (block == null) block = "moss_block";
 
-                        long k = key(x,z);
                         if ("water".equals(block)) {
-                            surface.put(k, "water");              // вода из OLM
-                            olmAll.add(k);                         // помечаем как OLM
-                            if (!waterProtected.contains(k)) {
-                                waterFromOLM.add(k);              // это именно OLM-вода (разрешим её менять)
-                            }
-                        } else if (!"water".equals(surface.get(k))) {
-                            surface.put(k, block);                 // суша из OLM
-                            olmAll.add(k);
-                        }
+                            surface[i] = "water";
+                            olmAll.set(i);
+                            if (!waterProtected.get(i)) waterFromOLM.set(i);
+                        } else if (!"water".equals(surface[i])) {
+                            surface[i] = block;
+                            olmAll.set(i);
+                        }                        
                     }
                 }
             } catch (Exception ex) {
@@ -399,75 +399,99 @@ public class SurfaceGenerator {
 
         System.out.println("[Cartopia] ОSM зон для покраски: " + zones.size());
 
+        // --- [ПУНКТ 3] Разделяем полигоны по типам (один раз, вне горячего цикла)
+        final List<ZonePoly> waterOuters = new ArrayList<>();
+        final List<ZonePoly> waterHoles  = new ArrayList<>();
+        final List<ZonePoly> landZones   = new ArrayList<>();
+        for (ZonePoly zp : zones) {
+            if ("water".equals(zp.material)) {
+                if (zp.isHole) waterHoles.add(zp); else waterOuters.add(zp);
+            } else if (!zp.isHole) {
+                landZones.add(zp);
+            }
+        }
         // Сначала — вода (outer минус inner), затем прочее.
-        for (int x=minX; x<=maxX; x++) {
-            for (int z=minZ; z<=maxZ; z++) {
-                RectLL cell = cellRectLatLon(x, z, centerLat, centerLng, east, west, north, south, sizeMeters, centerX, centerZ);
-                long k = key(x,z);
+        // --- [ПУНКТ 2.2] Границы клетки в lat/lon без аллокаций + использование раздельных списков зон
+        for (int x = minX; x <= maxX; x++) {
+            for (int z = minZ; z <= maxZ; z++) {
+                final int i = idx(x, z);
 
-                // Вода из OSM имеет приоритет, но уважает inner-дырки
-                boolean inWaterOuter = false, inWaterHole = false;
-                for (ZonePoly zp : zones) {
-                    if (!"water".equals(zp.material) || zp.isHole) continue;
-                    if (!rectsOverlap(cell.minLat, cell.maxLat, cell.minLon, cell.maxLon, zp.minLat, zp.maxLat, zp.minLon, zp.maxLon)) continue;
-                    if (rectIntersectsPolygon(cell, zp.lats, zp.lons)) { inWaterOuter = true; break; }
+                // границы клетки в lat/lon (эквивалент cellRectLatLon, но без объектов/массивов)
+                final double xL = x - 0.5, xR = x + 0.5;
+                final double zT = z - 0.5, zB = z + 0.5;
+
+                final double lonL = centerLng + ((xL - centerX) / (double) sizeMeters) * (east - west);
+                final double lonR = centerLng + ((xR - centerX) / (double) sizeMeters) * (east - west);
+                final double latT = centerLat + ((zT - centerZ) / (double) sizeMeters) * (south - north);
+                final double latB = centerLat + ((zB - centerZ) / (double) sizeMeters) * (south - north);
+
+                final double cellMinLat = (latT < latB ? latT : latB);
+                final double cellMaxLat = (latT > latB ? latT : latB);
+                final double cellMinLon = (lonL < lonR ? lonL : lonR);
+                final double cellMaxLon = (lonL > lonR ? lonL : lonR);
+
+                // ----- Вода: outer - inner -----
+                boolean inWaterOuter = false;
+                for (ZonePoly zp : waterOuters) {
+                    if (!rectsOverlap(cellMinLat, cellMaxLat, cellMinLon, cellMaxLon,
+                                    zp.minLat,   zp.maxLat,   zp.minLon,   zp.maxLon)) continue;
+                    if (rectIntersectsPolygon(cellMinLat, cellMaxLat, cellMinLon, cellMaxLon, zp.lats, zp.lons)) {
+                        inWaterOuter = true; break;
+                    }
                 }
+
                 if (inWaterOuter) {
-                    for (ZonePoly zp : zones) {
-                        if (!"water".equals(zp.material) || !zp.isHole) continue;
-                        if (!rectsOverlap(cell.minLat, cell.maxLat, cell.minLon, cell.maxLon, zp.minLat, zp.maxLat, zp.minLon, zp.maxLon)) continue;
-                        if (rectIntersectsPolygon(cell, zp.lats, zp.lons)) { inWaterHole = true; break; }
+                    boolean inWaterHole = false;
+                    for (ZonePoly zp : waterHoles) {
+                        if (!rectsOverlap(cellMinLat, cellMaxLat, cellMinLon, cellMaxLon,
+                                        zp.minLat,   zp.maxLat,   zp.minLon,   zp.maxLon)) continue;
+                        if (rectIntersectsPolygon(cellMinLat, cellMaxLat, cellMinLon, cellMaxLon, zp.lats, zp.lons)) {
+                            inWaterHole = true; break;
+                        }
                     }
                     if (!inWaterHole) {
-                        surface.put(k, "water");
-                        waterProtected.add(k);   // воду из OSM не трогаем и не учитываем
-                        waterFromOLM.remove(k);
-                        continue; // вода победила
+                        surface[i] = "water";
+                        waterProtected.set(i);
+                        waterFromOLM.clear(i);
+                        continue; // вода имеет приоритет
                     }
                 }
 
-                // Прочие зоны: не затираем воду
+                // ----- Прочие зоны: берём наименьший bbox (как и было)
                 String bestMat = null;
                 double bestArea = Double.POSITIVE_INFINITY;
-
-                for (ZonePoly zp : zones) {
-                    if ("water".equals(zp.material) || zp.isHole) continue;
-                    if (!rectsOverlap(cell.minLat, cell.maxLat, cell.minLon, cell.maxLon, zp.minLat, zp.maxLat, zp.minLon, zp.maxLon)) continue;
-                    if (rectIntersectsPolygon(cell, zp.lats, zp.lons)) {
+                for (ZonePoly zp : landZones) {
+                    if (!rectsOverlap(cellMinLat, cellMaxLat, cellMinLon, cellMaxLon,
+                                    zp.minLat,   zp.maxLat,   zp.minLon,   zp.maxLon)) continue;
+                    if (rectIntersectsPolygon(cellMinLat, cellMaxLat, cellMinLon, cellMaxLon, zp.lats, zp.lons)) {
                         double area = (zp.maxLat - zp.minLat) * (zp.maxLon - zp.minLon);
                         if (area < bestArea) {
                             bestArea = area;
-                            bestMat  = zp.material;
+                            bestMat = zp.material;
                         }
                     }
                 }
 
-                // Разрешаем перекрывать ТОЛЬКО OLM-воду. OSM/морскую воду не трогаем.
                 if (bestMat != null) {
-                    String cur = surface.get(k);
-
-                    // ICE override: синий лёд может перекрыть ЛЮБУЮ воду (и OLM, и OSM/морскую)
+                    String cur = surface[i];
                     boolean isIceOverlay = "blue_ice".equals(bestMat) || "muddy_mangrove_roots".equals(bestMat);
 
                     if ("water".equals(cur)) {
+                        // лёд/болото перекрывают любую воду
                         if (isIceOverlay) {
-                            surface.put(k, bestMat);
-                            lockedOSM.add(k);
-                            // снимаем любые защиты воды, чтобы далее сглаживание/перья не мешали
-                            waterFromOLM.remove(k);
-                            waterProtected.remove(k);
-                        } else if (waterFromOLM.contains(k)) {
-                            // обычное поведение: не-лёд может перекрывать только OLM-воду
-                            surface.put(k, bestMat);
-                            lockedOSM.add(k);
-                            waterFromOLM.remove(k);
-                            // waterProtected не трогаем — теперь это суша
+                            surface[i] = bestMat;
+                            lockedOSM.set(i);
+                            waterFromOLM.clear(i);
+                            waterProtected.clear(i);
+                        } else if (waterFromOLM.get(i)) {
+                            // суша из OSM может перекрывать только OLM-воду
+                            surface[i] = bestMat;
+                            lockedOSM.set(i);
+                            waterFromOLM.clear(i);
                         }
-                        // если вода защищённая (OSM/морская) и это не лёд — оставляем как есть
                     } else {
-                        // текущая клетка не вода — кладём материал OSM
-                        surface.put(k, bestMat);
-                        lockedOSM.add(k);
+                        surface[i] = bestMat;
+                        lockedOSM.set(i);
                     }
                 }
             }
@@ -497,16 +521,12 @@ public class SurfaceGenerator {
             if (t.has("olmFeatherMinVotes")) olmFeatherMinVotes = Math.max(1, t.get("olmFeatherMinVotes").getAsInt());
         }
 
-        featherOlmZones(surface, minX, maxX, minZ, maxZ,
-                olmFeatherRadius, olmFeatherIters, olmFeatherMinVotes,
-                olmAll, waterFromOLM,
-                waterProtected, lockedOSM);
+        featherOlmZonesArray(surface, olmAll, waterFromOLM, waterProtected, lockedOSM,
+                olmFeatherRadius, olmFeatherIters, olmFeatherMinVotes);
 
-        blurSurface(surface, minX, maxX, minZ, maxZ,
-                surfaceBlurIters, surfaceBlurMinMajority,
-                /*includeWater=*/surfaceBlurIncludeWater,
-                waterProtected, waterFromOLM,
-                lockedOSM);
+
+        blurSurfaceArray(surface, surfaceBlurIters, surfaceBlurMinMajority, surfaceBlurIncludeWater,
+                waterProtected, waterFromOLM, lockedOSM);
 
 
         // === NEW: waterway=dam — линейные дамбы; могут перекрывать воду любого происхождения
@@ -523,13 +543,15 @@ public class SurfaceGenerator {
         if (damCells != null && !damCells.isEmpty()) {
             for (Map.Entry<Long,String> de : damCells.entrySet()) {
                 long k = de.getKey();
-                String damMat = de.getValue(); // без префикса
-                surface.put(k, damMat);
-
-                // ВАЖНО: дамба может перекрывать воду — снимаем любые «охраны» воды.
-                waterFromOLM.remove(k);     // если это была вода OLM
-                waterProtected.remove(k);   // если это была OSM/морская вода
-                lockedOSM.add(k);           // закрепим как пришедшее из OSM-объекта
+                String damMat = de.getValue();
+                int xk = (int)(k >> 32);
+                int zk = (int)(k);
+                if (!inBounds(xk, zk)) continue;
+                int i = idx(xk, zk);
+                surface[i] = damMat;
+                waterFromOLM.clear(i);
+                waterProtected.clear(i);
+                lockedOSM.set(i);
             }
         }
 
@@ -548,20 +570,21 @@ public class SurfaceGenerator {
         if (breakwaterCells != null && !breakwaterCells.isEmpty()) {
             for (Map.Entry<Long,String> be : breakwaterCells.entrySet()) {
                 long k = be.getKey();
-                String bwMat = be.getValue(); // без префикса
-                // кладём материал как поверхность, перекрывая даже воду (как дамбы)
-                surface.put(k, bwMat);
-                waterFromOLM.remove(k);    // если была OLM-вода
-                waterProtected.remove(k);  // если была OSM/морская вода
-                lockedOSM.add(k);          // закрепляем как OSM-объект
+                String bwMat = be.getValue();
+                int xk = (int)(k >> 32), zk = (int)k;
+                if (!inBounds(xk, zk)) continue;
+                int i = idx(xk, zk);
+                surface[i] = bwMat;
+                waterFromOLM.clear(i);
+                waterProtected.clear(i);
+                lockedOSM.set(i);
             }
         }
 
 
         // Маска воды
-        Set<Long> waterMask = new HashSet<>();
-        for (Map.Entry<Long,String> e : surface.entrySet())
-            if ("water".equals(e.getValue())) waterMask.add(e.getKey());
+        BitSet waterMask = new BitSet(totalCells);
+        for (int i=0; i<totalCells; i++) if ("water".equals(surface[i])) waterMask.set(i);
 
         // === НОВОЕ: клетки обрывов/укреплений из OSM (через стрим, если есть)
         Set<Long> cliffCapCells = (store != null)
@@ -576,13 +599,21 @@ public class SurfaceGenerator {
                         minX, maxX, minZ, maxZ
                 );
 
+        BitSet cliffCaps = new BitSet(totalCells);
+        if (cliffCapCells != null) {
+            for (long k : cliffCapCells) {
+                int xk = (int)(k >> 32), zk = (int)k;
+                if (inBounds(xk, zk)) cliffCaps.set(idx(xk, zk));
+            }
+        }
+
         broadcast(level, String.format("Placing blocks (%d cells)...", totalCells));
 
         // уровни воды
-        Map<Long, Integer> waterSurfaceY = computeWaterSurfaceY(surface, terrainY, minX, maxX, minZ, maxZ);
+        int[] waterSurfaceY = computeWaterSurfaceYArray(surface, terrainY);
 
         // === экспорт/сохранение сетки рельефа — черновик (v1) для совместимости на ранних этапах
-        publishTerrainGrid(coordsJson, terrainY, minX, maxX, minZ, maxZ);
+        publishTerrainGridArray(coordsJson, terrainY);
         File areaDir = detectAreaPackDir(demFile);
         if (areaDir != null) {
             try {
@@ -598,7 +629,7 @@ public class SurfaceGenerator {
         }
 
         // ВЫЗОВ placeBlocks с новым параметром
-        placeBlocks(surface, terrainY, waterMask, waterSurfaceY, breakwaterCells, cliffCapCells, minX, maxX, minZ, maxZ, totalCells);
+        placeBlocks(surface, terrainY, waterMask, waterSurfaceY, breakwaterCells, cliffCaps, minX, maxX, minZ, maxZ, totalCells);
         broadcast(level, "Block placement complete.");
 
         // === FINAL JSON (v2) + дублируем groundY как data для обратной совместимости ===
@@ -623,23 +654,24 @@ public class SurfaceGenerator {
 
         for (int z = minZ; z <= maxZ; z++) {
             for (int x = minX; x <= maxX; x++) {
-                long k = key(x, z);
-                int yTop0 = terrainY.getOrDefault(k, Y_BASE);
+                int i = idx(x,z);
+
+                int yTop0 = terrainY[i];
                 if (yTop0 <= worldMin + 2) yTop0 = worldMin + 3;
                 if (yTop0 >= worldMax - 2) yTop0 = worldMax - 3;
 
-                String mat0 = surface.getOrDefault(k, "moss_block");
+                String mat0 = surface[i];
 
-                if ("water".equals(mat0) || waterMask.contains(k)) {
-                    int yWaterSurface = (waterSurfaceY != null && waterSurfaceY.containsKey(k))
-                            ? waterSurfaceY.get(k)
+                if ("water".equals(mat0) || waterMask.get(i)) {
+                    int yWaterSurface = (waterSurfaceY != null && waterSurfaceY.length>0 && waterSurfaceY[i] != 0)
+                            ? waterSurfaceY[i]
                             : (yTop0 - 1);
-                    groundYGrid.add(yWaterSurface - 1);       // lapis
+                    groundYGrid.add(yWaterSurface - 1);
                     topYGrid.add(yWaterSurface);
                     waterYGrid.add(yWaterSurface);
                     topBlockGrid.add("minecraft:water");
                 } else {
-                    boolean isCliff0 = (cliffCapCells != null && cliffCapCells.contains(k));
+                    boolean isCliff0 = cliffCaps != null && cliffCaps.get(i);
                     groundYGrid.add(yTop0);
                     topYGrid.add(isCliff0 ? (yTop0 + 1) : yTop0);
                     waterYGrid.add(com.google.gson.JsonNull.INSTANCE);
@@ -1286,10 +1318,10 @@ public class SurfaceGenerator {
         }
     }
 
-    private void placeBlocks(Map<Long,String> surface, Map<Long,Integer> terrain,
-                            Set<Long> waterMask, Map<Long,Integer> waterSurfaceY,
-                            Map<Long,String> breakwaterCells, // NEW
-                            Set<Long> cliffCapCells,
+    private void placeBlocks(String[] surface, int[] terrain,
+                            BitSet waterMask, int[] waterSurfaceY,
+                            Map<Long,String> breakwaterCells, // как раньше
+                            BitSet cliffCaps,
                             int minX, int maxX, int minZ, int maxZ, int totalCells) {
         int done = 0;
         int nextConsole = 5;
@@ -1301,33 +1333,35 @@ public class SurfaceGenerator {
 
         for (int x = minX; x <= maxX; x++) {
             for (int z = minZ; z <= maxZ; z++) {
-                int yTop = terrain.getOrDefault(key(x, z), Y_BASE);
+                int i = idx(x,z);
+
+                int yTop = terrain[i];
                 if (yTop <= worldMin + 2) yTop = worldMin + 3;
                 if (yTop >= worldMax - 2) yTop = worldMax - 3;
 
-                String mat = surface.getOrDefault(key(x, z), "moss_block");
-
-                // --- breakwater/groyne/coastline: двухблочная «стенка» толщиной 2×2
+                // --- breakwater/groyne/coastline: стенка 2 блока вверх
                 if (breakwaterCells != null && breakwaterCells.containsKey(key(x, z))) {
                     String bwMat = breakwaterCells.get(key(x, z));
-                    // Укладываем два блока вверх одним и тем же материалом
                     setBlock(x, yTop,     z, "minecraft:" + bwMat);
                     setBlock(x, yTop + 1, z, "minecraft:" + bwMat);
                     clearColumnAbove(x, yTop + 2, z, worldMax);
                     clearColumnBelow(x, z, worldMin, yTop - 1);
                     done++;
-                    @SuppressWarnings("unused")
                     int pct = (int)((long)done * 100 / totalCells);
-                    // (оставляем остальную часть прогресс-логики как есть)
+                    if (pct >= nextConsole) { System.out.println("[Cartopia] placing blocks: " + pct + "%"); nextConsole += 5; }
+                    if (chatIdx < chatMilestones.length && pct >= chatMilestones[chatIdx]) {
+                        broadcast(level, "Generation progress: " + chatMilestones[chatIdx] + "%");
+                        CartopiaSurfaceSpawn.adjustAllPlayersAsync(level);
+                        chatIdx++;
+                    }
                     continue;
                 }
 
-                if ("water".equals(mat) || waterMask.contains(key(x, z))) {
-                    // вода
-                    int yWaterSurface = (waterSurfaceY != null && waterSurfaceY.containsKey(key(x,z)))
-                            ? waterSurfaceY.get(key(x,z))
+                String mat = surface[i];
+                if ("water".equals(mat) || waterMask.get(i)) {
+                    int yWaterSurface = (waterSurfaceY != null && waterSurfaceY.length>0 && waterSurfaceY[i] != 0)
+                            ? waterSurfaceY[i]
                             : (yTop - 1);
-
                     int yLapis = yWaterSurface - 1;
                     int yAirTop = yWaterSurface + 1;
 
@@ -1337,26 +1371,20 @@ public class SurfaceGenerator {
                     setBlock(x, yAirTop,        z, "minecraft:air");
                     clearColumnAbove(x, yAirTop + 1, z, worldMax);
                 } else {
-                    // суша
                     setBlock(x, yTop, z, "minecraft:" + mat);
-
-                    boolean isCliff = (cliffCapCells != null && cliffCapCells.contains(key(x, z)));
+                    boolean isCliff = cliffCaps != null && cliffCaps.get(i);
                     if (isCliff) {
                         setBlock(x, yTop + 1, z, "minecraft:cracked_stone_bricks");
                         clearColumnAbove(x, yTop + 2, z, worldMax);
                     } else {
                         clearColumnAbove(x, yTop + 1, z, worldMax);
                     }
-
                     clearColumnBelow(x, z, worldMin, yTop - 1);
                 }
 
                 done++;
                 int pct = (int)((long)done * 100 / totalCells);
-                if (pct >= nextConsole) {
-                    System.out.println("[Cartopia] placing blocks: " + pct + "%");
-                    nextConsole += 5;
-                }
+                if (pct >= nextConsole) { System.out.println("[Cartopia] placing blocks: " + pct + "%"); nextConsole += 5; }
                 if (chatIdx < chatMilestones.length && pct >= chatMilestones[chatIdx]) {
                     broadcast(level, "Generation progress: " + chatMilestones[chatIdx] + "%");
                     CartopiaSurfaceSpawn.adjustAllPlayersAsync(level);
@@ -1365,6 +1393,7 @@ public class SurfaceGenerator {
             }
         }
     }
+
 
     private void setBlock(int x, int y, int z, String id) {
         Block b = ForgeRegistries.BLOCKS.getValue(ResourceLocation.tryParse(id));
@@ -1978,7 +2007,10 @@ public class SurfaceGenerator {
 
 
     // Пересечение прямоугольника клетки с полигоном ИЛИ незамкнутой цепочкой (любой ненулевой контакт)
-    private static boolean rectIntersectsPolygon(RectLL r, double[] polyLats, double[] polyLons) {
+    // Тот же алгоритм, что и rectIntersectsPolygon(RectLL,...), но без объекта:
+    private static boolean rectIntersectsPolygon(double rMinLat, double rMaxLat,
+                                                double rMinLon, double rMaxLon,
+                                                double[] polyLats, double[] polyLons) {
         if (polyLats == null || polyLons == null || polyLats.length < 2 || polyLats.length != polyLons.length) return false;
 
         final boolean closed = isClosedRing(polyLats, polyLons);
@@ -1986,55 +2018,39 @@ public class SurfaceGenerator {
         // 1) Любая вершина поли(линии) внутри прямоугольника
         for (int i = 0; i < polyLats.length; i++) {
             double lat = polyLats[i], lon = polyLons[i];
-            if (lon >= r.minLon - EPS && lon <= r.maxLon + EPS &&
-                lat >= r.minLat - EPS && lat <= r.maxLat + EPS) {
+            if (lon >= rMinLon - EPS && lon <= rMaxLon + EPS &&
+                lat >= rMinLat - EPS && lat <= rMaxLat + EPS) {
                 return true;
             }
         }
 
-        // 2) Любой угол прямоугольника внутри полигона — только для ЗАМКНУТЫХ
+        // 2) Уголки прямоугольника внутри полигона — только для замкнутых
         if (closed) {
             double[][] rectPts = new double[][]{
-                    {r.minLat, r.minLon},
-                    {r.minLat, r.maxLon},
-                    {r.maxLat, r.maxLon},
-                    {r.maxLat, r.minLon}
+                {rMinLat, rMinLon}, {rMinLat, rMaxLon}, {rMaxLat, rMaxLon}, {rMaxLat, rMinLon}
             };
-            for (double[] pt : rectPts) {
-                if (pointInPolygon(pt[0], pt[1], polyLats, polyLons)) return true;
-            }
+            for (double[] pt : rectPts) if (pointInPolygon(pt[0], pt[1], polyLats, polyLons)) return true;
         }
 
-        // 3) Пересечение рёбер: идём по сегментам [i-1 -> i]
-        //    Для незамкнутых НЕ добавляем "замыкающее" ребро last->first.
+        // 3) Пересечение рёбер
         double[][] E = new double[][]{
-                {r.minLon, r.minLat, r.maxLon, r.minLat},
-                {r.maxLon, r.minLat, r.maxLon, r.maxLat},
-                {r.maxLon, r.maxLat, r.minLon, r.maxLat},
-                {r.minLon, r.maxLat, r.minLon, r.minLat}
+            {rMinLon, rMinLat, rMaxLon, rMinLat},
+            {rMaxLon, rMinLat, rMaxLon, rMaxLat},
+            {rMaxLon, rMaxLat, rMinLon, rMaxLat},
+            {rMinLon, rMaxLat, rMinLon, rMinLat}
         };
-
-        // сегменты внутри цепочки
         for (int i = 1; i < polyLats.length; i++) {
-            double x1 = polyLons[i - 1], y1 = polyLats[i - 1];
-            double x2 = polyLons[i],     y2 = polyLats[i];
-            for (double[] e : E) {
-                if (segmentsIntersect(x1, y1, x2, y2, e[0], e[1], e[2], e[3])) return true;
-            }
+            double x1 = polyLons[i-1], y1 = polyLats[i-1];
+            double x2 = polyLons[i],   y2 = polyLats[i];
+            for (double[] e : E) if (segmentsIntersect(x1,y1,x2,y2, e[0],e[1],e[2],e[3])) return true;
         }
-
-        // если замкнутый — проверим ещё ребро last->first
         if (closed) {
-            double x1 = polyLons[polyLons.length - 1], y1 = polyLats[polyLats.length - 1];
-            double x2 = polyLons[0],                   y2 = polyLats[0];
-            for (double[] e : E) {
-                if (segmentsIntersect(x1, y1, x2, y2, e[0], e[1], e[2], e[3])) return true;
-            }
+            double x1 = polyLons[polyLons.length-1], y1 = polyLats[polyLats.length-1];
+            double x2 = polyLons[0],                 y2 = polyLats[0];
+            for (double[] e : E) if (segmentsIntersect(x1,y1,x2,y2, e[0],e[1],e[2],e[3])) return true;
         }
-
         return false;
     }
-
 
     private static boolean segmentsIntersect(double x1, double y1, double x2, double y2,
                                              double x3, double y3, double x4, double y4) {
@@ -2955,4 +2971,389 @@ public class SurfaceGenerator {
 
         return fallback;
     }
+
+    private void fillMissingHeightsArray(double[] em) {
+        // В старом коде «пустых» не оставалось, но на всякий держим NaN -> среднее соседей по 4-м
+        for (int z=minZ; z<=maxZ; z++) {
+            for (int x=minX; x<=maxX; x++) {
+                int i = idx(x,z);
+                double v = em[i];
+                if (!Double.isNaN(v)) continue;
+                double sum=0; int cnt=0;
+                int[][] n4 = {{1,0},{-1,0},{0,1},{0,-1}};
+                for (int[] d : n4) {
+                    int nx=x+d[0], nz=z+d[1];
+                    if (!inBounds(nx,nz)) continue;
+                    double nv = em[idx(nx,nz)];
+                    if (!Double.isNaN(nv)) { sum+=nv; cnt++; }
+                }
+                em[i] = cnt==0 ? 0.0 : (sum/cnt);
+            }
+        }
+    }
+
+    private int getY(int[] h, int x, int z, int center) {
+        return inBounds(x,z) ? h[idx(x,z)] : center;
+    }
+    private void limitSlopeArray(int[] h, int maxDiff) {
+        boolean changed = true;
+        while (changed) {
+            changed = false;
+            for (int x=minX; x<=maxX; x++) for (int z=minZ; z<=maxZ; z++) {
+                int i = idx(x,z);
+                int y = h[i];
+                int[][] n4 = {{1,0},{-1,0},{0,1},{0,-1}};
+                for (int[] d : n4) {
+                    int nx=x+d[0], nz=z+d[1];
+                    if (!inBounds(nx,nz)) continue;
+                    int ni = idx(nx,nz);
+                    int ny = h[ni];
+                    if (Math.abs(y-ny) > maxDiff) {
+                        if (y>ny) { h[i]  = ny+maxDiff; changed=true; }
+                        else      { h[ni] = y +maxDiff; changed=true; }
+                    }
+                }
+            }
+        }
+    }
+    private void staircaseArray(int[] h) {
+        ArrayList<int[]> offs = new ArrayList<>();
+        for (int d=1; d<=3; d++) {
+            offs.add(new int[]{-d,0}); offs.add(new int[]{d,0});
+            offs.add(new int[]{0,-d}); offs.add(new int[]{0,d});
+        }
+        boolean changed=true;
+        while (changed) {
+            changed=false;
+            for (int x=minX; x<=maxX; x++) for (int z=maxZ; z>=minZ; z--) {
+                int i = idx(x,z);
+                int y = h[i];
+                for (int[] d : offs) {
+                    int nx=x+d[0], nz=z+d[1];
+                    if (!inBounds(nx,nz)) continue;
+                    int ni = idx(nx,nz);
+                    int ny = h[ni];
+                    int dist = Math.max(Math.abs(d[0]), Math.abs(d[1]));
+                    if (Math.abs(y-ny) > 1) {
+                        for (int k=1;k<dist;k++) {
+                            int mx = x + d[0]/dist * k;
+                            int mz = z + d[1]/dist * k;
+                            int avg = (y*(dist-k) + ny*k) / dist;
+                            int mi = idx(mx,mz);
+                            int cur = h[mi];
+                            if (Math.abs(cur-avg) > 1) { h[mi]=avg; changed=true; }
+                        }
+                        if (y-ny > 1) { h[i]  = ny+1; changed=true; }
+                        else if (ny-y > 1) { h[ni] = y +1; changed=true; }
+                    }
+                }
+            }
+        }
+    }
+    private void blurHeightArray(int[] h, int iters) {
+        int[] cur = h;
+        int[] next = new int[totalCells];
+        for (int it=0; it<iters; it++) {
+            for (int x=minX; x<=maxX; x++) for (int z=minZ; z<=maxZ; z++) {
+                int i = idx(x,z);
+                int y = cur[i];
+                int[] ns = {
+                    getY(cur,x+1,z,y), getY(cur,x-1,z,y),
+                    getY(cur,x,z+1,y), getY(cur,x,z-1,y),
+                    getY(cur,x+1,z+1,y), getY(cur,x-1,z-1,y),
+                    getY(cur,x+1,z-1,y), getY(cur,x-1,z+1,y)
+                };
+                Arrays.sort(ns);
+                int med = ns[ns.length/2];
+                next[i] = (med + y)/2;
+            }
+            int[] tmp = cur; cur = next; next = tmp;
+        }
+        if (cur != h) System.arraycopy(cur,0,h,0,totalCells);
+    }
+    private void despeckleHeightsArray(int[] h, int radius) {
+        int[] t = grayscaleOpenArray(h, radius);
+        t = grayscaleCloseArray(t, radius);
+        System.arraycopy(t,0,h,0,totalCells);
+        fixSingleCellSpikesArray(h);
+    }
+    private int[] grayscaleOpenArray(int[] src, int r) { return grayscaleDilateArray(grayscaleErodeArray(src,r), r); }
+    private int[] grayscaleCloseArray(int[] src, int r){ return grayscaleErodeArray(grayscaleDilateArray(src,r), r); }
+    private int[] grayscaleErodeArray(int[] src, int r) {
+        int[] out = new int[totalCells];
+        for (int x=minX; x<=maxX; x++) for (int z=minZ; z<=maxZ; z++) {
+            int center = src[idx(x,z)];
+            int m = Integer.MAX_VALUE;
+            for (int dx=-r; dx<=r; dx++) for (int dz=-r; dz<=r; dz++) {
+                int nx=x+dx, nz=z+dz; if (!inBounds(nx,nz)) continue;
+                int v = src[idx(nx,nz)];
+                if (v<m) m=v;
+            }
+            out[idx(x,z)] = m;
+        }
+        return out;
+    }
+    private int[] grayscaleDilateArray(int[] src, int r) {
+        int[] out = new int[totalCells];
+        for (int x=minX; x<=maxX; x++) for (int z=minZ; z<=maxZ; z++) {
+            int center = src[idx(x,z)];
+            int M = Integer.MIN_VALUE;
+            for (int dx=-r; dx<=r; dx++) for (int dz=-r; dz<=r; dz++) {
+                int nx=x+dx, nz=z+dz; if (!inBounds(nx,nz)) continue;
+                int v = src[idx(nx,nz)];
+                if (v>M) M=v;
+            }
+            out[idx(x,z)] = M;
+        }
+        return out;
+    }
+    private void fixSingleCellSpikesArray(int[] h) {
+        for (int x=minX; x<=maxX; x++) for (int z=minZ; z<=maxZ; z++) {
+            int i = idx(x,z);
+            int y = h[i];
+            int n1 = getY(h,x+1,z,y), n2 = getY(h,x-1,z,y), n3 = getY(h,x,z+1,y), n4 = getY(h,x,z-1,y);
+            if (Math.abs(n1-n2)<=1 && Math.abs(n1-n3)<=1 && Math.abs(n1-n4)<=1) {
+                int avg = Math.round((n1+n2+n3+n4)/4f);
+                if (Math.abs(y-avg) <= 2) h[i] = avg;
+            }
+        }
+    }
+
+
+
+
+
+    private void blurSurfaceArray(String[] srf, int iters, int minMajority, boolean includeWater,
+                                BitSet protectedWater, BitSet olmWater, BitSet lockedOSM) {
+        String[] cur = srf;
+        String[] next = new String[totalCells];
+        for (int it=0; it<iters; it++) {
+            System.arraycopy(cur, 0, next, 0, totalCells);
+            for (int x=minX; x<=maxX; x++) for (int z=minZ; z<=maxZ; z++) {
+                int i = idx(x,z);
+                String curVal = cur[i];
+                if (curVal == null) continue;
+                if (protectedWater.get(i) || lockedOSM.get(i)) continue;
+
+                // голоса соседей (8)
+                HashMap<String,Integer> cnt = new HashMap<>();
+                for (int dx=-1; dx<=1; dx++) for (int dz=-1; dz<=1; dz++) {
+                    if (dx==0 && dz==0) continue;
+                    int nx=x+dx, nz=z+dz; if (!inBounds(nx,nz)) continue;
+                    int ni = idx(nx,nz);
+                    if (protectedWater.get(ni) || lockedOSM.get(ni)) continue;
+                    String t = cur[ni];
+                    if (t == null) continue;
+                    if ("water".equals(t) && !includeWater) continue;
+                    cnt.merge(t, 1, Integer::sum);
+                }
+                if (cnt.isEmpty()) continue;
+                Map.Entry<String,Integer> best = cnt.entrySet().stream().max(Map.Entry.comparingByValue()).get();
+                if (!best.getKey().equals(curVal) && best.getValue() >= minMajority) {
+                    if (!"water".equals(curVal)) next[i] = best.getKey();
+                }
+            }
+            String[] tmp = cur; cur = next; next = tmp;
+        }
+        if (cur != srf) System.arraycopy(cur,0,srf,0,totalCells);
+    }
+
+    private void featherOlmZonesArray(String[] srf,
+                                    BitSet olmAll, BitSet olmWater,
+                                    BitSet protectedWater, BitSet lockedOSM,
+                                    int radius, int iters, int minVotes) {
+        BitSet ring = new BitSet(totalCells);
+
+        // 1) границы OLM↔OLM с разными материалами
+        for (int x=minX; x<=maxX; x++) for (int z=minZ; z<=maxZ; z++) {
+            int i = idx(x,z);
+            if (!olmAll.get(i)) continue;
+            if (lockedOSM.get(i)) continue;
+            if (protectedWater.get(i) && !olmWater.get(i)) continue;
+
+            String m0 = srf[i]; if (m0 == null) continue;
+            boolean isEdge = false;
+            for (int dx=-1; dx<=1 && !isEdge; dx++) for (int dz=-1; dz<=1 && !isEdge; dz++) {
+                if (dx==0&&dz==0) continue;
+                int nx=x+dx, nz=z+dz; if (!inBounds(nx,nz)) continue;
+                int ni = idx(nx,nz);
+                if (!olmAll.get(ni)) continue;
+                String m1 = srf[ni];
+                if (m1 != null && !m1.equals(m0)) isEdge = true;
+            }
+            if (!isEdge) continue;
+
+            for (int dx=-radius; dx<=radius; dx++) for (int dz=-radius; dz<=radius; dz++) {
+                int nx=x+dx, nz=z+dz; if (!inBounds(nx,nz)) continue;
+                int ni = idx(nx,nz);
+                if (!olmAll.get(ni)) continue;
+                if (lockedOSM.get(ni)) continue;
+                if (protectedWater.get(ni) && !olmWater.get(ni)) continue;
+                ring.set(ni);
+            }
+        }
+
+        // 2) итерации majority в кольце
+        String[] cur = srf;
+        for (int it=0; it<iters; it++) {
+            String[] next = Arrays.copyOf(cur, cur.length);
+            for (int x=minX; x<=maxX; x++) for (int z=minZ; z<=maxZ; z++) {
+                int i = idx(x,z);
+                if (!ring.get(i)) continue;
+                if (lockedOSM.get(i)) continue;
+                if (protectedWater.get(i) && !olmWater.get(i)) continue;
+
+                String curVal = cur[i]; if (curVal == null) continue;
+                HashMap<String,Integer> votes = new HashMap<>();
+                for (int dx=-1; dx<=1; dx++) for (int dz=-1; dz<=1; dz++) {
+                    if (dx==0&&dz==0) continue;
+                    int nx=x+dx, nz=z+dz; if (!inBounds(nx,nz)) continue;
+                    int ni = idx(nx,nz);
+                    if (!olmAll.get(ni)) continue;
+                    if (lockedOSM.get(ni)) continue;
+                    if (protectedWater.get(ni) && !olmWater.get(ni)) continue;
+                    String mv = cur[ni];
+                    if (mv != null) votes.merge(mv, 1, Integer::sum);
+                }
+                if (votes.isEmpty()) continue;
+                Map.Entry<String,Integer> best = votes.entrySet().stream().max(Map.Entry.comparingByValue()).get();
+                if (!best.getKey().equals(curVal) && best.getValue() >= minVotes) next[i] = best.getKey();
+            }
+            cur = next;
+        }
+        System.arraycopy(cur,0,srf,0,totalCells);
+    }
+
+
+
+    private int[] computeWaterSurfaceYArray(String[] surface, int[] terrainY) {
+        final int worldMin = level.getMinBuildHeight();
+        final int worldMax = level.getMaxBuildHeight() - 1;
+
+        BitSet water = new BitSet(totalCells);
+        boolean hasLand = false;
+        for (int i=0;i<totalCells;i++) {
+            if ("water".equals(surface[i])) water.set(i);
+            else hasLand = true;
+        }
+        int[] out = new int[totalCells];
+        if (water.isEmpty()) return out;
+
+        if (!hasLand) {
+            int flat = 62;
+            try { flat = level.getSeaLevel(); } catch (Throwable ignore) {}
+            flat = Math.max(worldMin + 3, Math.min(worldMax - 3, flat));
+            for (int i=water.nextSetBit(0); i>=0; i=water.nextSetBit(i+1)) out[i]=flat;
+            return out;
+        }
+
+        BitSet visited = new BitSet(totalCells);
+        int[][] dirs = new int[][]{{1,0},{-1,0},{0,1},{0,-1}};
+
+        for (int x0=minX; x0<=maxX; x0++) for (int z0=minZ; z0<=maxZ; z0++) {
+            int sIdx = idx(x0,z0);
+            if (!water.get(sIdx) || visited.get(sIdx)) continue;
+
+            ArrayDeque<int[]> q = new ArrayDeque<>();
+            ArrayList<int[]> comp = new ArrayList<>();
+            q.add(new int[]{x0,z0});
+            visited.set(sIdx);
+
+            while(!q.isEmpty()) {
+                int[] c = q.poll();
+                int x=c[0], z=c[1], i=idx(x,z);
+                comp.add(c);
+                for (int[] d:dirs) {
+                    int nx=x+d[0], nz=z+d[1];
+                    if (!inBounds(nx,nz)) continue;
+                    int ni=idx(nx,nz);
+                    if (!water.get(ni) || visited.get(ni)) continue;
+                    visited.set(ni);
+                    q.add(new int[]{nx,nz});
+                }
+            }
+
+            ArrayDeque<int[]> seeds = new ArrayDeque<>();
+            HashMap<Integer,Integer> seedH = new HashMap<>();
+            int minSeed = Integer.MAX_VALUE;
+            int maxR = 0;
+
+            for (int[] cell : comp) {
+                int x=cell[0], z=cell[1], i=idx(x,z);
+                boolean isShore=false; int shoreH = Integer.MIN_VALUE;
+                for (int[] d:dirs) {
+                    int nx=x+d[0], nz=z+d[1];
+                    if (!inBounds(nx,nz)) continue;
+                    int ni=idx(nx,nz);
+                    if (!water.get(ni)) {
+                        isShore=true;
+                        int hLand = terrainY[ni];
+                        if (hLand>shoreH) shoreH=hLand;
+                    }
+                }
+                if (isShore) {
+                    int hWater = Math.max(worldMin+3, Math.min(worldMax-3, shoreH-1));
+                    seeds.add(new int[]{x,z});
+                    seedH.put(i, hWater);
+                    if (hWater<minSeed) minSeed=hWater;
+                }
+            }
+            if (seeds.isEmpty()) continue;
+
+            HashMap<Integer,Integer> dist = new HashMap<>();
+            HashMap<Integer,Integer> nearestH = new HashMap<>();
+            for (int[] s : seeds) {
+                int i = idx(s[0], s[1]);
+                dist.put(i, 0);
+                nearestH.put(i, seedH.get(i));
+            }
+
+            ArrayDeque<int[]> qq = new ArrayDeque<>(seeds);
+            while(!qq.isEmpty()) {
+                int[] c = qq.poll();
+                int x=c[0], z=c[1], i=idx(x,z);
+                int cd = dist.get(i);
+                int ch = nearestH.get(i);
+                if (cd > maxR) maxR = cd;
+                for (int[] d:dirs) {
+                    int nx=x+d[0], nz=z+d[1];
+                    if (!inBounds(nx,nz)) continue;
+                    int ni=idx(nx,nz);
+                    if (!water.get(ni)) continue;
+                    if (dist.containsKey(ni)) continue;
+                    dist.put(ni, cd+1);
+                    nearestH.put(ni, ch);
+                    qq.add(new int[]{nx,nz});
+                }
+            }
+            if (maxR < 15) continue;
+
+            int R = Math.max(1, maxR);
+            int Wmin = minSeed;
+            for (Map.Entry<Integer,Integer> e : dist.entrySet()) {
+                int i = e.getKey();
+                int d = e.getValue();
+                int hs = nearestH.get(i);
+                double t = 1.0 - (d / (double)R);
+                int ySurf = (int)Math.round(Wmin + (hs - Wmin) * Math.max(0.0, Math.min(1.0, t)));
+                ySurf = Math.max(worldMin+3, Math.min(worldMax-3, ySurf));
+                out[i] = ySurf;
+            }
+        }
+        return out;
+    }
+
+    private void publishTerrainGridArray(JsonObject coordsJson, int[] terrainY) {
+        JsonObject g = new JsonObject();
+        g.addProperty("minX", minX);
+        g.addProperty("minZ", minZ);
+        g.addProperty("width", width);
+        g.addProperty("height", height);
+
+        JsonArray data = new JsonArray();
+        for (int z=minZ; z<=maxZ; z++) for (int x=minX; x<=maxX; x++) data.add(terrainY[idx(x,z)]);
+        g.add("data", data);
+        coordsJson.add("terrainGrid", g);
+    }
+
 }

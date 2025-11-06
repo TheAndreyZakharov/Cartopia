@@ -169,7 +169,7 @@ public class PowerLinesGenerator {
         }
 
         broadcast(level, String.format(Locale.ROOT,
-                "Power lines: done. Supports: %d, lines: %d, segments: %", placedSupports, lines.size(), segs));
+                "Power lines: done. Supports: %d, lines: %d, segments: %d", placedSupports, lines.size(), segs));
     }
 
     // ===== Сбор фич =====
