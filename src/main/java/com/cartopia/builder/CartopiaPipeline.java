@@ -363,21 +363,6 @@ public class CartopiaPipeline {
             VegetationScatterGenerator vegGen = new VegetationScatterGenerator(level, coords, store);
             vegGen.generate();
             broadcast(level, "Vegetation ready.");
-
-
-
-
-
-            
-
-//оптимизация Читаю DEM…, Читаю OpenLandMap landcover…
-
-
-
-
-
-
-
 // ==========================================================================================
             // ===== ПОГОДА И ВРЕМЯ =====
             try {
