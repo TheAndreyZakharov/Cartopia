@@ -56,14 +56,14 @@ public class FlagpoleGenerator {
     // ===== публичный запуск =====
     public void generate() {
         if (coords == null) {
-            broadcast(level, "FlagpoleGenerator: coords == null — пропускаю.");
+            broadcast(level, "FlagpoleGenerator: coords == null — skipping.");
             return;
         }
 
         JsonObject center = coords.getAsJsonObject("center");
         JsonObject bbox   = coords.getAsJsonObject("bbox");
         if (center == null || bbox == null) {
-            broadcast(level, "FlagpoleGenerator: нет center/bbox — пропускаю.");
+            broadcast(level, "FlagpoleGenerator: no center/bbox — skipping.");
             return;
         }
 
@@ -100,12 +100,12 @@ public class FlagpoleGenerator {
                 }
             } else {
                 if (!coords.has("features")) {
-                    broadcast(level, "FlagpoleGenerator: нет coords.features — пропускаю.");
+                    broadcast(level, "FlagpoleGenerator: no coords.features — skipping.");
                     return;
                 }
                 JsonArray elements = coords.getAsJsonObject("features").getAsJsonArray("elements");
                 if (elements == null || elements.size() == 0) {
-                    broadcast(level, "FlagpoleGenerator: features.elements пуст — пропускаю.");
+                    broadcast(level, "FlagpoleGenerator: features.elements is empty — skipping.");
                     return;
                 }
                 for (JsonElement el : elements) {
@@ -114,11 +114,11 @@ public class FlagpoleGenerator {
                 }
             }
         } catch (Exception ex) {
-            broadcast(level, "FlagpoleGenerator: ошибка чтения features: " + ex.getMessage());
+            broadcast(level, "FlagpoleGenerator: error reading features: " + ex.getMessage());
         }
 
         if (poles.isEmpty()) {
-            broadcast(level, "FlagpoleGenerator: флагштоков не найдено — готово.");
+            broadcast(level, "FlagpoleGenerator: no flagpoles found — done.");
             return;
         }
 
@@ -129,16 +129,16 @@ public class FlagpoleGenerator {
             try {
                 renderFlagpole(p);
             } catch (Exception ex) {
-                broadcast(level, "FlagpoleGenerator: ошибка на ("+p.x+","+p.z+"): " + ex.getMessage());
+                broadcast(level, "FlagpoleGenerator: error at ("+p.x+","+p.z+"): " + ex.getMessage());
             }
             done++;
             if (done % Math.max(1, total/5) == 0) {
                 int pct = (int)Math.round(100.0 * done / Math.max(1,total));
-                broadcast(level, "Флагштоки: ~" + pct + "%");
+                broadcast(level, "Flagpoles: ~" + pct + "%");
             }
         }
 
-        broadcast(level, "Флагштоки готовы.");
+        broadcast(level, "Flagpoles: done.");
     }
 
     // ===== сбор одной фичи =====

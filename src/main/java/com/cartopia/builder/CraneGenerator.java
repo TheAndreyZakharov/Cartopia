@@ -89,10 +89,10 @@ public class CraneGenerator {
 
     // ===== Запуск =====
     public void generate() {
-        if (coords == null) { broadcast(level, "Cranes: coords == null — пропуск."); return; }
+        if (coords == null) { broadcast(level, "Cranes: coords == null — skipping."); return; }
         JsonObject center = coords.getAsJsonObject("center");
         JsonObject bbox   = coords.getAsJsonObject("bbox");
-        if (center == null || bbox == null) { broadcast(level, "Cranes: нет center/bbox — пропуск."); return; }
+        if (center == null || bbox == null) { broadcast(level, "Cranes: no center/bbox — skipping."); return; }
 
         final double centerLat  = center.get("lat").getAsDouble();
         final double centerLng  = center.get("lng").getAsDouble();
@@ -127,60 +127,60 @@ public class CraneGenerator {
                     }
                 }
             } else {
-                if (!coords.has("features")) { broadcast(level, "Cranes: нет coords.features — пропуск."); return; }
+                if (!coords.has("features")) { broadcast(level, "Cranes: no coords.features — skipping."); return; }
                 JsonArray elements = coords.getAsJsonObject("features").getAsJsonArray("elements");
-                if (elements == null || elements.size() == 0) { broadcast(level, "Cranes: features.elements пуст — пропуск."); return; }
+                if (elements == null || elements.size() == 0) { broadcast(level, "Cranes: features.elements is empty — skipping."); return; }
                 for (JsonElement el : elements) {
                     collectCategory(el.getAsJsonObject(), list1, list2,
                             centerLat, centerLng, east, west, north, south, sizeMeters, centerX, centerZ);
                 }
             }
         } catch (Exception ex) {
-            broadcast(level, "Cranes: ошибка чтения features: " + ex.getMessage());
+            broadcast(level, "Cranes: error reading features: " + ex.getMessage());
         }
 
         // ===== Построение: категория 1 =====
         if (!list1.isEmpty()) {
-            broadcast(level, "Краны кат.1: старт построения…");
+            broadcast(level, "Cranes cat.1: starting construction...");
             int done = 0, total = list1.size();
             for (Crane c : list1) {
                 if (c.x<minX||c.x>maxX||c.z<minZ||c.z>maxZ) continue;
                 try {
                     buildCategory1(c, centerX, centerZ);
                 } catch (Throwable t) {
-                    broadcast(level, "Кат.1 ошибка у ("+c.x+","+c.z+"): " + t.getMessage());
+                    broadcast(level, "Cat.1 error at ("+c.x+","+c.z+"): " + t.getMessage());
                 }
                 done++;
                 if (done % Math.max(1, total/5) == 0) {
                     int pct = (int)Math.round(100.0 * done / Math.max(1, total));
-                    broadcast(level, "Краны (кат.1): ~" + pct + "%");
+                    broadcast(level, "Cranes (cat.1): ~" + pct + "%");
                 }
             }
-            broadcast(level, "Краны: категория 1 — готово.");
+            broadcast(level, "Cranes: category 1 — done.");
         } else {
-            broadcast(level, "Краны: подходящих кат.1 нет.");
+            broadcast(level, "Cranes: no suitable cat.1.");
         }
 
         // ===== Построение: категория 2 =====
         if (!list2.isEmpty()) {
-            broadcast(level, "Краны кат.2: старт построения…");
+            broadcast(level, "Cranes cat.2: starting construction...");
             int done = 0, total = list2.size();
             for (Crane c : list2) {
                 if (c.x<minX||c.x>maxX||c.z<minZ||c.z>maxZ) continue;
                 try {
                     buildCategory2(c);
                 } catch (Throwable t) {
-                    broadcast(level, "Кат.2 ошибка у ("+c.x+","+c.z+"): " + t.getMessage());
+                    broadcast(level, "Cat.2 error at ("+c.x+","+c.z+"): " + t.getMessage());
                 }
                 done++;
                 if (done % Math.max(1, total/5) == 0) {
                     int pct = (int)Math.round(100.0 * done / Math.max(1, total));
-                    broadcast(level, "Краны (кат.2): ~" + pct + "%");
+                    broadcast(level, "Cranes (cat.2): ~" + pct + "%");
                 }
             }
-            broadcast(level, "Краны: категория 2 — готово.");
+            broadcast(level, "Cranes: category 2 — done.");
         } else {
-            broadcast(level, "Краны: подходящих кат.2 нет.");
+            broadcast(level, "Cranes: no suitable cat.2.");
         }
     }
 

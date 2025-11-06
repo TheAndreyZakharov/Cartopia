@@ -71,11 +71,11 @@ public class OvergroundPipelinesGenerator {
 
     // ===== Публичный запуск =====
     public void generate() {
-        if (coords == null) { broadcast(level, "Трубы: coords == null — пропускаю."); return; }
+        if (coords == null) { broadcast(level, "Pipes: coords == null — skipping."); return; }
 
         JsonObject center = coords.getAsJsonObject("center");
         JsonObject bbox   = coords.getAsJsonObject("bbox");
-        if (center == null || bbox == null) { broadcast(level, "Трубы: нет center/bbox — пропускаю."); return; }
+        if (center == null || bbox == null) { broadcast(level, "Pipes: no center/bbox — skipping."); return; }
 
         final double centerLat = center.get("lat").getAsDouble();
         final double centerLng = center.get("lng").getAsDouble();
@@ -109,22 +109,22 @@ public class OvergroundPipelinesGenerator {
                     for (JsonObject e : fs) {
                         collect(e, centerLat, centerLng, east, west, north, south, sizeMeters, centerX, centerZ);
                         read++;
-                        if (read % 2000 == 0) broadcast(level, "Трубы: прочитано фич ~" + read);
+                        if (read % 2000 == 0) broadcast(level, "Pipes: features read ~" + read);
                     }
                 }
             } else {
-                if (!coords.has("features")) { broadcast(level, "Трубы: нет coords.features — пропускаю."); return; }
+                if (!coords.has("features")) { broadcast(level, "Pipes: no coords.features — skipping."); return; }
                 JsonArray elements = coords.getAsJsonObject("features").getAsJsonArray("elements");
-                if (elements == null || elements.size()==0) { broadcast(level,"Трубы: features.elements пуст — пропускаю."); return; }
+                if (elements == null || elements.size()==0) { broadcast(level,"Pipes: features.elements is empty — skipping."); return; }
                 for (JsonElement el : elements) {
                     collect(el.getAsJsonObject(), centerLat, centerLng, east, west, north, south, sizeMeters, centerX, centerZ);
                 }
             }
         } catch (Exception ex) {
-            broadcast(level, "Трубы: ошибка чтения features: " + ex.getMessage());
+            broadcast(level, "Pipes: error reading features: " + ex.getMessage());
         }
 
-        if (lines.isEmpty()) { broadcast(level, "Трубы: подходящих надземных труб нет — готово."); return; }
+        if (lines.isEmpty()) { broadcast(level, "Pipes: no suitable overground pipelines — done."); return; }
 
         // ===== Постройка =====
         long totalSegs = 0;
@@ -162,13 +162,13 @@ public class OvergroundPipelinesGenerator {
                 doneSegs++;
                 if (totalSegs > 0 && doneSegs % Math.max(1, totalSegs/5) == 0) {
                     int pct = (int)Math.round(100.0 * doneSegs / Math.max(1, totalSegs));
-                    broadcast(level, "Трубы: линии ~" + pct + "%");
+                    broadcast(level, "Pipes: lines ~" + pct + "%");
                 }
             }
         }
 
         broadcast(level, String.format(Locale.ROOT,
-                "Трубы: готово. Линий: %d, сегментов: %d", lines.size(), doneSegs));
+                "Pipes: done. Lines: %d, segments: %d", lines.size(), doneSegs));
     }
 
     // ===== Сбор одной фичи =====

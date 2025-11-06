@@ -100,10 +100,10 @@ public class CameraGenerator {
 
     // -------- Паблик запуск --------
     public void generate() {
-        broadcast(level, "🎥 Генерация камер (stream)…");
+        broadcast(level, "Camera generation (stream)...");
 
         if (coords == null || !coords.has("center") || !coords.has("bbox")) {
-            broadcast(level, "❌ Нет coords/center/bbox — пропуск CameraGenerator.");
+            broadcast(level, "No coords/center/bbox — skipping CameraGenerator.");
             return;
         }
 
@@ -143,12 +143,12 @@ public class CameraGenerator {
                 }
             } else {
                 if (!coords.has("features")) {
-                    broadcast(level, "CameraGenerator: нет coords.features — пропуск.");
+                    broadcast(level, "CameraGenerator: no coords.features — skipping.");
                     return;
                 }
                 JsonArray elements = coords.getAsJsonObject("features").getAsJsonArray("elements");
                 if (elements == null || elements.size() == 0) {
-                    broadcast(level, "CameraGenerator: features.elements пуст — пропуск.");
+                    broadcast(level, "CameraGenerator: features.elements is empty — skipping.");
                     return;
                 }
                 for (JsonElement el : elements) {
@@ -160,7 +160,7 @@ public class CameraGenerator {
                 }
             }
         } catch (Exception ex) {
-            broadcast(level, "CameraGenerator: ошибка чтения features: " + ex.getMessage());
+            broadcast(level, "CameraGenerator: error reading features: " + ex.getMessage());
         }
 
         // Пост-обработка: если мы хотели узел из enforcement, но он прошёл в стриме раньше —
@@ -171,7 +171,7 @@ public class CameraGenerator {
         }
 
         if (cams.isEmpty()) {
-            broadcast(level, "CameraGenerator: камер не найдено — готово.");
+            broadcast(level, "CameraGenerator: no cameras found — done.");
             return;
         }
 
@@ -200,13 +200,13 @@ public class CameraGenerator {
                 built++;
                 if (built % Math.max(1, cams.size()/5) == 0) {
                     int pct = (int)Math.round(100.0 * built / Math.max(1, cams.size()));
-                    broadcast(level, "Камеры: ~" + pct + "%");
+                    broadcast(level, "Cameras: ~" + pct + "%");
                 }
             } catch (Exception ex) {
-                broadcast(level, "CameraGenerator: ошибка на ("+cp.x+","+cp.z+"): " + ex.getMessage());
+                broadcast(level, "CameraGenerator: error at ("+cp.x+","+cp.z+"): " + ex.getMessage());
             }
         }
-        broadcast(level, "✅ Камер поставлено: " + built);
+        broadcast(level, "Cameras placed: " + built);
     }
 
     // -------- Сбор дорог --------

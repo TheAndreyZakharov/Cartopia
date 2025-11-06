@@ -60,10 +60,10 @@ public class TrafficLightGenerator {
 
     // ==== запуск ====
     public void generate() {
-        broadcast(level, "🚦 Генерация светофоров (stream)…");
+        broadcast(level, "Generating traffic lights (stream)...");
 
         if (coords == null || !coords.has("center") || !coords.has("bbox") || store == null) {
-            broadcast(level, "❌ Нет coords или store — пропуск TrafficLightGenerator.");
+            broadcast(level, "No coords or store — skipping TrafficLightGenerator.");
             return;
         }
 
@@ -104,7 +104,7 @@ public class TrafficLightGenerator {
                 tlNodeXZ.put(id, xz);
             }
         } catch (Exception ex) {
-            broadcast(level, "Ошибка PASS1 (nodes): " + ex.getMessage());
+            broadcast(level, "Error in PASS1 (nodes): " + ex.getMessage());
             return;
         }
 
@@ -149,7 +149,7 @@ public class TrafficLightGenerator {
                 }
             }
         } catch (Exception ex) {
-            broadcast(level, "Ошибка PASS2a (ways containing node): " + ex.getMessage());
+            broadcast(level, "Error in PASS2a (ways containing node): " + ex.getMessage());
         }
 
         // ===== PASS2b: ближайшая дорога для непривязанных =====
@@ -200,7 +200,7 @@ public class TrafficLightGenerator {
                     }
                 }
             } catch (Exception ex) {
-                broadcast(level, "Ошибка PASS2b (nearest road): " + ex.getMessage());
+                broadcast(level, "Error in PASS2b (nearest road): " + ex.getMessage());
             }
         }
 
@@ -210,7 +210,7 @@ public class TrafficLightGenerator {
             boolean onBridge = Boolean.TRUE.equals(isBridgeByNode.get(c.id));
             buildTrafficLightAtRoadRightEdge(c.x, c.z, c.dir, c.width, onBridge);
             built++;
-            if (built % 50 == 0) broadcast(level, "Светофоры: ~" + built);
+            if (built % 50 == 0) broadcast(level, "Traffic lights: ~" + built);
         }
 
         // fallback
@@ -222,7 +222,7 @@ public class TrafficLightGenerator {
             built++;
         }
 
-        broadcast(level, "✅ Светофоров поставлено: " + built);
+        broadcast(level, "Traffic lights placed: " + built);
     }
 
     // ==== Постройка у ПРАВОЙ кромки дороги (жёстко до края) ====

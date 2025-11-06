@@ -91,14 +91,14 @@ public class UtilityBoxGenerator {
     // ===== публичный запуск =====
     public void generate() {
         if (coords == null) {
-            broadcast(level, "UtilityBoxGenerator: coords == null — пропускаю.");
+            broadcast(level, "UtilityBoxGenerator: coords == null — skipping.");
             return;
         }
 
         JsonObject center = coords.getAsJsonObject("center");
         JsonObject bbox   = coords.getAsJsonObject("bbox");
         if (center == null || bbox == null) {
-            broadcast(level, "UtilityBoxGenerator: нет center/bbox — пропускаю.");
+            broadcast(level, "UtilityBoxGenerator: no center/bbox — skipping.");
             return;
         }
 
@@ -136,12 +136,12 @@ public class UtilityBoxGenerator {
                 }
             } else {
                 if (!coords.has("features")) {
-                    broadcast(level, "UtilityBoxGenerator: нет coords.features — пропускаю.");
+                    broadcast(level, "UtilityBoxGenerator: no coords.features — skipping.");
                     return;
                 }
                 JsonArray elements = coords.getAsJsonObject("features").getAsJsonArray("elements");
                 if (elements == null || elements.size() == 0) {
-                    broadcast(level, "UtilityBoxGenerator: features.elements пуст — пропускаю.");
+                    broadcast(level, "UtilityBoxGenerator: features.elements are empty — skipping.");
                     return;
                 }
                 for (JsonElement el : elements) {
@@ -150,11 +150,11 @@ public class UtilityBoxGenerator {
                 }
             }
         } catch (Exception ex) {
-            broadcast(level, "UtilityBoxGenerator: ошибка чтения features: " + ex.getMessage());
+            broadcast(level, "UtilityBoxGenerator: error reading features: " + ex.getMessage());
         }
 
         if (units.isEmpty()) {
-            broadcast(level, "UtilityBoxGenerator: подходящих объектов нет — готово.");
+            broadcast(level, "UtilityBoxGenerator: no suitable objects found — done.");
             return;
         }
 
@@ -169,12 +169,12 @@ public class UtilityBoxGenerator {
             try {
                 renderUnit(u, minX, maxX, minZ, maxZ);
             } catch (Exception ex) {
-                broadcast(level, "UtilityBoxGenerator: ошибка на ("+u.x+","+u.z+"): " + ex.getMessage());
+                broadcast(level, "UtilityBoxGenerator: error at ("+u.x+","+u.z+"): " + ex.getMessage());
             }
             done++;
             if (done % Math.max(1, units.size()/5) == 0) {
                 int pct = (int)Math.round(100.0 * done / Math.max(1, units.size()));
-                broadcast(level, "Утилитарные боксы: ~" + pct + "%");
+                broadcast(level, "Utility boxes: ~" + pct + "%");
             }
         }
     }

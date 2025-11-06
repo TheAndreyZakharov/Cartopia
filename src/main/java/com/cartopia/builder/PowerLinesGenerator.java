@@ -76,12 +76,12 @@ public class PowerLinesGenerator {
 
     // ===== Публичный запуск =====
     public void generate() {
-        if (coords == null) { broadcast(level,"PowerLinesGenerator: coords == null — пропускаю."); return; }
+        if (coords == null) { broadcast(level,"PowerLinesGenerator: coords == null — skipping."); return; }
 
         JsonObject center = coords.getAsJsonObject("center");
         JsonObject bbox   = coords.getAsJsonObject("bbox");
         if (center == null || bbox == null) {
-            broadcast(level,"PowerLinesGenerator: нет center/bbox — пропускаю."); return;
+            broadcast(level,"PowerLinesGenerator: no center/bbox — skipping."); return;
         }
 
         final double centerLat = center.get("lat").getAsDouble();
@@ -112,24 +112,24 @@ public class PowerLinesGenerator {
                     for (JsonObject e : fs) {
                         collect(e, centerLat, centerLng, east, west, north, south, sizeMeters, centerX, centerZ);
                         read++;
-                        if (read % 1000 == 0) broadcast(level, "ЛЭП: прочитано фич ~" + read);
+                        if (read % 1000 == 0) broadcast(level, "Power lines: features read ~" + read);
                     }
                 }
             } else {
-                if (!coords.has("features")) { broadcast(level,"PowerLinesGenerator: нет coords.features — пропускаю."); return; }
+                if (!coords.has("features")) { broadcast(level,"PowerLinesGenerator: no coords.features — skipping."); return; }
                 JsonArray elements = coords.getAsJsonObject("features").getAsJsonArray("elements");
-                if (elements == null || elements.size()==0) { broadcast(level,"PowerLinesGenerator: features.elements пуст — пропускаю."); return; }
+                if (elements == null || elements.size()==0) { broadcast(level,"PowerLinesGenerator: features.elements is empty — skipping."); return; }
                 for (JsonElement el : elements) {
                     collect(el.getAsJsonObject(), centerLat, centerLng, east, west, north, south, sizeMeters, centerX, centerZ);
                 }
             }
         } catch (Exception ex) {
-            broadcast(level, "PowerLinesGenerator: ошибка чтения features: " + ex.getMessage());
+            broadcast(level, "PowerLinesGenerator: error reading features: " + ex.getMessage());
         }
 
         // ===== Постройка опор =====
         if (supportsByXZ.isEmpty() && lines.isEmpty()) {
-            broadcast(level, "PowerLinesGenerator: подходящих ЛЭП-объектов не найдено — готово.");
+            broadcast(level, "PowerLinesGenerator: no suitable power-line objects found — done.");
             return;
         }
 
@@ -142,10 +142,10 @@ public class PowerLinesGenerator {
                 placedSupports++;
                 if (placedSupports % Math.max(1, supportsByXZ.size()/5) == 0) {
                     int pct = (int)Math.round(100.0 * placedSupports / Math.max(1, supportsByXZ.size()));
-                    broadcast(level, "ЛЭП: опоры ~" + pct + "%");
+                    broadcast(level, "Power lines: supports ~" + pct + "%");
                 }
             } catch (Exception ex) {
-                broadcast(level, "ЛЭП: ошибка постройки опоры на ("+s.x+","+s.z+"): " + ex.getMessage());
+                broadcast(level, "Power lines: error building support at ("+s.x+","+s.z+"): " + ex.getMessage());
             }
         }
 
@@ -163,13 +163,13 @@ public class PowerLinesGenerator {
                 segs++;
                 if (segs % Math.max(1, totalSegs/5) == 0) {
                     int pct = (int)Math.round(100.0 * segs / Math.max(1, totalSegs));
-                    broadcast(level, "ЛЭП: провода ~" + pct + "%");
+                    broadcast(level, "Power lines: wires ~" + pct + "%");
                 }
             }
         }
 
         broadcast(level, String.format(Locale.ROOT,
-                "ЛЭП: готово. Опор: %d, линий: %d, сегментов: %d", placedSupports, lines.size(), segs));
+                "Power lines: done. Supports: %d, lines: %d, segments: %", placedSupports, lines.size(), segs));
     }
 
     // ===== Сбор фич =====

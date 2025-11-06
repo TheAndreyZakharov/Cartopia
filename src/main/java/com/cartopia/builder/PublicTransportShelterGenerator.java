@@ -52,10 +52,10 @@ public class PublicTransportShelterGenerator {
 
     // ==== запуск ====
     public void generate() {
-        broadcast(level, "🚏 Генерация павильонов остановок (stream)…");
+        broadcast(level, "Generating stop shelters (stream)...");
 
         if (coords == null || !coords.has("center") || !coords.has("bbox") || store == null) {
-            broadcast(level, "❌ Нет coords или store — пропуск PublicTransportShelterGenerator.");
+            broadcast(level, "No coords or store — skipping PublicTransportShelterGenerator.");
             return;
         }
 
@@ -96,7 +96,7 @@ public class PublicTransportShelterGenerator {
                 stopNodeXZ.put(id, xz);
             }
         } catch (Exception ex) {
-            broadcast(level, "Ошибка PASS1 (nodes): " + ex.getMessage());
+            broadcast(level, "Error PASS1 (nodes): " + ex.getMessage());
             return;
         }
 
@@ -140,7 +140,7 @@ public class PublicTransportShelterGenerator {
                 }
             }
         } catch (Exception ex) {
-            broadcast(level, "Ошибка PASS2a (ways containing node): " + ex.getMessage());
+            broadcast(level, "Error PASS2a (ways containing node): " + ex.getMessage());
         }
 
         // ===== PASS2b: для непривязанных — ближайшая авто-дорога =====
@@ -193,7 +193,7 @@ public class PublicTransportShelterGenerator {
                     }
                 }
             } catch (Exception ex) {
-                broadcast(level, "Ошибка PASS2b (nearest road): " + ex.getMessage());
+                broadcast(level, "Error PASS2b (nearest road): " + ex.getMessage());
             }
         }
 
@@ -203,7 +203,7 @@ public class PublicTransportShelterGenerator {
             if (c == null) continue;
             buildShelterAtEdge(c.x, c.z, c.dir, c.width, c.sideSign);
             built++;
-            if (built % 20 == 0) broadcast(level, "Павильоны: ~" + built);
+            if (built % 20 == 0) broadcast(level, "Shelters: ~" + built);
         }
 
         for (Map.Entry<Long,int[]> e : stopNodeXZ.entrySet()) {
@@ -215,7 +215,7 @@ public class PublicTransportShelterGenerator {
             built++;
         }
 
-        broadcast(level, "✅ Павильоны построены: " + built);
+        broadcast(level, "Shelters built: " + built);
     }
 
     // ==== Постройка одного павильона у кромки дороги ====

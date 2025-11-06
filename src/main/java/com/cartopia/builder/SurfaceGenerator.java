@@ -272,8 +272,8 @@ public class SurfaceGenerator {
         int height = maxZ - minZ + 1;
         int totalCells = Math.max(1, width * height);
 
-        broadcast(level, String.format("Область %dx%d блоков (minX=%d, maxX=%d, minZ=%d, maxZ=%d)", width, height, minX, maxX, minZ, maxZ));
-        broadcast(level, "Читаю DEM…");
+        broadcast(level, String.format("Area %dx%d blocks (minX=%d, maxX=%d, minZ=%d, maxZ=%d)", width, height, minX, maxX, minZ, maxZ));
+        broadcast(level, "Reading DEM...");
 
         if (demFile == null || !demFile.exists() || demFile.length() == 0) {
             throw new IllegalStateException("DEM не найден или пуст: " + String.valueOf(demFile));
@@ -346,7 +346,7 @@ public class SurfaceGenerator {
                 : downloadOLMIfConfigured(coordsJson, south, west, north, east);
 
         if (lcFile != null && lcFile.exists() && lcFile.length() > 0) {
-            broadcast(level, "Читаю OpenLandMap landcover…");
+            broadcast(level, "Reading OpenLandMap landcover...");
 
             // Границы растрового файла:
             double lcovW = -180.0, lcovE = 180.0, lcovS = -90.0, lcovN = 90.0;
@@ -576,7 +576,7 @@ public class SurfaceGenerator {
                         minX, maxX, minZ, maxZ
                 );
 
-        broadcast(level, String.format("Размещение блоков (%d клеток)…", totalCells));
+        broadcast(level, String.format("Placing blocks (%d cells)...", totalCells));
 
         // уровни воды
         Map<Long, Integer> waterSurfaceY = computeWaterSurfaceY(surface, terrainY, minX, maxX, minZ, maxZ);
@@ -590,7 +590,7 @@ public class SurfaceGenerator {
                 JsonObject tg = coordsJson.getAsJsonObject("terrainGrid");
                 if (tg != null) {
                     Files.writeString(out.toPath(), tg.toString(), StandardCharsets.UTF_8);
-                    broadcast(level, "Сетка рельефа сохранена (черновик): " + out.getAbsolutePath());
+                    broadcast(level, "Terrain grid saved (draft): " + out.getAbsolutePath());
                 }
             } catch (Exception e) {
                 System.err.println("[Cartopia] Не удалось сохранить terrain-grid.json: " + e);
@@ -599,7 +599,7 @@ public class SurfaceGenerator {
 
         // ВЫЗОВ placeBlocks с новым параметром
         placeBlocks(surface, terrainY, waterMask, waterSurfaceY, breakwaterCells, cliffCapCells, minX, maxX, minZ, maxZ, totalCells);
-        broadcast(level, "Размещение блоков завершено.");
+        broadcast(level, "Block placement complete.");
 
         // === FINAL JSON (v2) + дублируем groundY как data для обратной совместимости ===
         final int worldMin = level.getMinBuildHeight();
@@ -664,7 +664,7 @@ public class SurfaceGenerator {
             if (areaDir2 != null) {
                 File outFile = new File(areaDir2, "terrain-grid.json");
                 Files.writeString(outFile.toPath(), fin.toString(), StandardCharsets.UTF_8);
-                broadcast(level, "Финальный рельеф сохранён (v2 + data): " + outFile.getAbsolutePath());
+                broadcast(level, "Final terrain saved (v2 + data): " + outFile.getAbsolutePath());
             }
         } catch (Exception e) {
             System.err.println("[Cartopia] Не удалось сохранить финальный terrain-grid.json: " + e);
@@ -1358,7 +1358,7 @@ public class SurfaceGenerator {
                     nextConsole += 5;
                 }
                 if (chatIdx < chatMilestones.length && pct >= chatMilestones[chatIdx]) {
-                    broadcast(level, "Прогресс генерации: " + chatMilestones[chatIdx] + "%");
+                    broadcast(level, "Generation progress: " + chatMilestones[chatIdx] + "%");
                     CartopiaSurfaceSpawn.adjustAllPlayersAsync(level);
                     chatIdx++;
                 }

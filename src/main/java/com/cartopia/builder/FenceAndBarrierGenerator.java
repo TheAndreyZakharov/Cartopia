@@ -100,7 +100,7 @@ public class FenceAndBarrierGenerator {
     // ===== Публичный запуск =====
     public void generate() {
         if (coords == null && (store == null || store.indexJsonObject() == null)) {
-            broadcast(level, "FenceAndBarrierGenerator: нет исходных координат — пропускаю.");
+            broadcast(level, "FenceAndBarrierGenerator: no source coordinates — skipping.");
             return;
         }
 
@@ -110,7 +110,7 @@ public class FenceAndBarrierGenerator {
         JsonObject center = sourceIndex.getAsJsonObject("center");
         JsonObject bbox   = sourceIndex.getAsJsonObject("bbox");
         if (center == null || bbox == null) {
-            broadcast(level, "FenceAndBarrierGenerator: нет center/bbox — пропускаю.");
+            broadcast(level, "FenceAndBarrierGenerator: no center/bbox — skipping.");
             return;
         }
 
@@ -178,7 +178,7 @@ public class FenceAndBarrierGenerator {
                 // Фолбэк: coords.features.elements
                 JsonArray elements = safeElementsArray(coords);
                 if (elements == null) {
-                    broadcast(level, "FenceAndBarrierGenerator: features.elements пуст — пропускаю.");
+                    broadcast(level, "FenceAndBarrierGenerator: features.elements is empty — skipping.");
                     return;
                 }
                 for (JsonElement el : elements) {
@@ -211,7 +211,7 @@ public class FenceAndBarrierGenerator {
                 }
             }
         } catch (Exception ex) {
-            broadcast(level, "FenceAndBarrierGenerator: ошибка чтения features: " + ex.getMessage());
+            broadcast(level, "FenceAndBarrierGenerator: error reading features: " + ex.getMessage());
         }
 
         // ==== 2) Построение по зонам ====
@@ -225,11 +225,11 @@ public class FenceAndBarrierGenerator {
                 }
                 // inners (дыры) принципиально не огораживаем
             } catch (Exception ex) {
-                broadcast(level, "Ограждение зоны #" + aIdx + ": ошибка " + ex.getMessage());
+                broadcast(level, "Zone fence #" + aIdx + ": error " + ex.getMessage());
             }
             if (aIdx % Math.max(1, areaList.size()/5) == 0) {
                 int pct = (int)Math.round(100.0 * aIdx / Math.max(1, areaList.size()));
-                broadcast(level, "Ограждения зон: ~" + pct + "%");
+                broadcast(level, "Zone fences: ~" + pct + "%");
             }
         }
 
@@ -241,11 +241,11 @@ public class FenceAndBarrierGenerator {
                 FenceStyle style = classifyBarrierStyle(bl.tags);
                 buildBarrierLine(bl, style, worldMinX, worldMaxX, worldMinZ, worldMaxZ);
             } catch (Exception ex) {
-                broadcast(level, "Линейный барьер #" + blIdx + ": ошибка " + ex.getMessage());
+                broadcast(level, "Linear barrier  #" + blIdx + ": error " + ex.getMessage());
             }
         }
 
-        broadcast(level, "Ограждения/заборы/барьеры: готово.");
+        broadcast(level, "Fences/enclosures/barriers: done.");
     }
 
     // ======== WHITELIST ЗОН ========

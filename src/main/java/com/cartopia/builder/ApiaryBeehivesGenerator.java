@@ -101,11 +101,11 @@ public class ApiaryBeehivesGenerator {
 
     // --- запуск ---
     public void generate() {
-        if (coords == null) { broadcast(level, "ApiaryBeehivesGenerator: coords == null — пропуск."); return; }
+        if (coords == null) { broadcast(level, "ApiaryBeehivesGenerator: coords == null — skipping."); return; }
 
         JsonObject center = coords.getAsJsonObject("center");
         JsonObject bbox   = coords.getAsJsonObject("bbox");
-        if (center == null || bbox == null) { broadcast(level, "ApiaryBeehivesGenerator: нет center/bbox — пропуск."); return; }
+        if (center == null || bbox == null) { broadcast(level, "ApiaryBeehivesGenerator: no center/bbox — skipping."); return; }
 
         final double centerLat  = center.get("lat").getAsDouble();
         final double centerLng  = center.get("lng").getAsDouble();
@@ -143,16 +143,16 @@ public class ApiaryBeehivesGenerator {
                     }
                 }
             } else {
-                if (!coords.has("features")) { broadcast(level, "ApiaryBeehivesGenerator: нет coords.features — пропуск."); return; }
+                if (!coords.has("features")) { broadcast(level, "ApiaryBeehivesGenerator: no coords.features — skipping."); return; }
                 JsonArray elements = coords.getAsJsonObject("features").getAsJsonArray("elements");
-                if (elements == null || elements.size() == 0) { broadcast(level, "ApiaryBeehivesGenerator: features.elements пуст — пропуск."); return; }
+                if (elements == null || elements.size() == 0) { broadcast(level, "ApiaryBeehivesGenerator: features.elements is empty — skipping."); return; }
                 for (JsonElement el : elements) {
                     collectFeature(el.getAsJsonObject(), points, areas, seenNodeIds, seenWayRelIds, usedXZ,
                             centerLat, centerLng, east, west, north, south, sizeMeters, centerX, centerZ);
                 }
             }
         } catch (Exception ex) {
-            broadcast(level, "ApiaryBeehivesGenerator: ошибка чтения features: " + ex.getMessage());
+            broadcast(level, "ApiaryBeehivesGenerator: error reading features: " + ex.getMessage());
         }
 
         // ---- постановка точечных ульев ----
@@ -162,7 +162,7 @@ public class ApiaryBeehivesGenerator {
             placeHiveOnTerrain(p.x, p.z);
             placedPoints++;
         }
-        if (placedPoints > 0) broadcast(level, "Ульи (точки): поставлено " + placedPoints + " шт.");
+        if (placedPoints > 0) broadcast(level, "Beehives (points): placed " + placedPoints + " шт.");
 
         // ---- укладка ульев внутри зон ----
         int idx = 0;
@@ -171,7 +171,7 @@ public class ApiaryBeehivesGenerator {
             tileAreaWithHives(area, worldMinX, worldMaxX, worldMinZ, worldMaxZ, idx, areas.size());
         }
 
-        broadcast(level, "ApiaryBeehivesGenerator: готово.");
+        broadcast(level, "ApiaryBeehivesGenerator: done.");
     }
 
     // --- сбор признаков (и точки, и зоны) ---
@@ -299,7 +299,7 @@ public class ApiaryBeehivesGenerator {
         }
 
         if (bestCount <= 0) {
-            broadcast(level, String.format(Locale.ROOT, "Пасека %d/%d: нет места для ульев.", idx, total));
+            broadcast(level, String.format(Locale.ROOT, "Apiary %d/%d: no space for beehives.", idx, total));
             return;
         }
 
@@ -311,11 +311,11 @@ public class ApiaryBeehivesGenerator {
                 done++;
                 if (done % Math.max(1, totalToPlace/5) == 0) {
                     int pct = (int)Math.round(100.0 * done / Math.max(1, totalToPlace));
-                    broadcast(level, String.format(Locale.ROOT, "Пасека %d/%d: ~%d%%", idx, total, pct));
+                    broadcast(level, String.format(Locale.ROOT, "Apiary %d/%d: ~%d%%", idx, total, pct));
                 }
             }
         }
-        broadcast(level, String.format(Locale.ROOT, "Пасека %d/%d: поставлено %d ульев", idx, total, done));
+        broadcast(level, String.format(Locale.ROOT, "Apiary %d/%d: placed %d beehives", idx, total, done));
     }
 
     private int simulateCount(Area area, int minX, int maxX, int minZ, int maxZ, int ox, int oz) {

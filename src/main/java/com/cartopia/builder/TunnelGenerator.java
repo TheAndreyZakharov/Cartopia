@@ -92,14 +92,14 @@ public class TunnelGenerator {
 
     // ==== публичный запуск ====
     public void generate() {
-        broadcast(level, "🚇 Тоннели: глубина 7 ниже рельефа, ступень=1 блок, порталы с ободком…");
+        broadcast(level, "Tunnels: depth 7 below terrain, step = 1 block, portals with a rim...");
 
         if (coords == null) {
-            broadcast(level, "coords == null — пропускаю TunnelGenerator.");
+            broadcast(level, "coords == null — skipping TunnelGenerator.");
             return;
         }
         if (!coords.has("center") || !coords.has("bbox")) {
-            broadcast(level, "Нет center/bbox — пропускаю TunnelGenerator.");
+            broadcast(level, "No center/bbox — skipping TunnelGenerator.");
             return;
         }
 
@@ -195,30 +195,30 @@ public class TunnelGenerator {
                     if (approxTotal > 0) {
                         int pct = (int)Math.round(100.0 * Math.min(scanned, approxTotal) / (double)approxTotal);
                         if (pct >= nextPctMark) {
-                            broadcast(level, "Тоннели: ~" + pct + "%");
+                            broadcast(level, "Tunnels: ~" + pct + "%");
                             nextPctMark = Math.min(100, nextPctMark + 5);
                         }
                     } else if (scanned % 10000 == 0) {
-                        broadcast(level, "Тоннели: обработано элементов ≈ " + scanned);
+                        broadcast(level, "Tunnels: processed ≈ " + scanned);
                     }
                 }
             } catch (Exception ex) {
-                broadcast(level, "Ошибка чтения features NDJSON: " + ex.getMessage());
+                broadcast(level, "Error reading features NDJSON: " + ex.getMessage());
             }
 
-            broadcast(level, "Тоннели готовы.");
+            broadcast(level, "Tunnels done.");
             return;
         }
 
         // ===== РЕЖИМ 2: фоллбэк на старый JSON в памяти =====
         if (!coords.has("features") || !coords.get("features").isJsonObject()) {
-            broadcast(level, "В coords нет features — пропускаю TunnelGenerator.");
+            broadcast(level, "No features in coords — skipping TunnelGenerator.");
             return;
         }
 
         JsonArray elements = coords.getAsJsonObject("features").getAsJsonArray("elements");
         if (elements == null || elements.size() == 0) {
-            broadcast(level, "OSM elements пуст — пропускаю тоннели.");
+            broadcast(level, "OSM elements are empty — skipping tunnels.");
             return;
         }
 
@@ -264,7 +264,7 @@ public class TunnelGenerator {
             processed++;
             if (totalWays > 0 && processed % Math.max(1, totalWays/10) == 0) {
                 int pct = (int)Math.round(100.0 * processed / Math.max(1,totalWays));
-                broadcast(level, "Тоннели: ~" + pct + "%");
+                broadcast(level, "Tunnels: ~" + pct + "%");
             }
         }
 
@@ -294,11 +294,11 @@ public class TunnelGenerator {
             processed++;
             if (totalWays > 0 && processed % Math.max(1, totalWays/10) == 0) {
                 int pct = (int)Math.round(100.0 * processed / Math.max(1,totalWays));
-                broadcast(level, "Тоннели: ~" + pct + "%");
+                broadcast(level, "Tunnels: ~" + pct + "%");
             }
         }
 
-        broadcast(level, "Тоннели готовы.");
+        broadcast(level, "Tunnels done.");
     }
 
     // ====== ОТБОР ======

@@ -56,10 +56,10 @@ public class InfoBoardsGenerator {
 
     // ===== Запуск =====
     public void generate() {
-        if (coords == null) { broadcast(level, "InfoBoardsGenerator: coords == null — пропускаю."); return; }
+        if (coords == null) { broadcast(level, "InfoBoardsGenerator: coords == null — skipping."); return; }
         JsonObject center = coords.getAsJsonObject("center");
         JsonObject bbox   = coords.getAsJsonObject("bbox");
-        if (center == null || bbox == null) { broadcast(level, "InfoBoardsGenerator: нет center/bbox — пропускаю."); return; }
+        if (center == null || bbox == null) { broadcast(level, "InfoBoardsGenerator: no center/bbox — skipping."); return; }
 
         final double centerLat  = center.get("lat").getAsDouble();
         final double centerLng  = center.get("lng").getAsDouble();
@@ -95,20 +95,20 @@ public class InfoBoardsGenerator {
                     }
                 }
             } else {
-                if (!coords.has("features")) { broadcast(level, "InfoBoardsGenerator: нет coords.features — пропускаю."); return; }
+                if (!coords.has("features")) { broadcast(level, "InfoBoardsGenerator: no coords.features — skipping."); return; }
                 JsonArray elements = coords.getAsJsonObject("features").getAsJsonArray("elements");
-                if (elements == null || elements.size() == 0) { broadcast(level, "InfoBoardsGenerator: features.elements пуст — пропускаю."); return; }
+                if (elements == null || elements.size() == 0) { broadcast(level, "InfoBoardsGenerator: features.elements is empty — skipping."); return; }
                 for (JsonElement el : elements) {
                     collectInfoPoint(el.getAsJsonObject(), points, seenNodeIds, seenWayRelIds, usedXZ,
                             centerLat, centerLng, east, west, north, south, sizeMeters, centerX, centerZ);
                 }
             }
         } catch (Exception ex) {
-            broadcast(level, "InfoBoardsGenerator: ошибка чтения features: " + ex.getMessage());
+            broadcast(level, "InfoBoardsGenerator: error reading features: " + ex.getMessage());
         }
 
         if (points.isEmpty()) {
-            broadcast(level, "InfoBoardsGenerator: подходящих инфо-объектов не найдено — готово.");
+            broadcast(level, "InfoBoardsGenerator: no suitable info objects found — done.");
             return;
         }
 
@@ -121,10 +121,10 @@ public class InfoBoardsGenerator {
             done++;
             if (done % Math.max(1, points.size()/5) == 0) {
                 int pct = (int)Math.round(100.0 * done / Math.max(1, points.size()));
-                broadcast(level, "Инфостенды: ~" + pct + "%");
+                broadcast(level, "Info boards: ~" + pct + "%");
             }
         }
-        broadcast(level, "Инфостенды: готово, поставлено " + done + " шт.");
+        broadcast(level, "Info boards: done, placed " + done + " pcs.");
     }
 
     // ===== Сбор признаков =====

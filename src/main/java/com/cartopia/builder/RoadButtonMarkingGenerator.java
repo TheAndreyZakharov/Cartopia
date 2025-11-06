@@ -55,10 +55,10 @@ public class RoadButtonMarkingGenerator {
 
     // ===== Публичный запуск =====
     public void generate() {
-        broadcast(level, "🚧 Генерация дорожной кнопочной разметки…");
+        broadcast(level, "Generating road button markings...");
 
         if (coords == null || !coords.has("center") || !coords.has("bbox") || store == null) {
-            broadcast(level, "❌ Нет coords или store — пропуск RoadButtonMarkingGenerator.");
+            broadcast(level, "No coords or store — skipping RoadButtonMarkingGenerator.");
             return;
         }
 
@@ -121,7 +121,7 @@ public class RoadButtonMarkingGenerator {
                 maskedCells += painted;
             }
         } catch (Exception ex) {
-            broadcast(level, "Ошибка PASS1: " + ex.getMessage());
+            broadcast(level, "Error in PASS1: " + ex.getMessage());
             return;
         }
 
@@ -145,13 +145,13 @@ public class RoadButtonMarkingGenerator {
                 markedIntersections++;
             }
         } catch (Exception ex) {
-            broadcast(level, "Ошибка PASS1b (nodes): " + ex.getMessage());
+            broadcast(level, "Error in PASS1b (nodes): " + ex.getMessage());
         }
 
-        broadcast(level, "PASS1: авто-дорог: " + waysCount
-                + ", дорожных клеток: " + maskedCells
-                + ", узлов-пересечений: " + crossingNodeIds.size()
-                + ", размечено зон пересечений: " + markedIntersections);
+        broadcast(level, "PASS1: vehicular roads: " + waysCount
+                + ", road cells: " + maskedCells
+                + ", intersection nodes: " + crossingNodeIds.size()
+                + ", intersection zones marked: " + markedIntersections);
 
         // PASS2: установка кнопок по правилам
         int placedRegular = 0;
@@ -181,12 +181,12 @@ public class RoadButtonMarkingGenerator {
                 }
             }
         } catch (Exception ex) {
-            broadcast(level, "Ошибка PASS2: " + ex.getMessage());
+            broadcast(level, "Error in PASS2: " + ex.getMessage());
         }
 
-        broadcast(level, "✅ Кнопки поставлены. Обычных: " + placedRegular
-                + ", уплотнение перед перекрестками: " + placedApproach
-                + ", шов: " + placedSeam);
+        broadcast(level, "Buttons placed. Regularх: " + placedRegular
+                + ", approach before intersections: " + placedApproach
+                + ", seam: " + placedSeam);
     }
 
     // ===== Основная логика PASS2 — расстановка кнопок на дороге =====

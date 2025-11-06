@@ -72,12 +72,12 @@ public class AerialwayGenerator {
 
     // ===== Публичный запуск =====
     public void generate() {
-        if (coords == null) { broadcast(level, "Aerialway: coords == null — пропускаю."); return; }
+        if (coords == null) { broadcast(level, "Aerialway: coords == null — skipping."); return; }
 
         JsonObject center = coords.getAsJsonObject("center");
         JsonObject bbox   = coords.getAsJsonObject("bbox");
         if (center == null || bbox == null) {
-            broadcast(level, "Aerialway: нет center/bbox — пропускаю."); return;
+            broadcast(level, "Aerialway: no center/bbox — skipping."); return;
         }
 
         final double centerLat = center.get("lat").getAsDouble();
@@ -108,26 +108,26 @@ public class AerialwayGenerator {
                     for (JsonObject e : fs) {
                         collect(e, centerLat, centerLng, east, west, north, south, sizeMeters, centerX, centerZ);
                         read++;
-                        if (read % 1000 == 0) broadcast(level, "Aerialway: прочитано фич ~" + read);
+                        if (read % 1000 == 0) broadcast(level, "Aerialway: features read ~" + read);
                     }
                 }
             } else {
-                if (!coords.has("features")) { broadcast(level, "Aerialway: нет coords.features — пропускаю."); return; }
+                if (!coords.has("features")) { broadcast(level, "Aerialway: no coords.features — skipping."); return; }
                 JsonArray elements = coords.getAsJsonObject("features").getAsJsonArray("elements");
-                if (elements == null || elements.size() == 0) { broadcast(level, "Aerialway: features.elements пуст — пропускаю."); return; }
+                if (elements == null || elements.size() == 0) { broadcast(level, "Aerialway: features.elements is empty — skipping."); return; }
                 for (JsonElement el : elements) {
                     collect(el.getAsJsonObject(), centerLat, centerLng, east, west, north, south, sizeMeters, centerX, centerZ);
                 }
             }
         } catch (Exception ex) {
-            broadcast(level, "Aerialway: ошибка чтения features: " + ex.getMessage());
+            broadcast(level, "Aerialway: error reading features: " + ex.getMessage());
         }
 
         // Добавляем промежуточные опоры каждые 50 м вдоль линий
         densifySupportsAlongLines();
 
         if (supportsByXZ.isEmpty() && lines.isEmpty()) {
-            broadcast(level, "Aerialway: подходящих объектов не найдено — готово.");
+            broadcast(level, "Aerialway: no suitable objects found — done.");
             return;
         }
 
@@ -140,12 +140,12 @@ public class AerialwayGenerator {
                 if (s.station) buildStation(s.x, s.z);
                 else buildSupport(s.x, s.z);
             } catch (Exception ex) {
-                broadcast(level, "Aerialway: ошибка постройки на ("+s.x+","+s.z+"): " + ex.getMessage());
+                broadcast(level, "Aerialway: build error at ("+s.x+","+s.z+"): " + ex.getMessage());
             }
             placed++;
             if (placed % Math.max(1, total/5) == 0) {
                 int pct = (int)Math.round(100.0 * placed / Math.max(1, total));
-                broadcast(level, "Aerialway: опоры/станции ~" + pct + "%");
+                broadcast(level, "Aerialway: supports/stations ~" + pct + "%");
             }
         }
 
@@ -163,13 +163,13 @@ public class AerialwayGenerator {
                 segs++;
                 if (segs % Math.max(1, totalSegs/5) == 0) {
                     int pct = (int)Math.round(100.0 * segs / Math.max(1, totalSegs));
-                    broadcast(level, "Aerialway: тросы ~" + pct + "%");
+                    broadcast(level, "Aerialway: cables ~" + pct + "%");
                 }
             }
         }
 
         broadcast(level, String.format(Locale.ROOT,
-                "Aerialway: готово. Опор/станций: %d, линий: %d, сегментов: %d",
+                "Aerialway: done. Supports/stations: %d, lines: %d, segments: %d",
                 placed, lines.size(), segs));
     }
 
@@ -329,7 +329,7 @@ public class AerialwayGenerator {
                 prev = cur;
             }
         }
-        if (added > 0) broadcast(level, "Aerialway: добавлено промежуточных опор: " + added);
+        if (added > 0) broadcast(level, "Aerialway: added intermediate supports: " + added);
     }
 
     private boolean hasSupportNear(int x, int z, int radius) {

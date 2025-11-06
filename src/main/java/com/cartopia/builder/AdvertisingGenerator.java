@@ -79,10 +79,10 @@ public class AdvertisingGenerator {
 
     // ===== Запуск =====
     public void generate() {
-        if (coords == null) { broadcast(level, "Advertising: coords == null — пропуск."); return; }
+        if (coords == null) { broadcast(level, "Advertising: coords == null — skipping."); return; }
         JsonObject center = coords.getAsJsonObject("center");
         JsonObject bbox   = coords.getAsJsonObject("bbox");
-        if (center == null || bbox == null) { broadcast(level, "Advertising: нет center/bbox — пропуск."); return; }
+        if (center == null || bbox == null) { broadcast(level, "Advertising: no center/bbox — skipping."); return; }
 
         final double centerLat  = center.get("lat").getAsDouble();
         final double centerLng  = center.get("lng").getAsDouble();
@@ -110,16 +110,16 @@ public class AdvertisingGenerator {
                     for (JsonObject e : fs) collect(e, list, centerLat, centerLng, east, west, north, south, sizeMeters, centerX, centerZ);
                 }
             } else {
-                if (!coords.has("features")) { broadcast(level, "Advertising: нет coords.features — пропуск."); return; }
+                if (!coords.has("features")) { broadcast(level, "Advertising: no coords.features — skipping."); return; }
                 JsonArray elements = coords.getAsJsonObject("features").getAsJsonArray("elements");
-                if (elements == null || elements.size() == 0) { broadcast(level, "Advertising: features.elements пуст — пропуск."); return; }
+                if (elements == null || elements.size() == 0) { broadcast(level, "Advertising: features.elements is empty — skipping."); return; }
                 for (JsonElement el : elements) collect(el.getAsJsonObject(), list, centerLat, centerLng, east, west, north, south, sizeMeters, centerX, centerZ);
             }
-        } catch (Exception ex) { broadcast(level, "Advertising: ошибка чтения features: " + ex.getMessage()); }
+        } catch (Exception ex) { broadcast(level, "Advertising: error reading: " + ex.getMessage()); }
 
-        if (list.isEmpty()) { broadcast(level, "Advertising: подходящих объектов нет — готово."); return; }
+        if (list.isEmpty()) { broadcast(level, "Advertising: no suitable objects — done."); return; }
 
-        broadcast(level, "Advertising: построение…");
+        broadcast(level, "Advertising: building...");
         int done = 0, total = list.size();
         for (Ad ad : list) {
             if (ad.x<minX||ad.x>maxX||ad.z<minZ||ad.z>maxZ) continue;
@@ -130,7 +130,7 @@ public class AdvertisingGenerator {
                     default -> buildStandAndWrapWithPaintings(ad.x, ad.z);
                 }
             } catch (Throwable t) {
-                broadcast(level, "Advertising: ошибка у ("+ad.x+","+ad.z+"): " + t.getMessage());
+                broadcast(level, "Advertising: error at ("+ad.x+","+ad.z+"): " + t.getMessage());
             }
             done++;
             if (done % Math.max(1, total/5) == 0) {
@@ -138,7 +138,7 @@ public class AdvertisingGenerator {
                 broadcast(level, "Advertising: ~" + pct + "%");
             }
         }
-        broadcast(level, "Advertising: готово.");
+        broadcast(level, "Advertising: done.");
     }
 
     // ===== Разбор фич =====

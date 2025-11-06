@@ -281,11 +281,11 @@ public class VegetationScatterGenerator {
     // ------------- ЗАПУСК ----------
     // ===============================
     public void generate() {
-        if (coords == null) { broadcast(level, "VegetationScatter: coords == null — пропуск."); return; }
+        if (coords == null) { broadcast(level, "VegetationScatter: coords == null — skipping."); return; }
 
         JsonObject center = coords.getAsJsonObject("center");
         JsonObject bbox   = coords.getAsJsonObject("bbox");
-        if (center == null || bbox == null) { broadcast(level, "VegetationScatter: нет center/bbox — пропуск."); return; }
+        if (center == null || bbox == null) { broadcast(level, "VegetationScatter: no center/bbox — skipping."); return; }
 
         final double centerLat  = center.get("lat").getAsDouble();
         final double centerLng  = center.get("lng").getAsDouble();
@@ -312,7 +312,7 @@ public class VegetationScatterGenerator {
         List<TreePoint> treePoints = new ArrayList<>();
         List<TreeRow> treeRows = new ArrayList<>();
 
-        broadcast(level, "VegetationScatter: читаем зоны (stream=" + (store!=null) + ")…");
+        broadcast(level, "VegetationScatter: reading zones (stream=" + (store!=null) + ")…");
 
         // ---- чтение OSM (stream / batch) ----
         try {
@@ -325,9 +325,9 @@ public class VegetationScatterGenerator {
                     }
                 }
             } else {
-                if (!coords.has("features")) { broadcast(level, "VegetationScatter: нет coords.features — пропуск."); return; }
+                if (!coords.has("features")) { broadcast(level, "VegetationScatter: no coords.features — skipping."); return; }
                 JsonArray elements = coords.getAsJsonObject("features").getAsJsonArray("elements");
-                if (elements == null || elements.size() == 0) { broadcast(level, "VegetationScatter: features.elements пуст — пропуск."); return; }
+                if (elements == null || elements.size() == 0) { broadcast(level, "VegetationScatter: features.elements are empty — skipping."); return; }
                 for (JsonElement el : elements) {
                     classifyAndCollect(el.getAsJsonObject(), areas, forbidAreas, treePoints, treeRows,
                             centerLat, centerLng, east, west, north, south,
@@ -335,16 +335,16 @@ public class VegetationScatterGenerator {
                 }
             }
         } catch (Exception ex) {
-            broadcast(level, "VegetationScatter: ошибка чтения features: " + ex.getMessage());
+            broadcast(level, "VegetationScatter: error reading features: " + ex.getMessage());
         }
 
         // --- ПЕРВАЯ очередь — одиночные деревья natural=tree
-        broadcast(level, "VegetationScatter: ставим отдельные деревья (natural=tree)…");
+        broadcast(level, "VegetationScatter: placing individual trees (natural=tree)...");
         long tpPlaced = 0;
         int tpIdx = 0;
         for (TreePoint tp : treePoints) {
             tpIdx++;
-            if (tpIdx % 500 == 0) broadcast(level, "Одиночные деревья: " + tpIdx + "…");
+            if (tpIdx % 500 == 0) broadcast(level, "Single trees: " + tpIdx + "…");
             if (tp.x < worldMinX || tp.x > worldMaxX || tp.z < worldMinZ || tp.z > worldMaxZ) continue;
             // правило: под саженец — мох; можно заменять существующие блоки (исключение из «ставим только на свободные»)
             Block sap = resolveSapling(tp.sapling, tp.leafType, new Random(seedFor(tp.x, tp.z)));
@@ -355,18 +355,18 @@ public class VegetationScatterGenerator {
             if (placeTreeWithMoss(level, tp.x, tp.z, sap, true, false,
                                 worldMinX, worldMaxX, worldMinZ, worldMaxZ)) tpPlaced++;
         }
-        broadcast(level, "VegetationScatter: поставлено одиночных деревьев: " + tpPlaced);
+        broadcast(level, "VegetationScatter: individual trees placed: " + tpPlaced);
 
         // --- ВТОРАЯ очередь — ряды деревьев natural=tree_row
-        broadcast(level, "VegetationScatter: строим ряды деревьев (natural=tree_row)…");
+        broadcast(level, "VegetationScatter: building tree rows (natural=tree_row)…");
         long trPlaced = 0;
         int trIdx = 0;
         for (TreeRow row : treeRows) {
             trIdx++;
             trPlaced += placeTreeRow(row, 5, worldMinX, worldMaxX, worldMinZ, worldMaxZ); // шаг 5 блоков
-            if (trIdx % 50 == 0) broadcast(level, "Рядов обработано: " + trIdx + "…");
+            if (trIdx % 50 == 0) broadcast(level, "Rows processed: " + trIdx + "…");
         }
-        broadcast(level, "VegetationScatter: посажено деревьев в рядах: " + trPlaced);
+        broadcast(level, "VegetationScatter: trees planted in rows: " + trPlaced);
 
         // --- Спец-зоны: виноградники, сады, farmland
         long vineyardBlocks = 0, orchardTrees = 0, farmlandCrops = 0;
@@ -382,8 +382,8 @@ public class VegetationScatterGenerator {
                 // пропуск
             }
         }
-        broadcast(level, "VegetationScatter: виноградники — блоков листвы: " + vineyardBlocks);
-        broadcast(level, "VegetationScatter: посев пшеницы на farmland — " + farmlandCrops);
+        broadcast(level, "VegetationScatter: vineyards — leaf blocks: " + vineyardBlocks);
+        broadcast(level, "VegetationScatter: wheat seeded on farmland — " + farmlandCrops);
 
         // --- Сады (orchard) — сетка CHERRY 10×5
         for (Area area : areas) {
@@ -392,10 +392,10 @@ public class VegetationScatterGenerator {
                 orchardTrees += plantOrchard(area, worldMinX, worldMaxX, worldMinZ, worldMaxZ);
             }
         }
-        broadcast(level, "VegetationScatter: фруктовые сады (вишня) — посажено: " + orchardTrees);
+        broadcast(level, "VegetationScatter: fruit orchards (cherry) — planted: " + orchardTrees);
 
         // --- Леса/болота/прочие растительные зоны: деревья, затем подлесок/цветы
-        broadcast(level, "VegetationScatter: засаживаем леса/болота/луга/поляны…");
+        broadcast(level, "VegetationScatter: planting forests/wetlands/meadows/fields...");
         long treesPlaced = 0, floraPlaced = 0;
 
         int idx = 0;
@@ -406,12 +406,12 @@ public class VegetationScatterGenerator {
             treesPlaced += t;
             long f = plantAreaFlora(area, worldMinX, worldMaxX, worldMinZ, worldMaxZ, forbidAreas);
             floraPlaced += f;
-            if (idx % 10 == 0) broadcast(level, "Зоны обработано: " + idx + "/" + areas.size());
+            if (idx % 10 == 0) broadcast(level, "Areas processed: " + idx + "/" + areas.size());
         }
-        broadcast(level, "VegetationScatter: суммарно посажено деревьев: " + treesPlaced + ", трав/цветов/кустов: " + floraPlaced);
+        broadcast(level, "VegetationScatter: total trees planted: " + treesPlaced + ", grass/flowers/bushes: " + floraPlaced);
 
         // --- ВНЕ ЗОН (outside): деревья/трава с вероятностями (residential/urban/other)
-        broadcast(level, "VegetationScatter: проход вне зон…");
+        broadcast(level, "VegetationScatter: Outside zones:");
         long outsideTrees = 0, outsideFlora = 0;
         long totalCells = (long)(worldMaxX - worldMinX + 1) * (worldMaxZ - worldMinZ + 1);
         long stepReport = Math.max(1, totalCells / 10);
@@ -421,7 +421,7 @@ public class VegetationScatterGenerator {
         for (int x = worldMinX; x <= worldMaxX; x++) {
             for (int z = worldMinZ; z <= worldMaxZ; z++) {
                 long idxCell = ((long)(x - worldMinX)) * (worldMaxZ - worldMinZ + 1L) + (z - worldMinZ);
-                if (idxCell % stepReport == 0) broadcast(level, String.format(Locale.ROOT, "Вне зон: ~%d%%", (int)(100.0*idxCell/Math.max(1,totalCells))));
+                if (idxCell % stepReport == 0) broadcast(level, String.format(Locale.ROOT, "Outside zones: ~%d%%", (int)(100.0*idxCell/Math.max(1,totalCells))));
 
                 // пропускаем если в запретной зоне
                 if (insideAny(x, z, forbidAreas)) continue;
@@ -456,9 +456,9 @@ public class VegetationScatterGenerator {
                 }
             }
         }
-        broadcast(level, "VegetationScatter: вне зон — деревья: " + outsideTrees + ", трава/цветы: " + outsideFlora);
+        broadcast(level, "VegetationScatter: outside zones — trees: " + outsideTrees + ", grass/flowers: " + outsideFlora);
 
-        broadcast(level, "VegetationScatter: готово.");
+        broadcast(level, "VegetationScatter: done.");
     }
 
     // ===============================
@@ -856,7 +856,7 @@ public class VegetationScatterGenerator {
                 }
                 if (seen % progStep == 0) {
                     int pct = (int)Math.round(100.0 * seen / (double)total);
-                    broadcast(level, String.format(Locale.ROOT, "Поля farmland: ~%d%%", pct));
+                    broadcast(level, String.format(Locale.ROOT, "Farmland fields: ~%d%%", pct));
                 }
             }
         }
@@ -952,7 +952,7 @@ public class VegetationScatterGenerator {
 
                 if (seen % step == 0) {
                     int pct = (int)Math.round(100.0 * seen / (double)total);
-                    broadcast(level, String.format(Locale.ROOT, "%s: деревья ~%d%%", area.type.name(), pct));
+                    broadcast(level, String.format(Locale.ROOT, "%s: trees ~%d%%", area.type.name(), pct));
                 }
             }
         }

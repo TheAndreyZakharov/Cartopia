@@ -56,11 +56,11 @@ public class RailLampGenerator {
     }
 
     public void generate() {
-        broadcast(level, "💡 Расставляю фонари вдоль железных дорог…");
+        broadcast(level, "Placing lamps along railways...");
 
         // Геопривязка и границы из coords (как было)
         if (coords == null || !coords.has("center") || !coords.has("bbox")) {
-            broadcast(level, "Нет center/bbox в coords — пропускаю RailLampGenerator.");
+            broadcast(level, "No center/bbox in coords — skipping RailLampGenerator.");
             return;
         }
         JsonObject center = coords.getAsJsonObject("center");
@@ -109,7 +109,7 @@ public class RailLampGenerator {
                     totalRails++;
                 }
             } catch (Exception ex) {
-                broadcast(level, "Ошибка чтения features NDJSON: " + ex.getMessage() + " — откатываюсь на старый путь.");
+                broadcast(level, "Error reading features NDJSON: " + ex.getMessage() + " — falling back to the legacy path.");
                 // fallback к старому пути ниже
                 handleLegacyFeaturesPath(minX, maxX, minZ, maxZ, centerLat, centerLng, east, west, north, south, sizeMeters, centerX, centerZ);
                 return;
@@ -159,14 +159,14 @@ public class RailLampGenerator {
                     processed++;
                     if (totalRails > 0 && processed % Math.max(1, totalRails/10) == 0) {
                         int pct = (int)Math.round(100.0 * processed / Math.max(1,totalRails));
-                        broadcast(level, "Фонари на рельсах: ~" + pct + "%");
+                        broadcast(level, "Railway lamps: ~" + pct + "%");
                     }
                 }
             } catch (Exception ex) {
-                broadcast(level, "Ошибка второго прохода NDJSON: " + ex.getMessage());
+                broadcast(level, "Error in the second NDJSON pass: " + ex.getMessage());
             }
 
-            broadcast(level, "Фонари вдоль железных дорог готовы.");
+            broadcast(level, "Railway lamps are ready.");
             return;
         }
 
@@ -180,12 +180,12 @@ public class RailLampGenerator {
                                           double east, double west, double north, double south,
                                           int sizeMeters, int centerX, int centerZ) {
         if (coords == null || !coords.has("features")) {
-            broadcast(level, "В coords нет features — пропускаю RailLampGenerator.");
+            broadcast(level, "No features in coords — skipping RailLampGenerator.");
             return;
         }
         JsonArray elements = coords.getAsJsonObject("features").getAsJsonArray("elements");
         if (elements == null || elements.size() == 0) {
-            broadcast(level, "OSM elements пуст — пропускаю фонари на рельсах.");
+            broadcast(level, "OSM elements are empty — skipping railway lamps.");
             return;
         }
 

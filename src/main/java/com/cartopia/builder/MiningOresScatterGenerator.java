@@ -137,11 +137,11 @@ public class MiningOresScatterGenerator {
 
     // --- запуск ---
     public void generate() {
-        if (coords == null) { broadcast(level, "MiningOresScatterGenerator: coords == null — пропуск."); return; }
+        if (coords == null) { broadcast(level, "MiningOresScatterGenerator: coords == null — skipping."); return; }
 
         JsonObject center = coords.getAsJsonObject("center");
         JsonObject bbox   = coords.getAsJsonObject("bbox");
-        if (center == null || bbox == null) { broadcast(level, "MiningOresScatterGenerator: нет center/bbox — пропуск."); return; }
+        if (center == null || bbox == null) { broadcast(level, "MiningOresScatterGenerator: no center/bbox — skipping."); return; }
 
         final double centerLat  = center.get("lat").getAsDouble();
         final double centerLng  = center.get("lng").getAsDouble();
@@ -176,9 +176,9 @@ public class MiningOresScatterGenerator {
                     }
                 }
             } else {
-                if (!coords.has("features")) { broadcast(level, "MiningOresScatterGenerator: нет coords.features — пропуск."); return; }
+                if (!coords.has("features")) { broadcast(level, "MiningOresScatterGenerator: no coords.features — skipping."); return; }
                 JsonArray elements = coords.getAsJsonObject("features").getAsJsonArray("elements");
-                if (elements == null || elements.size() == 0) { broadcast(level, "MiningOresScatterGenerator: features.elements пуст — пропуск."); return; }
+                if (elements == null || elements.size() == 0) { broadcast(level, "MiningOresScatterGenerator: features.elements is empty — skipping."); return; }
                 for (JsonElement el : elements) {
                     collectArea(el.getAsJsonObject(), areas,
                             centerLat, centerLng, east, west, north, south,
@@ -186,11 +186,11 @@ public class MiningOresScatterGenerator {
                 }
             }
         } catch (Exception ex) {
-            broadcast(level, "MiningOresScatterGenerator: ошибка чтения features: " + ex.getMessage());
+            broadcast(level, "MiningOresScatterGenerator: error reading features: " + ex.getMessage());
         }
 
         if (areas.isEmpty()) {
-            broadcast(level, "MiningOresScatterGenerator: подходящих зон добычи не найдено — готово."); return;
+            broadcast(level, "MiningOresScatterGenerator: no suitable mining areas found — done"); return;
         }
 
         int idx = 0;
@@ -200,7 +200,7 @@ public class MiningOresScatterGenerator {
             long placed = scatterOresInArea(area, worldMinX, worldMaxX, worldMinZ, worldMaxZ, idx, areas.size());
             totalPlaced += placed;
         }
-        broadcast(level, "MiningOresScatterGenerator: суммарно поставлено руд: " + totalPlaced);
+        broadcast(level, "MiningOresScatterGenerator: total ores placed: " + totalPlaced);
     }
 
     // ---- Сбор зон (карьеры/шахты) ----
@@ -316,11 +316,11 @@ public class MiningOresScatterGenerator {
                 }
                 if (seen % toProgress == 0) {
                     int pct = (int)Math.round(100.0 * seen / Math.max(1.0, (maxX-minX+1.0)*(maxZ-minZ+1.0)));
-                    broadcast(level, String.format(Locale.ROOT, "Карьер/шахта %d/%d: ~%d%%", idx, total, pct));
+                    broadcast(level, String.format(Locale.ROOT, "Quarry/Mine %d/%d: ~%d%%", idx, total, pct));
                 }
             }
         }
-        broadcast(level, String.format(Locale.ROOT, "Карьер/шахта %d/%d: поставлено %d руд.", idx, total, placed));
+        broadcast(level, String.format(Locale.ROOT, "Quarry/Mine %d/%d: placed %d руд.", idx, total, placed));
         return placed;
     }
 

@@ -73,11 +73,11 @@ public class AddressPointBuildingsGenerator {
 
     // ---- Запуск ----
     public void generate() {
-        if (coords == null) { broadcast(level, "AddressPointBuildings: coords == null — пропуск."); return; }
+        if (coords == null) { broadcast(level, "AddressPointBuildings: coords == null - skipping."); return; }
 
         JsonObject center = coords.getAsJsonObject("center");
         JsonObject bbox   = coords.getAsJsonObject("bbox");
-        if (center == null || bbox == null) { broadcast(level, "AddressPointBuildings: нет center/bbox — пропуск."); return; }
+        if (center == null || bbox == null) { broadcast(level, "AddressPointBuildings: no center/bbox — skipping."); return; }
 
         final double centerLat  = center.get("lat").getAsDouble();
         final double centerLng  = center.get("lng").getAsDouble();
@@ -112,19 +112,19 @@ public class AddressPointBuildingsGenerator {
                     }
                 }
             } else {
-                if (!coords.has("features")) { broadcast(level, "AddressPointBuildings: нет coords.features — пропуск."); return; }
+                if (!coords.has("features")) { broadcast(level, "AddressPointBuildings: no coords.features — skipping."); return; }
                 JsonArray elements = coords.getAsJsonObject("features").getAsJsonArray("elements");
-                if (elements == null || elements.size() == 0) { broadcast(level, "AddressPointBuildings: features.elements пуст — пропуск."); return; }
+                if (elements == null || elements.size() == 0) { broadcast(level, "AddressPointBuildings: features.elements is empty — skipping."); return; }
                 for (JsonElement el : elements) {
                     collectAddrNode(el.getAsJsonObject(), nodes, seenIds,
                             centerLat, centerLng, east, west, north, south, sizeMeters, centerX, centerZ);
                 }
             }
         } catch (Exception ex) {
-            broadcast(level, "AddressPointBuildings: ошибка чтения features: " + ex.getMessage());
+            broadcast(level, "AddressPointBuildings: error reading features: " + ex.getMessage());
         }
 
-        if (nodes.isEmpty()) { broadcast(level, "AddressPointBuildings: подходящих точек нет — готово."); return; }
+        if (nodes.isEmpty()) { broadcast(level, "AddressPointBuildings: no suitable points — done."); return; }
 
         // ---- Построение ----
         Random rngSeed = new Random( ( (long)worldMinX<<32) ^ worldMaxX ^ ((long)worldMinZ<<16) ^ worldMaxZ );
@@ -158,7 +158,7 @@ public class AddressPointBuildingsGenerator {
 
             // если есть коллизии — пропускаем постройку
             if (!canPlaceAll(x0, z0, x1, z1, roof, plan)) {
-                broadcast(level, "Адресной дом у (" + ((x0 + x1) / 2) + "," + ((z0 + z1) / 2) + "): пропущен — коллизия с существующими блоками.");
+                broadcast(level, "Address building at (" + ((x0 + x1) / 2) + "," + ((z0 + z1) / 2) + "): skipped — collision with existing blocks.");
                 continue;
             }
 
@@ -166,17 +166,17 @@ public class AddressPointBuildingsGenerator {
             try {
                 buildHouse(x0, z0, x1, z1, wallMat, roofMat, roof, plan);
             } catch (Throwable t) {
-                broadcast(level, "AddressPointBuildings: ошибка постройки у ("+n.x+","+n.z+"): " + t.getMessage());
+                broadcast(level, "AddressPointBuildings: build error at ("+n.x+","+n.z+"): " + t.getMessage());
             }
 
             done++;
             if (done % Math.max(1, total/5) == 0) {
                 int pct = (int)Math.round(100.0 * done / Math.max(1, total));
-                broadcast(level, "Адресные дома: ~" + pct + "%");
+                broadcast(level, "Address buildings: ~" + pct + "%");
             }
         }
 
-        broadcast(level, "AddressPointBuildings: готово.");
+        broadcast(level, "AddressPointBuildings: done.");
     }
 
     // ---- Отбор точек ----

@@ -37,10 +37,10 @@ public class StopMarkingGenerator {
 
     // ==== запуск ====
     public void generate() {
-        broadcast(level, "🚏 Генерация разметки остановок (1.17, stream)…");
+        broadcast(level, "Generating stop markings ...");
 
         if (coords == null || !coords.has("center") || !coords.has("bbox") || store == null) {
-            broadcast(level, "❌ Нет coords или store — пропуск StopMarkingGenerator.");
+            broadcast(level, "No coords or store — skipping StopMarkingGenerator.");
             return;
         }
 
@@ -83,7 +83,7 @@ public class StopMarkingGenerator {
                 stopNodeXZ.put(id, xz);
             }
         } catch (Exception ex) {
-            broadcast(level, "Ошибка PASS1 (nodes): " + ex.getMessage());
+            broadcast(level, "Error in PASS1 (nodes): " + ex.getMessage());
             return;
         }
 
@@ -132,7 +132,7 @@ public class StopMarkingGenerator {
                 }
             }
         } catch (Exception ex) {
-            broadcast(level, "Ошибка PASS2a (ways containing node): " + ex.getMessage());
+            broadcast(level, "Error in PASS2a (ways containing node): " + ex.getMessage());
         }
 
         // ===== PASS2b: для узлов без авто-дороги — ищем БЛИЖАЙШУЮ авто-дорогу =====
@@ -192,7 +192,7 @@ public class StopMarkingGenerator {
                     }
                 }
             } catch (Exception ex) {
-                broadcast(level, "Ошибка PASS2b (nearest road): " + ex.getMessage());
+                broadcast(level, "Error in PASS2b (nearest road): " + ex.getMessage());
             }
         }
 
@@ -215,7 +215,7 @@ public class StopMarkingGenerator {
             drawn++;
         }
 
-        broadcast(level, "✅ Разметка 1.17 поставлена у остановок: " + drawn);
+        broadcast(level, "Stop markings placed at stops: " + drawn);
     }
 
     // ==== Рисование «лесенки» у края дороги (строго в bbox, на рельефе) ====

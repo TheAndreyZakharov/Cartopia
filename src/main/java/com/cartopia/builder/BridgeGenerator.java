@@ -107,14 +107,14 @@ public class BridgeGenerator {
 
     // ==== публичный запуск ====
     public void generate() {
-        broadcast(level, "🌉 Генерация мостов…");
+        broadcast(level, "Generating bridgesов...");
 
         if (coords == null) {
-            broadcast(level, "coords == null — пропускаю BridgeGenerator.");
+            broadcast(level, "coords == null — skipping BridgeGenerator.");
             return;
         }
         if (!coords.has("center") || !coords.has("bbox")) {
-            broadcast(level, "Нет center/bbox — пропускаю BridgeGenerator.");
+            broadcast(level, "No center/bbox — skipping BridgeGenerator.");
             return;
         }
 
@@ -279,15 +279,15 @@ public class BridgeGenerator {
                     if (approxTotal > 0) {
                         int pct = (int)Math.round(100.0 * Math.min(scanned, approxTotal) / (double)approxTotal);
                         if (pct >= nextPctMark) {
-                            broadcast(level, "Мосты (линейные): ~" + pct + "%");
+                            broadcast(level, "Bridges (linear): ~" + pct + "%");
                             nextPctMark = Math.min(100, nextPctMark + 5);
                         }
                     } else if (scanned % 10000 == 0) {
-                        broadcast(level, "Мосты (линейные): обработано элементов ≈ " + scanned);
+                        broadcast(level, "Bridges (linear): processed elements ≈ " + scanned);
                     }
                 }
             } catch (Exception ex) {
-                broadcast(level, "Ошибка при чтении features NDJSON (линейные): " + ex.getMessage());
+                broadcast(level, "Error reading features NDJSON (linear): " + ex.getMessage());
             }
 
             // 3) Area-мосты (multipolygon и замкнутые way с man_made=bridge)
@@ -300,12 +300,12 @@ public class BridgeGenerator {
 
         // === РЕЖИМ 2: фоллбэк — работаем по старому JSON в памяти ===
         if (!coords.has("features") || !coords.get("features").isJsonObject()) {
-            broadcast(level, "В coords нет features — пропускаю BridgeGenerator.");
+            broadcast(level, "No features in coords — skipping BridgeGenerator.");
             return;
         }
         JsonArray elements = coords.getAsJsonObject("features").getAsJsonArray("elements");
         if (elements == null || elements.size() == 0) {
-            broadcast(level, "OSM elements пуст — пропускаю мосты.");
+            broadcast(level, "OSM elements are empty — skipping bridges.");
             return;
         }
 
@@ -410,7 +410,7 @@ public class BridgeGenerator {
             processed++;
             if (totalWays > 0 && processed % Math.max(1, totalWays/10) == 0) {
                 int pct = (int)Math.round(100.0 * processed / Math.max(1,totalWays));
-                broadcast(level, "Мосты: ~" + pct + "%");
+                broadcast(level, "Bridges: ~" + pct + "%");
             }
         }
 
@@ -459,7 +459,7 @@ public class BridgeGenerator {
         generateAreaBridges(elements, centerLat, centerLng, east, west, north, south,
                 sizeMeters, centerX, centerZ, minX, maxX, minZ, maxZ);
 
-        broadcast(level, "Мосты готовы.");
+        broadcast(level, "Bridges are ready.");
     }
 
     // ====== ОТБОР / ПАРАМЕТРЫ ======
@@ -893,16 +893,16 @@ public class BridgeGenerator {
                 if (approxTotal > 0) {
                     int pct = (int)Math.round(100.0 * Math.min(scanned, approxTotal) / (double)approxTotal);
                     if (pct >= nextPctMark) {
-                        broadcast(level, "Мосты (area): ~" + pct + "%");
+                        broadcast(level, "Bridges (area): ~" + pct + "%");
                         nextPctMark = Math.min(100, nextPctMark + 5);
                     }
                 }
             }
         } catch (Exception ex) {
-            broadcast(level, "Ошибка при чтении features NDJSON (area): " + ex.getMessage());
+            broadcast(level, "Error reading features NDJSON (area): " + ex.getMessage());
         }
 
-        if (made > 0) broadcast(level, "Зонные мосты: построено " + made + " шт. (+1 над рельефом).");
+        if (made > 0) broadcast(level, "Area bridges: built" + made + " (+1 above terrain).");
     }
 
     private void generateAreaBridges(JsonArray elements,
@@ -1242,7 +1242,7 @@ public class BridgeGenerator {
             expandExistingBridgeIntoArea(outers, inners, deckBlock,
                     bx0, bx1, bz0, bz1,
                     minX, maxX, minZ, maxZ);
-            broadcast(level, "Area-мост: расширили существующий настил до границ полигона.");
+            broadcast(level, "Area bridge: expanded the existing deck to the polygon bounds.");
             return;
         }
 
@@ -1271,7 +1271,7 @@ public class BridgeGenerator {
                 placed++;
             }
         }
-        if (placed > 0) broadcast(level, "Area-мост: залито " + placed + " блоков настила.");
+        if (placed > 0) broadcast(level, "Area bridge: filled " + placed + " deck blocks.");
     }
 
     private boolean centerlineHasExistingBridge(List<List<int[]>> outers, List<List<int[]>> inners,
@@ -1438,7 +1438,7 @@ public class BridgeGenerator {
         List<Anchor> anchors = collectBridgeStepAnchors(outers, inners, bx0, bx1, bz0, bz1);
         if (anchors.isEmpty()) {
             // на всякий случай: если якоря не нашли (неожиданно), просто выходим — пусть работает fallback выше
-            broadcast(level, "Area-мост: якорей ступеней не найдено, оставляем как есть.");
+            broadcast(level, "Area bridge: no step anchors found; leaving as is.");
             return;
         }
 
@@ -1508,7 +1508,7 @@ public class BridgeGenerator {
             }
         }
         if (placed > 0) {
-            broadcast(level, "Area-мост: расширили по ступеням от " + anchors.size() + " якорей, поставили " + placed + " блоков.");
+            broadcast(level, "Area bridge: expanded following steps from " + anchors.size() + " anchors, placed " + placed + " blocks.");
         }
     }
 

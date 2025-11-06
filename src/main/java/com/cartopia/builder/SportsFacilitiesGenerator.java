@@ -102,11 +102,11 @@ public class SportsFacilitiesGenerator {
     // ==== запуск
     public void generate() {
         JsonObject sourceIndex = (store != null && store.indexJsonObject() != null) ? store.indexJsonObject() : coords;
-        if (sourceIndex == null) { broadcast(level, "SportsFacilities: нет исходных данных — пропускаю."); return; }
+        if (sourceIndex == null) { broadcast(level, "SportsFacilities: no source data — skipping."); return; }
 
         JsonObject center = sourceIndex.getAsJsonObject("center");
         JsonObject bbox   = sourceIndex.getAsJsonObject("bbox");
-        if (center == null || bbox == null) { broadcast(level, "SportsFacilities: нет center/bbox — пропускаю."); return; }
+        if (center == null || bbox == null) { broadcast(level, "SportsFacilities: no center/bbox — skipping."); return; }
 
         final double centerLat = center.get("lat").getAsDouble();
         final double centerLng = center.get("lng").getAsDouble();
@@ -137,13 +137,13 @@ public class SportsFacilitiesGenerator {
                 }
             } else {
                 JsonArray elements = safeElementsArray(coords);
-                if (elements == null) { broadcast(level, "SportsFacilities: features.elements пуст — пропускаю."); return; }
+                if (elements == null) { broadcast(level, "SportsFacilities: features.elements are empty — skipping."); return; }
                 for (JsonElement el : elements) {
                     collect(el.getAsJsonObject(), centerLat, centerLng, east, west, north, south, sizeMeters, centerX, centerZ);
                 }
             }
         } catch (Exception ex) {
-            broadcast(level, "SportsFacilities: ошибка чтения features: " + ex.getMessage());
+            broadcast(level, "SportsFacilities: error reading features: " + ex.getMessage());
         }
 
         // === 2) Постройка
@@ -162,14 +162,14 @@ public class SportsFacilitiesGenerator {
         for (Rect r : fallbackPitches)   { if (inBounds(r, minX, maxX, minZ, maxZ)) buildVolleyballNet(r);       progress(++done, total); }
         for (Pt pin : golfPins)          { if (inBounds(pin, minX, maxX, minZ, maxZ)) buildGolfFlag(pin.x, pin.z); progress(++done, total); }
 
-        broadcast(level, "SportsFacilities: готово.");
+        broadcast(level, "SportsFacilities: done.");
     }
 
     private void progress(int done, int total) {
         if (total <= 0) return;
         if (done % Math.max(1, total/5) == 0) {
             int pct = (int)Math.round(100.0 * done / Math.max(1, total));
-            broadcast(level, "Спортплощадки: ~" + pct + "%");
+            broadcast(level, "Sports facilities: ~" + pct + "%");
         }
     }
 

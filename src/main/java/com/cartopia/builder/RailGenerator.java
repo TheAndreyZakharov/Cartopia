@@ -54,10 +54,10 @@ public class RailGenerator {
     }
 
     public void generate() {
-        broadcast(level, "🚆 Генерация железных дорог…");
+        broadcast(level, "Generating railways...");
 
         if (coords == null) {
-            broadcast(level, "coords == null — пропускаю RailGenerator.");
+            broadcast(level, "coords == null — skipping RailGenerator.");
             return;
         }
 
@@ -66,7 +66,7 @@ public class RailGenerator {
         JsonObject bbox   = coords.getAsJsonObject("bbox");
 
         if (center == null || bbox == null) {
-            broadcast(level, "Нет center/bbox в coords — пропускаю RailGenerator.");
+            broadcast(level, "No center/bbox in coords — skipping RailGenerator.");
             return;
         }
 
@@ -175,32 +175,32 @@ public class RailGenerator {
                     if (approxTotal > 0) {
                         int pct = (int)Math.round(100.0 * Math.min(scanned, approxTotal) / (double)approxTotal);
                         if (pct >= nextPctMark) {
-                            broadcast(level, "Рельсы: ~" + pct + "%");
+                            broadcast(level, "Rails: ~" + pct + "%");
                             nextPctMark = Math.min(100, nextPctMark + 5);
                         }
                     } else {
                         // Если нет approxTotal — даём апдейты по шагу в 10к просмотренных элементов
                         if (scanned % 10000 == 0) {
-                            broadcast(level, "Рельсы: обработано элементов ≈ " + scanned);
+                            broadcast(level, "Rails: processed items ≈ " + scanned);
                         }
                     }
                 }
             } catch (Exception ex) {
-                broadcast(level, "Ошибка при чтении features NDJSON: " + ex.getMessage());
+                broadcast(level, "Error reading features NDJSON: " + ex.getMessage());
             }
 
-            broadcast(level, "Рельсы готовы (построено цепочек: " + builtRails + ").");
+            broadcast(level, "Rails ready (chains built: " + builtRails + ").");
             return;
         }
 
         // === РЕЖИМ 2 (фоллбэк): как раньше — из coords.features.elements
         if (!coords.has("features") || !coords.get("features").isJsonObject()) {
-            broadcast(level, "В coords нет features — пропускаю RailGenerator.");
+            broadcast(level, "No features in coords — skipping RailGenerator.");
             return;
         }
         JsonArray elements = coords.getAsJsonObject("features").getAsJsonArray("elements");
         if (elements == null || elements.size() == 0) {
-            broadcast(level, "OSM elements пуст — пропускаю рельсы.");
+            broadcast(level, "OSM elements are empty — skipping rails.");
             return;
         }
 
@@ -271,11 +271,11 @@ public class RailGenerator {
             processed++;
             if (totalRails > 0 && processed % Math.max(1, totalRails/10) == 0) {
                 int pct = (int)Math.round(100.0 * processed / Math.max(1,totalRails));
-                broadcast(level, "Рельсы: ~" + pct + "%");
+                broadcast(level, "Rails: ~" + pct + "%");
             }
         }
 
-        broadcast(level, "Рельсы готовы.");
+        broadcast(level, "Rails ready.");
     }
 
     // --- обычные (surface) рельсы: базовый Y = верхний не-air блок колонки; сглаживание по ±1 ---

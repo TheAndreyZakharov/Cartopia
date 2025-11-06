@@ -68,11 +68,11 @@ public class ClassicWindmillGenerator {
 
     // ---- Запуск ----
     public void generate() {
-        if (coords == null) { broadcast(level, "ClassicWindmill: coords == null — пропуск."); return; }
+        if (coords == null) { broadcast(level, "ClassicWindmill: coords == null — skipping."); return; }
 
         JsonObject center = coords.getAsJsonObject("center");
         JsonObject bbox   = coords.getAsJsonObject("bbox");
-        if (center == null || bbox == null) { broadcast(level, "ClassicWindmill: нет center/bbox — пропуск."); return; }
+        if (center == null || bbox == null) { broadcast(level, "ClassicWindmill: no center/bbox — skipping."); return; }
 
         final double centerLat  = center.get("lat").getAsDouble();
         final double centerLng  = center.get("lng").getAsDouble();
@@ -105,18 +105,18 @@ public class ClassicWindmillGenerator {
                     }
                 }
             } else {
-                if (!coords.has("features")) { broadcast(level, "ClassicWindmill: нет coords.features — пропуск."); return; }
+                if (!coords.has("features")) { broadcast(level, "ClassicWindmill: no coords.features — skipping."); return; }
                 JsonArray elements = coords.getAsJsonObject("features").getAsJsonArray("elements");
-                if (elements == null || elements.size() == 0) { broadcast(level, "ClassicWindmill: features.elements пуст — пропуск."); return; }
+                if (elements == null || elements.size() == 0) { broadcast(level, "ClassicWindmill: features.elements is empty — skipping."); return; }
                 for (JsonElement el : elements) {
                     collectWindmill(el.getAsJsonObject(), list, centerLat, centerLng, east, west, north, south, sizeMeters, centerX, centerZ);
                 }
             }
         } catch (Exception ex) {
-            broadcast(level, "ClassicWindmill: ошибка чтения features: " + ex.getMessage());
+            broadcast(level, "ClassicWindmill: error reading features: " + ex.getMessage());
         }
 
-        if (list.isEmpty()) { broadcast(level, "ClassicWindmill: подходящих мельниц нет — готово."); return; }
+        if (list.isEmpty()) { broadcast(level, "ClassicWindmill: no suitable windmills found — done."); return; }
 
         // ---- Построение ----
         int done = 0;
@@ -125,16 +125,16 @@ public class ClassicWindmillGenerator {
             try {
                 buildWindmill(w.x, w.z);
             } catch (Throwable t) {
-                broadcast(level, "ClassicWindmill: ошибка у ("+w.x+","+w.z+"): " + t.getMessage());
+                broadcast(level, "ClassicWindmill: error at ("+w.x+","+w.z+"): " + t.getMessage());
             }
             done++;
             if (done % Math.max(1, list.size()/5) == 0) {
                 int pct = (int)Math.round(100.0 * done / Math.max(1, list.size()));
-                broadcast(level, "Мельницы: ~" + pct + "%");
+                broadcast(level, "Windmills: ~" + pct + "%");
             }
         }
 
-        broadcast(level, "ClassicWindmill: готово.");
+        broadcast(level, "ClassicWindmill: done.");
     }
 
     // ---- Фильтр OSM ----

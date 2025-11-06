@@ -141,10 +141,10 @@ public class CemeteryGravesGenerator {
 
     // ---- Запуск ----
     public void generate() {
-        if (coords == null) { broadcast(level, "CemeteryGravesGenerator: coords == null — пропускаю."); return; }
+        if (coords == null) { broadcast(level, "CemeteryGravesGenerator: coords == null — skipping."); return; }
         JsonObject center = coords.getAsJsonObject("center");
         JsonObject bbox   = coords.getAsJsonObject("bbox");
-        if (center == null || bbox == null) { broadcast(level, "CemeteryGravesGenerator: нет center/bbox — пропускаю."); return; }
+        if (center == null || bbox == null) { broadcast(level, "CemeteryGravesGenerator: no center/bbox — skipping."); return; }
 
         final double centerLat = center.get("lat").getAsDouble();
         final double centerLng = center.get("lng").getAsDouble();
@@ -179,9 +179,9 @@ public class CemeteryGravesGenerator {
                     }
                 }
             } else {
-                if (!coords.has("features")) { broadcast(level, "CemeteryGravesGenerator: нет coords.features — пропускаю."); return; }
+                if (!coords.has("features")) { broadcast(level, "CemeteryGravesGenerator: no coords.features — skipping."); return; }
                 JsonArray elements = coords.getAsJsonObject("features").getAsJsonArray("elements");
-                if (elements == null || elements.size() == 0) { broadcast(level, "CemeteryGravesGenerator: features.elements пуст — пропускаю."); return; }
+                if (elements == null || elements.size() == 0) { broadcast(level, "CemeteryGravesGenerator: features.elements is empty — skipping."); return; }
                 for (JsonElement el : elements) {
                     JsonObject e = el.getAsJsonObject();
                     collectCemeteryArea(e, cemeteries, centerLat, centerLng, east, west, north, south, sizeMeters, centerX, centerZ);
@@ -189,11 +189,11 @@ public class CemeteryGravesGenerator {
                 }
             }
         } catch (Exception ex) {
-            broadcast(level, "CemeteryGravesGenerator: ошибка чтения features: " + ex.getMessage());
+            broadcast(level, "CemeteryGravesGenerator: error reading features: " + ex.getMessage());
         }
 
         if (cemeteries.isEmpty()) {
-            broadcast(level, "CemeteryGravesGenerator: зон кладбищ не найдено — готово.");
+            broadcast(level, "CemeteryGravesGenerator: no cemetery areas found — done.");
             return;
         }
 
@@ -203,7 +203,7 @@ public class CemeteryGravesGenerator {
             idx++;
             totalPlaced += tileCemetery(area, worldMinX, worldMaxX, worldMinZ, worldMaxZ, idx, cemeteries.size());
         }
-        broadcast(level, "Надгробия: готово, поставлено " + totalPlaced + " шт.");
+        broadcast(level, "Gravestones: done, placed " + totalPlaced + " шт.");
     }
 
     // ---- Сбор кладбищ ----
@@ -338,7 +338,7 @@ public class CemeteryGravesGenerator {
         }
 
         if (bestCount <= 0) {
-            broadcast(level, String.format(Locale.ROOT, "Кладбища %d/%d: зона слишком узкая для сетки.", idx, total));
+            broadcast(level, String.format(Locale.ROOT, "Cemeteries %d/%d: area too narrow for the grid.", idx, total));
             return 0;
         }
 
@@ -376,7 +376,7 @@ public class CemeteryGravesGenerator {
         }
 
         broadcast(level, String.format(Locale.ROOT,
-                "Кладбища %d/%d: ~100%% (смещение %d,%d; кандидатов %d; поставлено %d)",
+                "Cemeteries %d/%d: ~100%% (offset %d,%d; candidates %d; placed %d)",
                 idx, total, bestOx, bestOz, candidates, placed));
         return placed;
     }

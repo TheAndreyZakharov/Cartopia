@@ -50,11 +50,11 @@ public class ParkingMetersGenerator {
 
     // --- запуск ---
     public void generate() {
-        if (coords == null) { broadcast(level, "ParkingMetersGenerator: coords == null — пропуск."); return; }
+        if (coords == null) { broadcast(level, "ParkingMetersGenerator: coords == null — skipping."); return; }
 
         JsonObject center = coords.getAsJsonObject("center");
         JsonObject bbox   = coords.getAsJsonObject("bbox");
-        if (center == null || bbox == null) { broadcast(level, "ParkingMetersGenerator: нет center/bbox — пропуск."); return; }
+        if (center == null || bbox == null) { broadcast(level, "ParkingMetersGenerator: no center/bbox — skipping."); return; }
 
         final double centerLat  = center.get("lat").getAsDouble();
         final double centerLng  = center.get("lng").getAsDouble();
@@ -91,20 +91,20 @@ public class ParkingMetersGenerator {
                     }
                 }
             } else {
-                if (!coords.has("features")) { broadcast(level, "ParkingMetersGenerator: нет coords.features — пропуск."); return; }
+                if (!coords.has("features")) { broadcast(level, "ParkingMetersGenerator: no coords.features — skipping."); return; }
                 JsonArray elements = coords.getAsJsonObject("features").getAsJsonArray("elements");
-                if (elements == null || elements.size() == 0) { broadcast(level, "ParkingMetersGenerator: features.elements пуст — пропуск."); return; }
+                if (elements == null || elements.size() == 0) { broadcast(level, "ParkingMetersGenerator: features.elements is empty — skipping."); return; }
                 for (JsonElement el : elements) {
                     collectMeterPoint(el.getAsJsonObject(), points, seenNodeIds, seenWayRelIds, usedXZ,
                             centerLat, centerLng, east, west, north, south, sizeMeters, centerX, centerZ);
                 }
             }
         } catch (Exception ex) {
-            broadcast(level, "ParkingMetersGenerator: ошибка чтения features: " + ex.getMessage());
+            broadcast(level, "ParkingMetersGenerator: error reading features: " + ex.getMessage());
         }
 
         if (points.isEmpty()) {
-            broadcast(level, "ParkingMetersGenerator: подходящих паркоматов не найдено — готово.");
+            broadcast(level, "ParkingMetersGenerator: no suitable parking meters found — done.");
             return;
         }
 
@@ -114,15 +114,15 @@ public class ParkingMetersGenerator {
                 if (p.x < minX || p.x > maxX || p.z < minZ || p.z > maxZ) continue;
                 placeMeter(p.x, p.z);
             } catch (Exception ex) {
-                broadcast(level, "ParkingMetersGenerator: ошибка на ("+p.x+","+p.z+"): " + ex.getMessage());
+                broadcast(level, "ParkingMetersGenerator: error at ("+p.x+","+p.z+"): " + ex.getMessage());
             }
             done++;
             if (done % Math.max(1, points.size()/5) == 0) {
                 int pct = (int)Math.round(100.0 * done / Math.max(1, points.size()));
-                broadcast(level, "Паркоматы: ~" + pct + "%");
+                broadcast(level, "Parking meters: ~" + pct + "%");
             }
         }
-        broadcast(level, "Паркоматы: готово, поставлено " + done + " шт.");
+        broadcast(level, "Parking meters: done, placed " + done + " pcs.");
     }
 
     // --- сбор признаков паркоматов ---

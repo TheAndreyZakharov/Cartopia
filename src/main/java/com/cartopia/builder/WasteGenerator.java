@@ -65,10 +65,10 @@ public class WasteGenerator {
     // ==== запуск
     public void generate() {
         JsonObject sourceIndex = (store != null && store.indexJsonObject() != null) ? store.indexJsonObject() : coords;
-        if (sourceIndex == null) { broadcast(level, "WasteGenerator: нет исходных данных — пропускаю."); return; }
+        if (sourceIndex == null) { broadcast(level, "WasteGenerator: no source data — skipping."); return; }
         JsonObject center = sourceIndex.getAsJsonObject("center");
         JsonObject bbox   = sourceIndex.getAsJsonObject("bbox");
-        if (center == null || bbox == null) { broadcast(level, "WasteGenerator: нет center/bbox — пропускаю."); return; }
+        if (center == null || bbox == null) { broadcast(level, "WasteGenerator: no center/bbox — skipping."); return; }
 
         final double centerLat  = center.get("lat").getAsDouble();
         final double centerLng  = center.get("lng").getAsDouble();
@@ -99,13 +99,13 @@ public class WasteGenerator {
                 }
             } else {
                 JsonArray elements = safeElementsArray(coords);
-                if (elements == null) { broadcast(level, "WasteGenerator: features.elements пуст — пропускаю."); return; }
+                if (elements == null) { broadcast(level, "WasteGenerator: features.elements are empty — skipping."); return; }
                 for (JsonElement el : elements) {
                     collect(el.getAsJsonObject(), centerLat, centerLng, east, west, north, south, sizeMeters, centerX, centerZ);
                 }
             }
         } catch (Exception ex) {
-            broadcast(level, "WasteGenerator: ошибка чтения features: " + ex.getMessage());
+            broadcast(level, "WasteGenerator: error reading features: " + ex.getMessage());
         }
 
         // === 2) Постройка (каждый блок — по локальному рельефу)
@@ -117,14 +117,14 @@ public class WasteGenerator {
         for (Pt p : otherWasteLike) { if (inBounds(p, minX, maxX, minZ, maxZ)) buildRecyclingModule(p.x, p.z); done++; progress(done, total); }
         for (Pt p : wasteDisposals) { if (inBounds(p, minX, maxX, minZ, maxZ)) buildTrashShelter(p.x, p.z);    done++; progress(done, total); }
 
-        broadcast(level, "WasteGenerator: готово.");
+        broadcast(level, "WasteGenerator: done.");
     }
 
     private void progress(int done, int total) {
         if (total <= 0) return;
         if (done % Math.max(1, total/5) == 0) {
             int pct = (int)Math.round(100.0 * done / Math.max(1, total));
-            broadcast(level, "Мусорная инфраструктура: ~" + pct + "%");
+            broadcast(level, "Waste infrastructure: ~" + pct + "%");
         }
     }
 

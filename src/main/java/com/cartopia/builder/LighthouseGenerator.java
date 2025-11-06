@@ -84,14 +84,14 @@ public class LighthouseGenerator {
     // ===== публичный запуск =====
     public void generate() {
         if (coords == null) {
-            broadcast(level, "LighthouseGenerator: coords == null — пропускаю.");
+            broadcast(level, "LighthouseGenerator: coords == null — skipping.");
             return;
         }
 
         JsonObject center = coords.getAsJsonObject("center");
         JsonObject bbox   = coords.getAsJsonObject("bbox");
         if (center == null || bbox == null) {
-            broadcast(level, "LighthouseGenerator: нет center/bbox — пропускаю.");
+            broadcast(level, "LighthouseGenerator: no center/bbox — skipping.");
             return;
         }
 
@@ -128,12 +128,12 @@ public class LighthouseGenerator {
                 }
             } else {
                 if (!coords.has("features")) {
-                    broadcast(level, "LighthouseGenerator: нет coords.features — пропускаю.");
+                    broadcast(level, "LighthouseGenerator: no coords.features — skipping.");
                     return;
                 }
                 JsonArray elements = coords.getAsJsonObject("features").getAsJsonArray("elements");
                 if (elements == null || elements.size() == 0) {
-                    broadcast(level, "LighthouseGenerator: features.elements пуст — пропускаю.");
+                    broadcast(level, "LighthouseGenerator: features.elements is empty — skipping.");
                     return;
                 }
                 for (JsonElement el : elements) {
@@ -142,11 +142,11 @@ public class LighthouseGenerator {
                 }
             }
         } catch (Exception ex) {
-            broadcast(level, "LighthouseGenerator: ошибка чтения features: " + ex.getMessage());
+            broadcast(level, "LighthouseGenerator: error reading features: " + ex.getMessage());
         }
 
         if (lights.isEmpty()) {
-            broadcast(level, "LighthouseGenerator: маяки не найдены — готово.");
+            broadcast(level, "LighthouseGenerator: no lighthouses found — done.");
             return;
         }
 
@@ -163,12 +163,12 @@ public class LighthouseGenerator {
                 if (l.x<minX||l.x>maxX||l.z<minZ||l.z>maxZ) continue;
                 renderLighthouse(l);
             } catch (Exception ex) {
-                broadcast(level, "LighthouseGenerator: ошибка на ("+l.x+","+l.z+"): " + ex.getMessage());
+                broadcast(level, "LighthouseGenerator: error at ("+l.x+","+l.z+"): " + ex.getMessage());
             }
             done++;
             if (done % Math.max(1, lights.size()/5) == 0) {
                 int pct = (int)Math.round(100.0 * done / Math.max(1, lights.size()));
-                broadcast(level, "Маяки: ~" + pct + "%");
+                broadcast(level, "Lighthouses: ~" + pct + "%");
             }
         }
     }

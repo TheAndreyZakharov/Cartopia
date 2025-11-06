@@ -93,10 +93,10 @@ public class LeisureRestGenerator {
     // ==== запуск
     public void generate() {
         JsonObject sourceIndex = (store != null && store.indexJsonObject() != null) ? store.indexJsonObject() : coords;
-        if (sourceIndex == null) { broadcast(level, "LeisureRestGenerator: нет исходных данных — пропускаю."); return; }
+        if (sourceIndex == null) { broadcast(level, "LeisureRestGenerator: no input data — skipping."); return; }
         JsonObject center = sourceIndex.getAsJsonObject("center");
         JsonObject bbox   = sourceIndex.getAsJsonObject("bbox");
-        if (center == null || bbox == null) { broadcast(level, "LeisureRestGenerator: нет center/bbox — пропускаю."); return; }
+        if (center == null || bbox == null) { broadcast(level, "LeisureRestGenerator: no center/bbox — skipping."); return; }
 
         final double centerLat = center.get("lat").getAsDouble();
         final double centerLng = center.get("lng").getAsDouble();
@@ -127,13 +127,13 @@ public class LeisureRestGenerator {
                 }
             } else {
                 JsonArray elements = safeElementsArray(coords);
-                if (elements == null) { broadcast(level, "LeisureRestGenerator: features.elements пуст — пропускаю."); return; }
+                if (elements == null) { broadcast(level, "LeisureRestGenerator: features.elements is empty — skipping."); return; }
                 for (JsonElement el : elements) {
                     collect(el.getAsJsonObject(), centerLat, centerLng, east, west, north, south, sizeMeters, centerX, centerZ);
                 }
             }
         } catch (Exception ex) {
-            broadcast(level, "LeisureRestGenerator: ошибка чтения features: " + ex.getMessage());
+            broadcast(level, "LeisureRestGenerator: error reading features: " + ex.getMessage());
         }
 
         // === 2) Постройка (каждый блок — по локальному рельефу)
@@ -155,14 +155,14 @@ public class LeisureRestGenerator {
             done++; progress(done, total);
         }
 
-        broadcast(level, "LeisureRestGenerator: готово.");
+        broadcast(level, "LeisureRestGenerator: done.");
     }
 
     private void progress(int done, int total) {
         if (total <= 0) return;
         if (done % Math.max(1, total/5) == 0) {
             int pct = (int)Math.round(100.0 * done / Math.max(1, total));
-            broadcast(level, "Места отдыха: ~" + pct + "%");
+            broadcast(level, "Rest areas: ~" + pct + "%");
         }
     }
 
@@ -512,7 +512,7 @@ public class LeisureRestGenerator {
                 buildBenchFacing(bp.x, bp.z, face);
                 reserveRect(reserved, bMinX, bMaxX, bMinZ, bMaxZ, 3);
             } else {
-                broadcast(level, "LeisureRestGenerator: лавка на площадке пропущена — теснота.");
+                broadcast(level, "LeisureRestGenerator: bench on playground skipped — too tight.");
             }
         }
     }

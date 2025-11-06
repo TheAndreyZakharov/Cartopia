@@ -53,17 +53,17 @@ public class PierGenerator {
 
     // ==== публичный запуск ====
     public void generate() {
-        broadcast(level, "⛴️ Генерация пирсов/причалов (с установкой поверх воды)…");
+        broadcast(level, "Generating piers/jetties (placing on top of water)...");
 
         if (coords == null) {
-            broadcast(level, "coords == null — пропускаю PierGenerator.");
+            broadcast(level, "coords == null — skipping PierGenerator.");
             return;
         }
 
         JsonObject center = coords.getAsJsonObject("center");
         JsonObject bbox   = coords.getAsJsonObject("bbox");
         if (center == null || bbox == null) {
-            broadcast(level, "Нет center/bbox — пропускаю пирсы.");
+            broadcast(level, "No center/bbox — skipping piers.");
             return;
         }
 
@@ -106,7 +106,7 @@ public class PierGenerator {
                     total++;
                 }
             } catch (Exception ex) {
-                broadcast(level, "Ошибка подсчёта NDJSON: " + ex.getMessage() + " — fallback на coords.features.");
+                broadcast(level, "NDJSON counting error: " + ex.getMessage() + " — falling back to coords.features.");
                 streaming = false;
             }
         }
@@ -132,24 +132,24 @@ public class PierGenerator {
                     processed++;
                     if (total > 0 && processed % Math.max(1, total/10) == 0) {
                         int pct = (int)Math.round(100.0 * processed / Math.max(1, total));
-                        broadcast(level, "Пирсы: ~" + pct + "%");
+                        broadcast(level, "Piers: ~" + pct + "%");
                     }
                 }
             } catch (Exception ex) {
-                broadcast(level, "Ошибка рендера NDJSON: " + ex.getMessage());
+                broadcast(level, "NDJSON render error: " + ex.getMessage());
             }
-            broadcast(level, "Пирсы готовы (stream).");
+            broadcast(level, "Piers ready (stream).");
             return;
         }
 
         // === fallback: coords.features.elements ===
         if (!coords.has("features")) {
-            broadcast(level, "В coords нет features — пропускаю PierGenerator.");
+            broadcast(level, "No features in coords — skipping PierGenerator.");
             return;
         }
         JsonArray elements = coords.getAsJsonObject("features").getAsJsonArray("elements");
         if (elements == null || elements.size() == 0) {
-            broadcast(level, "OSM elements пуст — пропускаю пирсы.");
+            broadcast(level, "OSM elements are empty — skipping piers.");
             return;
         }
 
@@ -185,11 +185,11 @@ public class PierGenerator {
             processed++;
             if (totalWays > 0 && processed % Math.max(1, totalWays/10) == 0) {
                 int pct = (int)Math.round(100.0 * processed / Math.max(1,totalWays));
-                broadcast(level, "Пирсы: ~" + pct + "%");
+                broadcast(level, "Piers: ~" + pct + "%");
             }
         }
 
-        broadcast(level, "Пирсы готовы (fallback).");
+        broadcast(level, "Piers ready (fallback).");
     }
 
     // === Рендер одного элемента (линия/полигон) ===

@@ -65,14 +65,14 @@ public class ElectricChargerGenerator {
     // ===== публичный запуск =====
     public void generate() {
         if (coords == null) {
-            broadcast(level, "ElectricChargerGenerator: coords == null — пропускаю.");
+            broadcast(level, "ElectricChargerGenerator: coords == null — skipping.");
             return;
         }
 
         JsonObject center = coords.getAsJsonObject("center");
         JsonObject bbox   = coords.getAsJsonObject("bbox");
         if (center == null || bbox == null) {
-            broadcast(level, "ElectricChargerGenerator: нет center/bbox — пропускаю.");
+            broadcast(level, "ElectricChargerGenerator: no center/bbox — skipping.");
             return;
         }
 
@@ -109,12 +109,12 @@ public class ElectricChargerGenerator {
                 }
             } else {
                 if (!coords.has("features")) {
-                    broadcast(level, "ElectricChargerGenerator: нет coords.features — пропускаю.");
+                    broadcast(level, "ElectricChargerGenerator: no coords.features — skipping.");
                     return;
                 }
                 JsonArray elements = coords.getAsJsonObject("features").getAsJsonArray("elements");
                 if (elements == null || elements.size() == 0) {
-                    broadcast(level, "ElectricChargerGenerator: features.elements пуст — пропускаю.");
+                    broadcast(level, "ElectricChargerGenerator: features.elements is empty — skipping.");
                     return;
                 }
                 for (JsonElement el : elements) {
@@ -123,11 +123,11 @@ public class ElectricChargerGenerator {
                 }
             }
         } catch (Exception ex) {
-            broadcast(level, "ElectricChargerGenerator: ошибка чтения features: " + ex.getMessage());
+            broadcast(level, "ElectricChargerGenerator: error reading features: " + ex.getMessage());
         }
 
         if (chargers.isEmpty()) {
-            broadcast(level, "ElectricChargerGenerator: amenity=charging_station не найдено — готово.");
+            broadcast(level, "ElectricChargerGenerator: amenity=charging_station not found — done.");
             return;
         }
 
@@ -153,12 +153,12 @@ public class ElectricChargerGenerator {
                 if (ch.x<minX||ch.x>maxX||ch.z<minZ||ch.z>maxZ) continue;
                 placeCharger(ch);
             } catch (Exception ex) {
-                broadcast(level, "ElectricChargerGenerator: ошибка на ("+ch.x+","+ch.z+"): " + ex.getMessage());
+                broadcast(level, "ElectricChargerGenerator: error at ("+ch.x+","+ch.z+"): " + ex.getMessage());
             }
             done++;
             if (done % Math.max(1, chargers.size()/5) == 0) {
                 int pct = (int)Math.round(100.0 * done / Math.max(1, chargers.size()));
-                broadcast(level, "Электрозарядки: ~" + pct + "%");
+                broadcast(level, "EV chargers: ~" + pct + "%");
             }
         }
     }

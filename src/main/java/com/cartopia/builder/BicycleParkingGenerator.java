@@ -61,10 +61,10 @@ public class BicycleParkingGenerator {
 
     // ---- запуск ----
     public void generate() {
-        if (coords == null) { broadcast(level, "BicycleParkingGenerator: coords == null — пропуск."); return; }
+        if (coords == null) { broadcast(level, "BicycleParkingGenerator: coords == null — skipping."); return; }
         JsonObject center = coords.getAsJsonObject("center");
         JsonObject bbox   = coords.getAsJsonObject("bbox");
-        if (center == null || bbox == null) { broadcast(level, "BicycleParkingGenerator: нет center/bbox — пропуск."); return; }
+        if (center == null || bbox == null) { broadcast(level, "BicycleParkingGenerator: no center/bbox — skipping."); return; }
 
         final double centerLat  = center.get("lat").getAsDouble();
         final double centerLng  = center.get("lng").getAsDouble();
@@ -101,9 +101,9 @@ public class BicycleParkingGenerator {
                     }
                 }
             } else {
-                if (!coords.has("features")) { broadcast(level, "BicycleParkingGenerator: нет coords.features — пропуск."); return; }
+                if (!coords.has("features")) { broadcast(level, "BicycleParkingGenerator: no coords.features — skipping."); return; }
                 JsonArray elements = coords.getAsJsonObject("features").getAsJsonArray("elements");
-                if (elements == null || elements.size() == 0) { broadcast(level, "BicycleParkingGenerator: features.elements пуст — пропуск."); return; }
+                if (elements == null || elements.size() == 0) { broadcast(level, "BicycleParkingGenerator: features.elements is empty — skipping."); return; }
                 for (JsonElement el : elements) {
                     JsonObject e = el.getAsJsonObject();
                     collectBikeParking(e, points, seenNodeIds, seenWayRelIds, usedXZ,
@@ -112,11 +112,11 @@ public class BicycleParkingGenerator {
                 }
             }
         } catch (Exception ex) {
-            broadcast(level, "BicycleParkingGenerator: ошибка чтения features: " + ex.getMessage());
+            broadcast(level, "BicycleParkingGenerator: error reading features: " + ex.getMessage());
         }
 
         if (points.isEmpty()) {
-            broadcast(level, "BicycleParkingGenerator: велопарковок не найдено — готово.");
+            broadcast(level, "BicycleParkingGenerator: no bicycle parking found — done.");
             return;
         }
 
@@ -127,15 +127,15 @@ public class BicycleParkingGenerator {
                 int[] dir = dirAlongNearestRoad(p.x, p.z); // {dx, dz} ∈ {(-1,0),(1,0),(0,-1),(0,1)}
                 placeBikeRack(p.x, p.z, dir[0], dir[1]);
             } catch (Exception ex) {
-                broadcast(level, "BicycleParkingGenerator: ошибка на ("+p.x+","+p.z+"): " + ex.getMessage());
+                broadcast(level, "BicycleParkingGenerator: error at ("+p.x+","+p.z+"): " + ex.getMessage());
             }
             done++;
             if (done % Math.max(1, points.size()/5) == 0) {
                 int pct = (int)Math.round(100.0 * done / Math.max(1, points.size()));
-                broadcast(level, "Велопарковки: ~" + pct + "%");
+                broadcast(level, "Bicycle parking: ~" + pct + "%");
             }
         }
-        broadcast(level, "Велопарковки: готово, поставлено " + done + " рядов.");
+        broadcast(level, "Bicycle parking: done, placed " + done + " rows.");
     }
 
     // ---- сбор велопарковок ----

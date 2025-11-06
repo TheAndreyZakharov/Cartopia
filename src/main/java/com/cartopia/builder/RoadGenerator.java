@@ -87,10 +87,10 @@ public class RoadGenerator {
 
     // ==== публичный запуск ====
     public void generate() {
-        broadcast(level, "🛣️ Генерация дорог (без мостов/тоннелей/жд)…");
+        broadcast(level, "Generating roads (no bridges/tunnels/rail)...");
 
         if (coords == null) {
-            broadcast(level, "coords == null — пропускаю RoadGenerator.");
+            broadcast(level, "coords == null — skipping RoadGenerator.");
             return;
         }
 
@@ -98,7 +98,7 @@ public class RoadGenerator {
         JsonObject center = coords.getAsJsonObject("center");
         JsonObject bbox   = coords.getAsJsonObject("bbox");
         if (center == null || bbox == null) {
-            broadcast(level, "Нет center/bbox в coords — пропускаю дороги.");
+            broadcast(level, "No center/bbox in coords — skipping roads.");
             return;
         }
 
@@ -132,13 +132,13 @@ public class RoadGenerator {
         boolean streaming = (store != null);
         if (!streaming) {
             if (!coords.has("features")) {
-                broadcast(level, "В coords нет features — пропускаю RoadGenerator.");
+                broadcast(level, "No features in coords — skipping RoadGenerator.");
                 return;
             }
             JsonObject features = coords.getAsJsonObject("features");
             JsonArray elements = features.getAsJsonArray("elements");
             if (elements == null || elements.size() == 0) {
-                broadcast(level, "OSM elements пуст — пропускаю дороги.");
+                broadcast(level, "OSM elements are empty — skipping roads.");
                 return;
             }
             runWithJsonArray(elements, minX, maxX, minZ, maxZ,
@@ -159,7 +159,7 @@ public class RoadGenerator {
                 totalWays++;
             }
         } catch (Exception ex) {  // <— ЛОВИМ Exception, а не IOException
-            broadcast(level, "Ошибка чтения features NDJSON (подсчёт): " + ex.getMessage() + " — попробую fallback на coords.features.");
+            broadcast(level, "Error reading NDJSON features (count): " + ex.getMessage() + " — trying fallback to coords.features.");
             JsonArray elements = coords.has("features") && coords.getAsJsonObject("features").has("elements")
                     ? coords.getAsJsonObject("features").getAsJsonArray("elements") : null;
             if (elements == null || elements.size() == 0) return;
@@ -219,14 +219,14 @@ public class RoadGenerator {
                 processed++;
                 if (totalWays > 0 && processed % Math.max(1, totalWays/10) == 0) {
                     int pct = (int)Math.round(100.0 * processed / Math.max(1,totalWays));
-                    broadcast(level, "Дороги: ~" + pct + "%");
+                    broadcast(level, "Roads: ~" + pct + "%");
                 }
             }
         } catch (Exception ex) {
-            broadcast(level, "Ошибка чтения features NDJSON (рендер): " + ex.getMessage());
+            broadcast(level, "Error reading NDJSON features (render): " + ex.getMessage());
         }
 
-        broadcast(level, "Дороги готовы.");
+        broadcast(level, "Roads are ready.");
     }
 
     // === режим старого массива (fallback) ===
@@ -296,7 +296,7 @@ public class RoadGenerator {
             processed++;
             if (totalWays > 0 && processed % Math.max(1, totalWays/10) == 0) {
                 int pct = (int)Math.round(100.0 * processed / Math.max(1,totalWays));
-                broadcast(level, "Дороги: ~" + pct + "%");
+                broadcast(level, "Roads: ~" + pct + "%");
             }
         }
     }

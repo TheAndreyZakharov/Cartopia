@@ -66,7 +66,7 @@ public final class DroppedEntitiesCleaner {
             // Если указан регион и мы ещё не «прогрели» чанки: форс-лоадим и ждём 5 тиков
             if (t.regionOrNull != null && !t.warmed) {
                 forceLoadRegion(t.level, t.regionOrNull, true);
-                broadcast(t.level, "Cleaner: форс-загрузил чанки региона; жду 5 тиков перед очисткой…");
+                broadcast(t.level, "Cleaner: forced region chunks to load; waiting 5 ticks before cleaning...");
                 t.warmed = true;
                 t.ticksLeft = 5; // дать чанкам догрузиться
                 continue;
@@ -74,8 +74,8 @@ public final class DroppedEntitiesCleaner {
 
             // Чистка
             int removed = cleanNow(t.level);
-            broadcast(t.level, "Очистил " + removed + " выпавших предметов"
-                    + (t.regionOrNull != null ? " (по всей области генерации)" : "") + ".");
+            broadcast(t.level, "Cleaned " + removed + " dropped items "
+                    + (t.regionOrNull != null ? " (across the entire generation area)" : "") + ".");
 
             // Снять форс у региона (если был)
             if (t.regionOrNull != null) {
@@ -118,7 +118,7 @@ public final class DroppedEntitiesCleaner {
                 removed++;
             }
         } catch (Throwable t) {
-            broadcast(level, "Cleaner: ошибка при очистке: " + t.getClass().getSimpleName());
+            broadcast(level, "Cleaner: error during cleaning" + t.getClass().getSimpleName());
         }
         return removed;
     }

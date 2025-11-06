@@ -127,14 +127,14 @@ public class RoadLampGenerator {
 
     // ==== ПУБЛИЧНЫЙ ЗАПУСК: ТОЛЬКО ФОНАРИ ====
     public void generate() {
-        broadcast(level, "💡 Расставляю дорожные фонари вокруг уже построенных дорог…");
+        broadcast(level, "Placing road lights around existing roads...");
 
         // 1) Геопривязка из index (если есть) или из coords
         JsonObject sourceIndex = (store != null && store.indexJsonObject() != null)
                 ? store.indexJsonObject() : coords;
 
         if (sourceIndex == null || !sourceIndex.has("bbox") || !sourceIndex.has("center")) {
-            broadcast(level, "Нет center/bbox — пропускаю RoadLampGenerator.");
+            broadcast(level, "No center/bbox — skipping RoadLampGenerator.");
             return;
         }
 
@@ -188,7 +188,7 @@ public class RoadLampGenerator {
                 // Фолбэк на старый coords.features.elements (если sidecar-ов нет)
                 JsonArray elements = safeElementsArray(coords);
                 if (elements == null || elements.size() == 0) {
-                    broadcast(level, "OSM elements пуст — пропускаю фонари.");
+                    broadcast(level, "OSM elements are empty — skipping lights.");
                     return;
                 }
                 for (JsonElement el : elements) {
@@ -247,10 +247,10 @@ public class RoadLampGenerator {
             }
 
         } catch (Exception io) {
-            broadcast(level, "Ошибка при чтении OSM-элементов (стрим): " + io.getMessage());
+            broadcast(level, "Error reading OSM elements (stream): " + io.getMessage());
         }
 
-        broadcast(level, "Фонари для дорог готовы.");
+        broadcast(level, "Road lights are ready.");
     }
 
     private static void progress(int processed, int total) {

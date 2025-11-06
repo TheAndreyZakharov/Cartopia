@@ -44,10 +44,10 @@ public class TrafficCalmingGenerator {
 
     // ===== Запуск =====
     public void generate() {
-        broadcast(level, "🧱 Генерация успокоителей трафика (stream)…");
+        broadcast(level, "Generating traffic calming (stream)...");
 
         if (coords == null || !coords.has("center") || !coords.has("bbox")) {
-            broadcast(level, "❌ Нет coords/center/bbox — пропуск TrafficCalmingGenerator.");
+            broadcast(level, "No coords/center/bbox — skipping TrafficCalmingGenerator.");
             return;
         }
 
@@ -99,7 +99,7 @@ public class TrafficCalmingGenerator {
             } else {
                 // fallback: берём из coords.features
                 if (!coords.has("features")) {
-                    broadcast(level, "TrafficCalmingGenerator: нет coords.features — пропуск.");
+                    broadcast(level, "TrafficCalmingGenerator: no coords.features — skipping.");
                     return;
                 }
                 JsonArray elements = coords.getAsJsonObject("features").getAsJsonArray("elements");
@@ -120,12 +120,12 @@ public class TrafficCalmingGenerator {
                 }
             }
         } catch (Exception ex) {
-            broadcast(level, "Ошибка PASS1 (nodes): " + ex.getMessage());
+            broadcast(level, "Error in PASS1 (nodes): " + ex.getMessage());
             return;
         }
 
         if (calmingNodeXZ.isEmpty()) {
-            broadcast(level, "TrafficCalming: подходящих нод нет — готово.");
+            broadcast(level, "TrafficCalming: no suitable nodes found — done.");
             return;
         }
 
@@ -212,11 +212,11 @@ public class TrafficCalmingGenerator {
                 }
             }
         } catch (Exception ex) {
-            broadcast(level, "Ошибка PASS2 (ways): " + ex.getMessage());
+            broadcast(level, "Error in PASS2 (ways): " + ex.getMessage());
         }
 
         if (best.isEmpty()) {
-            broadcast(level, "TrafficCalming: ни одна нода не попала на автодорогу — готово.");
+            broadcast(level, "TrafficCalming: no node matched any roadway — done.");
             return;
         }
 
@@ -226,7 +226,7 @@ public class TrafficCalmingGenerator {
             drawSlabLineAcrossRoadAt(c.x, c.z, c.dir, c.width);
             drawn++;
         }
-        broadcast(level, "✅ Поставлено успокоителей трафика: " + drawn);
+        broadcast(level, "Traffic calming placed: " + drawn);
     }
 
     // ====== Отрисовка поперёк дороги (на рельеф, полублоки каменных кирпичей) ======

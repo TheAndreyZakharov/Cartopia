@@ -53,11 +53,11 @@ public class WindsockFlagsGenerator {
 
     // --- запуск ---
     public void generate() {
-        if (coords == null) { broadcast(level, "WindsockFlagsGenerator: coords == null — пропуск."); return; }
+        if (coords == null) { broadcast(level, "WindsockFlagsGenerator: coords == null — skipping."); return; }
 
         JsonObject center = coords.getAsJsonObject("center");
         JsonObject bbox   = coords.getAsJsonObject("bbox");
-        if (center == null || bbox == null) { broadcast(level, "WindsockFlagsGenerator: нет center/bbox — пропуск."); return; }
+        if (center == null || bbox == null) { broadcast(level, "WindsockFlagsGenerator: no center/bbox — skipping."); return; }
 
         final double centerLat  = center.get("lat").getAsDouble();
         final double centerLng  = center.get("lng").getAsDouble();
@@ -94,20 +94,20 @@ public class WindsockFlagsGenerator {
                     }
                 }
             } else {
-                if (!coords.has("features")) { broadcast(level, "WindsockFlagsGenerator: нет coords.features — пропуск."); return; }
+                if (!coords.has("features")) { broadcast(level, "WindsockFlagsGenerator: no coords.features — skipping."); return; }
                 JsonArray elements = coords.getAsJsonObject("features").getAsJsonArray("elements");
-                if (elements == null || elements.size() == 0) { broadcast(level, "WindsockFlagsGenerator: features.elements пуст — пропуск."); return; }
+                if (elements == null || elements.size() == 0) { broadcast(level, "WindsockFlagsGenerator: features.elements are empty — skipping."); return; }
                 for (JsonElement el : elements) {
                     collectFlagPoint(el.getAsJsonObject(), points, seenNodeIds, seenWayRelIds, usedXZ,
                             centerLat, centerLng, east, west, north, south, sizeMeters, centerX, centerZ);
                 }
             }
         } catch (Exception ex) {
-            broadcast(level, "WindsockFlagsGenerator: ошибка чтения features: " + ex.getMessage());
+            broadcast(level, "WindsockFlagsGenerator: error reading features: " + ex.getMessage());
         }
 
         if (points.isEmpty()) {
-            broadcast(level, "WindsockFlagsGenerator: подходящих точек не найдено — готово.");
+            broadcast(level, "WindsockFlagsGenerator: no suitable points found — done.");
             return;
         }
 
@@ -117,7 +117,7 @@ public class WindsockFlagsGenerator {
             if (p.x < worldMinX || p.x > worldMaxX || p.z < worldMinZ || p.z > worldMaxZ) continue;
             if (placeBannerOnTop(p.x, p.z)) placed++;
         }
-        broadcast(level, "Флажки (windsock): поставлено " + placed + " шт.");
+        broadcast(level, "Flags (windsock): placed " + placed );
     }
 
     // --- фильтр тегов + геометрия -> точка ---

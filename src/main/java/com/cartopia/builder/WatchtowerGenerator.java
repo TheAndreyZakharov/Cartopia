@@ -77,14 +77,14 @@ public class WatchtowerGenerator {
     // ===== Публичный запуск =====
     public void generate() {
         if (coords == null) {
-            broadcast(level, "WatchtowerGenerator: coords == null — пропускаю.");
+            broadcast(level, "WatchtowerGenerator: coords == null — skipping.");
             return;
         }
 
         JsonObject center = coords.getAsJsonObject("center");
         JsonObject bbox   = coords.getAsJsonObject("bbox");
         if (center == null || bbox == null) {
-            broadcast(level, "WatchtowerGenerator: нет center/bbox — пропускаю.");
+            broadcast(level, "WatchtowerGenerator: no center/bbox — skipping.");
             return;
         }
 
@@ -120,12 +120,12 @@ public class WatchtowerGenerator {
                 }
             } else {
                 if (!coords.has("features")) {
-                    broadcast(level, "WatchtowerGenerator: нет coords.features — пропускаю.");
+                    broadcast(level, "WatchtowerGenerator: no coords.features — skipping.");
                     return;
                 }
                 JsonArray elements = coords.getAsJsonObject("features").getAsJsonArray("elements");
                 if (elements == null || elements.size() == 0) {
-                    broadcast(level, "WatchtowerGenerator: features.elements пуст — пропускаю.");
+                    broadcast(level, "WatchtowerGenerator: features.elements are empty — skipping.");
                     return;
                 }
                 for (JsonElement el : elements) {
@@ -134,11 +134,11 @@ public class WatchtowerGenerator {
                 }
             }
         } catch (Exception ex) {
-            broadcast(level, "WatchtowerGenerator: ошибка чтения features: " + ex.getMessage());
+            broadcast(level, "WatchtowerGenerator: error reading features: " + ex.getMessage());
         }
 
         if (towers.isEmpty()) {
-            broadcast(level, "WatchtowerGenerator: подходящих вышек не найдено — готово.");
+            broadcast(level, "WatchtowerGenerator: no suitable towers found — done.");
             return;
         }
 
@@ -148,12 +148,12 @@ public class WatchtowerGenerator {
                 if (t.x<minX||t.x>maxX||t.z<minZ||t.z>maxZ) continue;
                 renderTower(t);
             } catch (Exception ex) {
-                broadcast(level, "WatchtowerGenerator: ошибка на ("+t.x+","+t.z+"): " + ex.getMessage());
+                broadcast(level, "WatchtowerGenerator: error at ("+t.x+","+t.z+"): " + ex.getMessage());
             }
             done++;
             if (done % Math.max(1, towers.size()/5) == 0) {
                 int pct = (int)Math.round(100.0 * done / Math.max(1, towers.size()));
-                broadcast(level, "Вышки: ~" + pct + "%");
+                broadcast(level, "Towers: ~" + pct + "%");
             }
         }
     }

@@ -120,11 +120,11 @@ public class ConstructionSiteDecorator {
 
     // ---- Запуск ----
     public void generate() {
-        if (coords == null) { broadcast(level, "ConstructionSiteDecorator: coords == null — пропуск."); return; }
+        if (coords == null) { broadcast(level, "ConstructionSiteDecorator: coords == null — skipping."); return; }
 
         JsonObject center = coords.getAsJsonObject("center");
         JsonObject bbox   = coords.getAsJsonObject("bbox");
-        if (center == null || bbox == null) { broadcast(level, "ConstructionSiteDecorator: нет center/bbox — пропуск."); return; }
+        if (center == null || bbox == null) { broadcast(level, "ConstructionSiteDecorator: no center/bbox — skipping."); return; }
 
         final double centerLat  = center.get("lat").getAsDouble();
         final double centerLng  = center.get("lng").getAsDouble();
@@ -159,9 +159,9 @@ public class ConstructionSiteDecorator {
                     }
                 }
             } else {
-                if (!coords.has("features")) { broadcast(level, "ConstructionSiteDecorator: нет coords.features — пропуск."); return; }
+                if (!coords.has("features")) { broadcast(level, "ConstructionSiteDecorator: no coords.features — skipping."); return; }
                 JsonArray elements = coords.getAsJsonObject("features").getAsJsonArray("elements");
-                if (elements == null || elements.size() == 0) { broadcast(level, "ConstructionSiteDecorator: features.elements пуст — пропуск."); return; }
+                if (elements == null || elements.size() == 0) { broadcast(level, "ConstructionSiteDecorator: features.elements is empty — skipping."); return; }
                 for (JsonElement el : elements) {
                     collectArea(el.getAsJsonObject(), areas,
                             centerLat, centerLng, east, west, north, south,
@@ -169,10 +169,10 @@ public class ConstructionSiteDecorator {
                 }
             }
         } catch (Exception ex) {
-            broadcast(level, "ConstructionSiteDecorator: ошибка чтения features: " + ex.getMessage());
+            broadcast(level, "ConstructionSiteDecorator: error reading features: " + ex.getMessage());
         }
 
-        if (areas.isEmpty()) { broadcast(level, "ConstructionSiteDecorator: зон строек не найдено — готово."); return; }
+        if (areas.isEmpty()) { broadcast(level, "ConstructionSiteDecorator: no construction zones found — done"); return; }
 
         // ---- генерация по зонам ----
         int idx = 0, total = areas.size();
@@ -181,7 +181,7 @@ public class ConstructionSiteDecorator {
             decorateArea(area, worldMinX, worldMaxX, worldMinZ, worldMaxZ, idx, total);
         }
 
-        broadcast(level, "ConstructionSiteDecorator: готово.");
+        broadcast(level, "ConstructionSiteDecorator: done.");
     }
 
     // ---- Сбор зон landuse=construction ----
@@ -275,7 +275,7 @@ public class ConstructionSiteDecorator {
         final int maxZ = Math.min(area.maxZ, wMaxZ);
 
         if (minX > maxX || minZ > maxZ) {
-            broadcast(level, String.format(Locale.ROOT, "Стройплощадка %d/%d: вне мира — пропуск.", idx, total));
+            broadcast(level, String.format(Locale.ROOT, "Construction site %d/%d: out of world — skipping.", idx, total));
             return;
         }
 
@@ -312,7 +312,7 @@ public class ConstructionSiteDecorator {
             for (int[] p: centers) buildSandPile(p[0], p[1], SAND_RADIUS);
             reserved.add(box);
             sandOk = true;
-            broadcast(level, String.format(Locale.ROOT, "Стройплощадка %d/%d: кучи песка готовы.", idx, total));
+            broadcast(level, String.format(Locale.ROOT, "Construction site %d/%d: sand piles ready.", idx, total));
         }
 
         // ---- Две стопки кирпичей 4×4×3 на поддоне 4×4 ----
@@ -331,7 +331,7 @@ public class ConstructionSiteDecorator {
             bricksPlaced++;
             if (bricksPlaced == 1 || bricksPlaced == BRICK_STACK_COUNT) {
                 int pct = bricksPlaced == BRICK_STACK_COUNT ? 66 : 33;
-                broadcast(level, String.format(Locale.ROOT, "Стройплощадка %d/%d: стопки кирпичей %d/%d (~%d%%).",
+                broadcast(level, String.format(Locale.ROOT, "Construction site %d/%d: brick stacks %d/%d (~%d%%).",
                         idx, total, bricksPlaced, BRICK_STACK_COUNT, pct));
             }
         }
@@ -356,7 +356,7 @@ public class ConstructionSiteDecorator {
             reserved.add(box);
             planksPlaced++;
             if (planksPlaced == PLANK_STACK_COUNT) {
-                broadcast(level, String.format(Locale.ROOT, "Стройплощадка %d/%d: стопки досок готовы (~100%%).", idx, total));
+                broadcast(level, String.format(Locale.ROOT, "Construction site %d/%d: plank stacks ready (~100%%).", idx, total));
             }
         }
     }

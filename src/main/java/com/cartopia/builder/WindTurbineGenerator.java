@@ -103,13 +103,13 @@ public class WindTurbineGenerator {
     // ===== Публичный запуск =====
     public void generate() {
         if (coords == null) {
-            broadcast(level, "WindTurbineGenerator: coords == null — пропускаю.");
+            broadcast(level, "WindTurbineGenerator: coords == null — skipping.");
             return;
         }
         JsonObject center = coords.getAsJsonObject("center");
         JsonObject bbox   = coords.getAsJsonObject("bbox");
         if (center == null || bbox == null) {
-            broadcast(level, "WindTurbineGenerator: нет center/bbox — пропускаю.");
+            broadcast(level, "WindTurbineGenerator: no center/bbox — skipping.");
             return;
         }
 
@@ -146,12 +146,12 @@ public class WindTurbineGenerator {
                 }
             } else {
                 if (!coords.has("features")) {
-                    broadcast(level, "WindTurbineGenerator: нет coords.features — пропускаю.");
+                    broadcast(level, "WindTurbineGenerator: no coords.features — skipping.");
                     return;
                 }
                 JsonArray elements = coords.getAsJsonObject("features").getAsJsonArray("elements");
                 if (elements == null || elements.size() == 0) {
-                    broadcast(level, "WindTurbineGenerator: features.elements пуст — пропускаю.");
+                    broadcast(level, "WindTurbineGenerator: features.elements are empty — skipping.");
                     return;
                 }
                 for (JsonElement el : elements) {
@@ -160,11 +160,11 @@ public class WindTurbineGenerator {
                 }
             }
         } catch (Exception ex) {
-            broadcast(level, "WindTurbineGenerator: ошибка чтения features: " + ex.getMessage());
+            broadcast(level, "WindTurbineGenerator: error reading features: " + ex.getMessage());
         }
 
         if (list.isEmpty()) {
-            broadcast(level, "WindTurbineGenerator: подходящих ветряков не найдено — готово.");
+            broadcast(level, "WindTurbineGenerator: no suitable wind turbines found — done.");
             return;
         }
 
@@ -175,12 +175,12 @@ public class WindTurbineGenerator {
                 if (t.x<minX||t.x>maxX||t.z<minZ||t.z>maxZ) continue;
                 if (t.smallRotor) renderSmallTurbine(t); else renderBigTurbine(t);
             } catch (Exception ex) {
-                broadcast(level, "WindTurbineGenerator: ошибка на ("+t.x+","+t.z+"): " + ex.getMessage());
+                broadcast(level, "WindTurbineGenerator: error at ("+t.x+","+t.z+"): " + ex.getMessage());
             }
             done++;
             if (done % Math.max(1, list.size()/5) == 0) {
                 int pct = (int)Math.round(100.0 * done / Math.max(1, list.size()));
-                broadcast(level, "Ветряки: ~" + pct + "%");
+                broadcast(level, "Wind turbines: ~" + pct + "%");
             }
         }
     }

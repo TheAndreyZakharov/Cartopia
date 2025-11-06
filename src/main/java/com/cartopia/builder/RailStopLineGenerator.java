@@ -44,10 +44,10 @@ public class RailStopLineGenerator {
 
     // ===== Запуск =====
     public void generate() {
-        broadcast(level, "🚧 Генерация стоп-линий у ЖД-переездов (stream)…");
+        broadcast(level, "Generating stop lines at railway crossings (stream)...");
 
         if (coords == null || !coords.has("center") || !coords.has("bbox") || store == null) {
-            broadcast(level, "❌ Нет coords или store — пропуск RailwayCrossingStopLineGenerator.");
+            broadcast(level, "No coords or store — skipping RailwayCrossingStopLineGenerator.");
             return;
         }
 
@@ -91,7 +91,7 @@ public class RailStopLineGenerator {
                 crossingNodeXZ.put(id, xz);
             }
         } catch (Exception ex) {
-            broadcast(level, "Ошибка PASS1 (nodes): " + ex.getMessage());
+            broadcast(level, "Error in PASS1 (nodes): " + ex.getMessage());
             return;
         }
 
@@ -139,7 +139,7 @@ public class RailStopLineGenerator {
                 }
             }
         } catch (Exception ex) {
-            broadcast(level, "Ошибка PASS2 (ways): " + ex.getMessage());
+            broadcast(level, "Error in PASS2 (ways): " + ex.getMessage());
         }
 
         // ===== DRAW: для каждого найденного узла рисуем 2 линии — по обе стороны на ±STOP_OFFSET =====
@@ -152,7 +152,7 @@ public class RailStopLineGenerator {
             drawn += 2;
         }
 
-        broadcast(level, "✅ Поставлено стоп-линий у ЖД-переездов: " + drawn);
+        broadcast(level, "Stop lines placed at railway crossings: " + drawn);
     }
 
     // ====== Отрисовка перпендикулярной линии через всю ширину дороги ======

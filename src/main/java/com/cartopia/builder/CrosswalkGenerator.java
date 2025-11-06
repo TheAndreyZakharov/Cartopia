@@ -41,10 +41,10 @@ public class CrosswalkGenerator {
 
     // ===== Запуск =====
     public void generate() {
-        broadcast(level, "🦓 Генерация пешеходных переходов (stream)…");
+        broadcast(level, "Generating crosswalks (stream)...");
 
         if (coords == null || !coords.has("center") || !coords.has("bbox") || store == null) {
-            broadcast(level, "❌ Нет coords или store — пропуск CrosswalkGenerator.");
+            broadcast(level, "No coords or store — skipping CrosswalkGenerator.");
             return;
         }
 
@@ -91,7 +91,7 @@ public class CrosswalkGenerator {
                 crossingNodeXZ.put(id, xz);
             }
         } catch (Exception ex) {
-            broadcast(level, "Ошибка PASS1 (nodes): " + ex.getMessage());
+            broadcast(level, "PASS1 error (nodes): " + ex.getMessage());
             return;
         }
 
@@ -156,7 +156,7 @@ public class CrosswalkGenerator {
                 }
             }
         } catch (Exception ex) {
-            broadcast(level, "Ошибка PASS2 (ways): " + ex.getMessage());
+            broadcast(level, "PASS2 error (ways): " + ex.getMessage());
         }
 
         // ===== DRAW: для node-crossing по лучшему way =====
@@ -166,8 +166,8 @@ public class CrosswalkGenerator {
             drawnChosen++;
         }
 
-        broadcast(level, "✅ Переходов: " + (drawnImmediate + drawnChosen)
-                + " (сразу: " + drawnImmediate + ", по узлам: " + drawnChosen + ")");
+        broadcast(level, "Crosswalks: " + (drawnImmediate + drawnChosen)
+                + " (immediate: " + drawnImmediate + ", by nodes: " + drawnChosen + ")");
     }
 
     // ====== Отрисовка с клиппингом и антислипанием ======

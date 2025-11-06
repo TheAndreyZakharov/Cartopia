@@ -50,12 +50,12 @@ public class CaveEntranceGenerator {
 
     // ===== Публичный запуск =====
     public void generate() {
-        if (coords == null) { broadcast(level, "CaveEntrance: coords == null — пропускаю."); return; }
+        if (coords == null) { broadcast(level, "CaveEntrance: coords == null — skipping."); return; }
 
         JsonObject center = coords.getAsJsonObject("center");
         JsonObject bbox   = coords.getAsJsonObject("bbox");
         if (center == null || bbox == null) {
-            broadcast(level, "CaveEntrance: нет center/bbox — пропускаю."); return;
+            broadcast(level, "CaveEntrance: no center/bbox — skipping."); return;
         }
 
         final double centerLat  = center.get("lat").getAsDouble();
@@ -86,22 +86,22 @@ public class CaveEntranceGenerator {
                     for (JsonObject e : fs) {
                         collect(e, centerLat, centerLng, east, west, north, south, sizeMeters, centerX, centerZ);
                         read++;
-                        if (read % 1000 == 0) broadcast(level, "CaveEntrance: прочитано фич ~" + read);
+                        if (read % 1000 == 0) broadcast(level, "CaveEntrance: ~ features read ~" + read);
                     }
                 }
             } else {
-                if (!coords.has("features")) { broadcast(level, "CaveEntrance: нет coords.features — пропускаю."); return; }
+                if (!coords.has("features")) { broadcast(level, "CaveEntrance: no coords.features — skipping."); return; }
                 JsonArray elements = coords.getAsJsonObject("features").getAsJsonArray("elements");
-                if (elements == null || elements.size() == 0) { broadcast(level, "CaveEntrance: features.elements пуст — пропускаю."); return; }
+                if (elements == null || elements.size() == 0) { broadcast(level, "CaveEntrance: features.elements is empty — skipping."); return; }
                 for (JsonElement el : elements) {
                     collect(el.getAsJsonObject(), centerLat, centerLng, east, west, north, south, sizeMeters, centerX, centerZ);
                 }
             }
         } catch (Exception ex) {
-            broadcast(level, "CaveEntrance: ошибка чтения features: " + ex.getMessage());
+            broadcast(level, "CaveEntrance: error reading features: " + ex.getMessage());
         }
 
-        if (entrances.isEmpty()) { broadcast(level, "CaveEntrance: входов не найдено — готово."); return; }
+        if (entrances.isEmpty()) { broadcast(level, "CaveEntrance: no entrances found — done."); return; }
 
         // ===== Постройка кубиков 3×3×2 из мшистого булыжника =====
         int total = entrances.size(), done = 0, placed = 0;
@@ -114,7 +114,7 @@ public class CaveEntranceGenerator {
                 placeCube3x3x2OnGround(x, z);
                 placed++;
             } catch (Throwable t) {
-                broadcast(level, "CaveEntrance: ошибка на ("+x+","+z+"): " + t.getMessage());
+                broadcast(level, "CaveEntrance: error at ("+x+","+z+"): " + t.getMessage());
             }
 
             done++;
@@ -124,7 +124,7 @@ public class CaveEntranceGenerator {
             }
         }
 
-        broadcast(level, "CaveEntrance: готово. Построено: " + placed);
+        broadcast(level, "CaveEntrance: done. Built: " + placed);
     }
 
     // ===== Разбор фич =====

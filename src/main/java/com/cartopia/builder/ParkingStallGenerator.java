@@ -35,10 +35,10 @@ public class ParkingStallGenerator {
 
     // ===== Запуск =====
     public void generate() {
-        broadcast(level, "🅿️ Генерация парковочных мест (stream)…");
+        broadcast(level, "Generating parking stalls (stream)...");
 
         if (coords == null || !coords.has("center") || !coords.has("bbox") || store == null) {
-            broadcast(level, "❌ Нет coords или store — пропуск ParkingStallGenerator.");
+            broadcast(level, "No coords or store — skipping ParkingStallGenerator.");
             return;
         }
 
@@ -82,12 +82,12 @@ public class ParkingStallGenerator {
                 }
             }
         } catch (Exception ex) {
-            broadcast(level, "Ошибка PASS1 (parking areas): " + ex.getMessage());
+            broadcast(level, "PASS1 error (parking areas): " + ex.getMessage());
             return;
         }
 
         if (parkingRings.isEmpty()) {
-            broadcast(level, "ℹ️ Парковочных зон не найдено.");
+            broadcast(level, "No parking areas found.");
             return;
         }
 
@@ -130,7 +130,7 @@ public class ParkingStallGenerator {
                 }
             }
         } catch (Exception ex) {
-            broadcast(level, "Ошибка PASS2 (roads): " + ex.getMessage());
+            broadcast(level, "PASS2 error (roads): " + ex.getMessage());
         }
 
         // ===== DRAW =====
@@ -160,7 +160,7 @@ public class ParkingStallGenerator {
             }
         }
 
-        broadcast(level, "✅ Парковочных мест построено (линий): " + placed);
+        broadcast(level, "Parking stalls built (lines): " + placed);
     }
 
     // ==== Рисование вдоль одного сегмента (ряд П с шагом 4, ОДНА ножка слева) ====

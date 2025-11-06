@@ -69,14 +69,14 @@ public class ChimneyGenerator {
     // ===== публичный запуск =====
     public void generate() {
         if (coords == null) {
-            broadcast(level, "ChimneyGenerator: coords == null — пропускаю.");
+            broadcast(level, "ChimneyGenerator: coords == null — skipping.");
             return;
         }
 
         JsonObject center = coords.getAsJsonObject("center");
         JsonObject bbox   = coords.getAsJsonObject("bbox");
         if (center == null || bbox == null) {
-            broadcast(level, "ChimneyGenerator: нет center/bbox — пропускаю.");
+            broadcast(level, "ChimneyGenerator: no center/bbox — skipping.");
             return;
         }
 
@@ -113,12 +113,12 @@ public class ChimneyGenerator {
                 }
             } else {
                 if (!coords.has("features")) {
-                    broadcast(level, "ChimneyGenerator: нет coords.features — пропускаю.");
+                    broadcast(level, "ChimneyGenerator: no coords.features — skipping.");
                     return;
                 }
                 JsonArray elements = coords.getAsJsonObject("features").getAsJsonArray("elements");
                 if (elements == null || elements.size() == 0) {
-                    broadcast(level, "ChimneyGenerator: features.elements пуст — пропускаю.");
+                    broadcast(level, "ChimneyGenerator: features.elements is empty — skipping.");
                     return;
                 }
                 for (JsonElement el : elements) {
@@ -127,11 +127,11 @@ public class ChimneyGenerator {
                 }
             }
         } catch (Exception ex) {
-            broadcast(level, "ChimneyGenerator: ошибка чтения features: " + ex.getMessage());
+            broadcast(level, "ChimneyGenerator: error reading features: " + ex.getMessage());
         }
 
         if (list.isEmpty()) {
-            broadcast(level, "ChimneyGenerator: подходящих труб не найдено — готово.");
+            broadcast(level, "ChimneyGenerator: no suitable chimneys found — done.");
             return;
         }
 
@@ -142,12 +142,12 @@ public class ChimneyGenerator {
                 if (c.x<minX||c.x>maxX||c.z<minZ||c.z>maxZ) continue;
                 renderChimney(c);
             } catch (Exception ex) {
-                broadcast(level, "ChimneyGenerator: ошибка на ("+c.x+","+c.z+"): " + ex.getMessage());
+                broadcast(level, "ChimneyGenerator: error at ("+c.x+","+c.z+"): " + ex.getMessage());
             }
             done++;
             if (done % Math.max(1, list.size()/5) == 0) {
                 int pct = (int)Math.round(100.0 * done / Math.max(1, list.size()));
-                broadcast(level, "Трубы: ~" + pct + "%");
+                broadcast(level, "Chimneys: ~" + pct + "%");
             }
         }
     }

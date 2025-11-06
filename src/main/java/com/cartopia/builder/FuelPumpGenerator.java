@@ -110,7 +110,7 @@ public class FuelPumpGenerator {
     // ====== публичный запуск ======
     public void generate() {
         if (coords == null) {
-            broadcast(level, "FuelPumpGenerator: coords == null — пропускаю.");
+            broadcast(level, "FuelPumpGenerator: coords == null — skipping.");
             return;
         }
 
@@ -118,7 +118,7 @@ public class FuelPumpGenerator {
         JsonObject center = coords.getAsJsonObject("center");
         JsonObject bbox   = coords.getAsJsonObject("bbox");
         if (center == null || bbox == null) {
-            broadcast(level, "FuelPumpGenerator: нет center/bbox — пропускаю.");
+            broadcast(level, "FuelPumpGenerator: no center/bbox — skipping.");
             return;
         }
 
@@ -162,12 +162,12 @@ public class FuelPumpGenerator {
                 }
             } else {
                 if (!coords.has("features")) {
-                    broadcast(level, "FuelPumpGenerator: нет coords.features — пропускаю.");
+                    broadcast(level, "FuelPumpGenerator: no coords.features — skipping.");
                     return;
                 }
                 JsonArray elements = coords.getAsJsonObject("features").getAsJsonArray("elements");
                 if (elements == null || elements.size() == 0) {
-                    broadcast(level, "FuelPumpGenerator: features.elements пуст — пропускаю.");
+                    broadcast(level, "FuelPumpGenerator: features.elements is empty — skipping.");
                     return;
                 }
                 for (JsonElement el : elements) {
@@ -176,11 +176,11 @@ public class FuelPumpGenerator {
                 }
             }
         } catch (Exception ex) {
-            broadcast(level, "FuelPumpGenerator: ошибка чтения features: " + ex.getMessage());
+            broadcast(level, "FuelPumpGenerator: error reading features: " + ex.getMessage());
         }
 
         if (stations.isEmpty()) {
-            broadcast(level, "FuelPumpGenerator: amenity=fuel не найдено в области — готово.");
+            broadcast(level, "FuelPumpGenerator: amenity=fuel not found in the area — done.");
             return;
         }
 
@@ -222,12 +222,12 @@ public class FuelPumpGenerator {
             try {
                 renderStation(fsx, minX, maxX, minZ, maxZ);
             } catch (Exception ex) {
-                broadcast(level, "FuelPumpGenerator: ошибка на станции ("+fsx.x+","+fsx.z+"): " + ex.getMessage());
+                broadcast(level, "FuelPumpGenerator: error at station ("+fsx.x+","+fsx.z+"): " + ex.getMessage());
             }
             done++;
             if (done % Math.max(1, stations.size()/5) == 0) {
                 int pct = (int)Math.round(100.0 * done / Math.max(1, stations.size()));
-                broadcast(level, "Бензоколонки: ~" + pct + "%");
+                broadcast(level, "Fuel pumps: ~" + pct + "%");
             }
         }
     }

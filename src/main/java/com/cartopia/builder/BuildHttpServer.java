@@ -74,9 +74,8 @@ public class BuildHttpServer {
                         MinecraftServer s = ServerLifecycleHooks.getCurrentServer();
                         if (s != null && !welcomeSent && !s.getPlayerList().getPlayers().isEmpty()) {
                             String[] lines = {
-                                "Cartopia готова.",
-                                "Открой страницу на http://localhost:" + PORT + "/",
-                                "Выдели область и нажми Build. Не выходи из мира до завершения."
+                                "Cartopia is ready.",
+                                "Press M to open the Cartopia menu."
                             };
                             s.execute(() -> { for (String line : lines) broadcast(s, line); });
                             welcomeSent = true;
@@ -161,7 +160,7 @@ public class BuildHttpServer {
         String finalLandcoverPath = landcoverPath;
         s.execute(() -> {
             try {
-                broadcast(s, "Старт генерации…");
+                broadcast(s, "Generation started...");
                 ServerLevel level = s.overworld();
                 CartopiaPipeline.run(
                     level,
@@ -169,10 +168,10 @@ public class BuildHttpServer {
                     Path.of(demPath).toFile(),
                     finalLandcoverPath != null ? Path.of(finalLandcoverPath).toFile() : null
                 );
-                broadcast(s, "Генерация завершена.");
+                broadcast(s, "Generation finished.");
             } catch (Exception e) {
                 e.printStackTrace();
-                broadcast(s, "Ошибка генерации: " + e.getMessage());
+                broadcast(s, "Generation error: " + e.getMessage());
             }
         });
 
@@ -282,11 +281,11 @@ public class BuildHttpServer {
                     demPath.toFile(),
                     lcOkFinal ? olmPath.toFile() : null
                 );
-                broadcast(s, "Генерация завершена. Пакет: " + packDir.getFileName());
+                broadcast(s, "Generation finished. Package: " + packDir.getFileName());
                 trimPacksDir(MAX_PACKS); // чистка старых пакетов
             } catch (Exception e) {
                 e.printStackTrace();
-                broadcast(s, "Ошибка генерации: " + e.getMessage());
+                broadcast(s, "Generation error: " + e.getMessage());
             }
         });
 
@@ -509,7 +508,7 @@ public class BuildHttpServer {
                     for (ServerLevel lvl : s.getAllLevels()) {
                         com.cartopia.weather.WeatherTimeController.setEnabled(lvl, enabled);
                     }
-                    broadcast(s, "[Cartopia] Реальное время/погода: " + (enabled ? "ВКЛ" : "ВЫКЛ"));
+                    broadcast(s, "[Cartopia] Real time/weather: " + (enabled ? "ON" : "OFF"));
                 });
                 sendText(ex, 200, "{\"ok\":true}", "application/json");
                 return;

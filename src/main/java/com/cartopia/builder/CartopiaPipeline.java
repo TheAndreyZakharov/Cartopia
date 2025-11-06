@@ -24,28 +24,28 @@ public class CartopiaPipeline {
         System.out.println("[Cartopia] " + msg);
     }
     public static void run(ServerLevel level, File coordsJsonFile, File demTifFile, File landcoverTifFileOrNull) throws Exception {
-        broadcast(level, "Загружаю координаты/параметры…");
+        broadcast(level, "Loading coordinates/parameters...");
         // === Подготовка сайдкаров (стрим-режим) ===
         com.cartopia.store.GenerationStore store = null;
         try {
             store = com.cartopia.store.GenerationStore.prepare(coordsJsonFile.getParentFile(), coordsJsonFile);
-            broadcast(level, "Подготовил сайдкары: features NDJSON и terrain grid (если есть).");
+            broadcast(level, "Prepared sidecars: features NDJSON and terrain grid (if available).");
         } catch (Exception splitErr) {
-            broadcast(level, "Внимание: не удалось подготовить сайдкары: " + splitErr.getMessage());
+            broadcast(level, "Warning: failed to prepare sidecars: " + splitErr.getMessage());
             // store останется null — генераторы уйдут в fallback на coords.json
         }
         String json = Files.readString(coordsJsonFile.toPath(), StandardCharsets.UTF_8);
         JsonObject coords = JsonParser.parseString(json).getAsJsonObject();
         if (demTifFile == null) {
-            throw new IllegalStateException("DEM файл = null");
+            throw new IllegalStateException("DEM file = null");
         }
-        broadcast(level, "DEM: " + demTifFile.getAbsolutePath() + " (" + demTifFile.length() + " байт)"
-                + (demTifFile.exists() ? "" : " [ФАЙЛ НЕ НАЙДЕН]"));
+        broadcast(level, "DEM: " + demTifFile.getAbsolutePath() + " (" + demTifFile.length() + " bytes)"
+                + (demTifFile.exists() ? "" : " [FILE NOT FOUND]"));
         if (landcoverTifFileOrNull != null) {
-            broadcast(level, "OLM: " + landcoverTifFileOrNull.getAbsolutePath() + " (" + landcoverTifFileOrNull.length() + " байт)"
-                    + (landcoverTifFileOrNull.exists() ? "" : " [ФАЙЛ НЕ НАЙДЕН]"));
+            broadcast(level, "OLM: " + landcoverTifFileOrNull.getAbsolutePath() + " (" + landcoverTifFileOrNull.length() + " bytes)"
+                    + (landcoverTifFileOrNull.exists() ? "" : " [FILE NOT FOUND]"));
         }
-        broadcast(level, "Старт генерации поверхности (DEM + покраска) …");
+        broadcast(level, "Starting surface generation (DEM + painting) ...");
         try {
 
 
@@ -57,323 +57,332 @@ public class CartopiaPipeline {
             // Рельеф
             SurfaceGenerator surface = new SurfaceGenerator(level, coords, demTifFile, landcoverTifFileOrNull, store);
             surface.generate();
-            broadcast(level, "Поверхность готова.");
+            broadcast(level, "Surface ready.");
             // Сразу поднимаем всех игроков этого мира на безопасную поверхность
-            broadcast(level, "Переставляю игроков на поверхность…");
+            broadcast(level, "Moving players to the surface...");
             CartopiaSurfaceSpawn.adjustAllPlayersAsync(level);
             // Дороги
-            broadcast(level, "Старт генерации дорог…");
+            broadcast(level, "Starting road generation...");
             RoadGenerator roads = new RoadGenerator(level, coords, store);
             roads.generate();
-            broadcast(level, "Дороги готовы.");
+            broadcast(level, "Roads ready.");
             // Рельсы
-            broadcast(level, "Старт генерации рельсов…");
+            broadcast(level, "Starting rail generation...");
             RailGenerator rails = new RailGenerator(level, coords, store);
             rails.generate();
-            broadcast(level, "Рельсы готовы.");
+            broadcast(level, "Rails ready.");
             // Пирсы
-            broadcast(level, "Старт генерации пирсов…");
+            broadcast(level, "Starting pier generation...");
             PierGenerator piers = new PierGenerator(level, coords, store);
             piers.generate();
-            broadcast(level, "Пирсы готовы.");
+            broadcast(level, "Piers ready.");
 // ==========================================================================================
             // ===== РАЗМЕТКА =====
             // Пешеходные переходы
-            broadcast(level, "Старт разметки пешеходных переходов…");
+            broadcast(level, "Starting crosswalk marking...");
             CrosswalkGenerator crosswalks = new CrosswalkGenerator(level, coords, store);
             crosswalks.generate();
-            broadcast(level, "Пешеходные переходы готовы.");
+            broadcast(level, "Crosswalks ready.");
             // Разметка 1.17 у остановок (ёлочка)
-            broadcast(level, "Старт разметки остановок (1.17)...");
+            broadcast(level, "Starting stop markings...");
             StopMarkingGenerator busStops = new StopMarkingGenerator(level, coords, store);
             busStops.generate();
-            broadcast(level, "Разметка остановок готова.");
+            broadcast(level, "Stop markings ready.");
             // ЖД переезды — стоп-линии
-            broadcast(level, "Старт стоп-линий у ЖД-переездов…");
+            broadcast(level, "Starting stop lines at railway crossings...");
             RailStopLineGenerator rxl = new RailStopLineGenerator(level, coords, store);
             rxl.generate();
-            broadcast(level, "Стоп-линии у ЖД-переездов готовы.");
+            broadcast(level, "Stop lines at railway crossings ready.");
             // Вертолётные площадки
-            broadcast(level, "Старт генерации вертолётных площадок…");
+            broadcast(level, "Starting helipad generation...");
             HelipadGenerator helipads = new HelipadGenerator(level, coords, store);
             helipads.generate();
-            broadcast(level, "Вертолётные площадки готовы.");
+            broadcast(level, "Helipads ready.");
             // Парковочные места
-            broadcast(level, "Старт разметки парковочных мест…");
+            broadcast(level, "Starting parking stall marking...");
             ParkingStallGenerator stalls = new ParkingStallGenerator(level, coords, store);
             stalls.generate();
-            broadcast(level, "Парковочные места готовы.");
+            broadcast(level, "Parking stalls ready.");
 // ==========================================================================================
             // ===== МОСТЫ / ТУННЕЛИ =====
             // Мосты/эстакады (без тоннелей)
-            broadcast(level, "Старт генерации мостов/эстакад…");
+            broadcast(level, "Starting bridge/overpass generation...");
             BridgeGenerator bridges = new BridgeGenerator(level, coords, store);
             bridges.generate();
-            broadcast(level, "Мосты/эстакады готовы.");
+            broadcast(level, "Bridges/overpasses ready.");
             // Тоннели и подземные переходы (дороги и ЖД по логике «как мост, но вниз»)
-            broadcast(level, "Старт генерации тоннелей/подземных переходов…");
+            broadcast(level, "Starting tunnel/underpass generation...");
             TunnelGenerator tunnels = new TunnelGenerator(level, coords, store);
             tunnels.generate();
-            broadcast(level, "Тоннели/подземные переходы готовы.");
+            broadcast(level, "Tunnels/underpasses ready.");
             // Дорожная кнопочная разметка
-            broadcast(level, "Старт дорожной кнопочной разметки…");
+            broadcast(level, "Starting road button markings...");
             RoadButtonMarkingGenerator roadButtons = new RoadButtonMarkingGenerator(level, coords, store);
             roadButtons.generate();
-            broadcast(level, "Дорожная кнопочная разметка готова.");
+            broadcast(level, "Road button markings ready.");
 // ==========================================================================================
             // ===== ЗДАНИЯ =====
             // Здания
-            broadcast(level, "Старт генерации зданий…");
+            broadcast(level, "Starting building generation...");
             BuildingGenerator buildings = new BuildingGenerator(level, coords, store);
             buildings.generate();
-            broadcast(level, "Здания готовы.");
+            broadcast(level, "Buildings ready.");
 // ==========================================================================================
             // ===== ОСВЕЩЕНИЕ =====
             // Дорожные фонари
-            broadcast(level, "Старт расстановки дорожных фонарей…");
+            broadcast(level, "Starting placement of road lamps...");
             RoadLampGenerator roadLamps = new RoadLampGenerator(level, coords, store);
             roadLamps.generate();
-            broadcast(level, "Дорожные фонари готовы.");
+            broadcast(level, "Road lamps ready.");
             // Фонари вдоль рельсов
-            broadcast(level, "Старт расстановки фонарей вдоль рельсов…");
+            broadcast(level, "Starting placement of lamps along rails...");
             RailLampGenerator railLamps = new RailLampGenerator(level, coords, store);
             railLamps.generate();
-            broadcast(level, "Фонари вдоль рельсов готовы.");
+            broadcast(level, "Lamps along rails ready.");
 // ==========================================================================================
             // ===== ИНФРАСТРУКТУРА =====
             // Утилитарные уличные боксы однотипно
-            broadcast(level, "Старт генерации утилитарных боксов…");
+            broadcast(level, "Starting utility box generation...");
             UtilityBoxGenerator utilBoxGen = new UtilityBoxGenerator(level, coords, store);
             utilBoxGen.generate();
-            broadcast(level, "Утилитарные боксы готовы.");
+            broadcast(level, "Utility boxes ready.");
             // Маяки
-            broadcast(level, "Старт генерации маяков…");
+            broadcast(level, "Starting lighthouse generation...");
             LighthouseGenerator lighthouseGen = new LighthouseGenerator(level, coords, store);
             lighthouseGen.generate();
-            broadcast(level, "Маяки готовы.");
+            broadcast(level, "Lighthouses ready.");
             // Ветряные турбины
-            broadcast(level, "Старт генерации ветряков…");
+            broadcast(level, "Starting wind turbine generation...");
             WindTurbineGenerator wtGen = new WindTurbineGenerator(level, coords, store);
             wtGen.generate();
-            broadcast(level, "Ветряки готовы.");
+            broadcast(level, "Wind turbines ready.");
             // Ветряные мельницы 
-            broadcast(level, "Старт генерации мельниц…");
+            broadcast(level, "Starting windmill generation...");
             ClassicWindmillGenerator wmGen = new ClassicWindmillGenerator(level, coords, store);
             wmGen.generate();
-            broadcast(level, "Мельницы готовы.");
+            broadcast(level, "Windmills ready.");
             // Наблюдательные вышки
-            broadcast(level, "Старт генерации наблюдательных вышек…");
+            broadcast(level, "Starting watchtower generation...");
             WatchtowerGenerator wtowerGen = new WatchtowerGenerator(level, coords, store);
             wtowerGen.generate();
-            broadcast(level, "Вышки готовы.");
+            broadcast(level, "Towers ready.");
             // Трубы (дымоходы)
-            broadcast(level, "Старт генерации труб…");
+            broadcast(level, "Starting chimney generation...");
             ChimneyGenerator chGen = new ChimneyGenerator(level, coords, store);
             chGen.generate();
-            broadcast(level, "Трубы готовы.");
+            broadcast(level, "Chimneys ready.");
             // Вышки/мачты
-            broadcast(level, "Старт генерации вышек…");
+            broadcast(level, "Starting tower/mast generation...");
             TowerMastGenerator tmGen = new TowerMastGenerator(level, coords, store);
             tmGen.generate();
-            broadcast(level, "Вышки готовы.");
+            broadcast(level, "Towers ready.");
             // Башни-резервуары
-            broadcast(level, "Старт генерации башен-резервуаров…");
+            broadcast(level, "Starting utility tank tower generation...");
             UtilityTankTowerGenerator tankGen = new UtilityTankTowerGenerator(level, coords, store);
             tankGen.generate();
-            broadcast(level, "Башни-резервуары готовы.");
+            broadcast(level, "Utility tank towers ready.");
             // Солнечные панели
-            broadcast(level, "Старт генерации солнечных зон…");
+            broadcast(level, "Starting solar array generation...");
             SolarPanelGenerator solarGen = new SolarPanelGenerator(level, coords, store);
             solarGen.generate();
-            broadcast(level, "Солнечные зоны готовы.");
+            broadcast(level, "Solar arrays ready.");
             // Электроподстанции
-            broadcast(level, "Старт генерации электроподстанций…");
+            broadcast(level, "Starting substation generation...");
             SubstationGenerator subGen = new SubstationGenerator(level, coords, store);
             subGen.generate();
-            broadcast(level, "Подстанции готовы.");
+            broadcast(level, "Substations ready.");
             // ЛЭП: столбы, вышки и провода
-            broadcast(level, "Старт генерации ЛЭП (столбы/вышки/провода)…");
+            broadcast(level, "Starting power lines (poles/towers/wires) generation...");
             PowerLinesGenerator plGen = new PowerLinesGenerator(level, coords, store);
             plGen.generate();
-            broadcast(level, "ЛЭП готовы.");
+            broadcast(level, "Power lines ready.");
             // Бензоколонки на АЗС
-            broadcast(level, "Старт генерации бензоколонок…");
+            broadcast(level, "Starting fuel pump generation...");
             FuelPumpGenerator fuelGen = new FuelPumpGenerator(level, coords, store);
             fuelGen.generate();
-            broadcast(level, "Бензоколонки готовы.");
+            broadcast(level, "Fuel pumps ready.");
             // Автомойки
-            broadcast(level, "Старт генерации автомоек…");
+            broadcast(level, "Starting car wash generation...");
             CarWashGenerator washGen = new CarWashGenerator(level, coords, store); 
             washGen.generate();
-            broadcast(level, "Автомойки готовы.");
+            broadcast(level, "Car washes ready.");
             // Электрозарядки
-            broadcast(level, "Старт генерации электрозарядок…");
+            broadcast(level, "Starting EV charger generation...");
             ElectricChargerGenerator evGen = new ElectricChargerGenerator(level, coords, store);
             evGen.generate();
-            broadcast(level, "Электрозарядки готовы.");
+            broadcast(level, "EV chargers ready.");
             // Места отдыха: скамейки, столы, BBQ, беседки, палатки
-            broadcast(level, "Старт генерации мест отдыха…");
+            broadcast(level, "Starting rest area generation...");
             LeisureRestGenerator leisureGen = new LeisureRestGenerator(level, coords, store);
             leisureGen.generate();
-            broadcast(level, "Места отдыха готовы.");
+            broadcast(level, "Rest areas ready.");
             // Пляжный отдых (лежаки)
-            broadcast(level, "Старт генерации пляжных зон…");
+            broadcast(level, "Starting beach area generation...");
             BeachResortGenerator beachGen = new BeachResortGenerator(level, coords, store);
             beachGen.generate();
-            broadcast(level, "Пляжные зоны готовы.");
+            broadcast(level, "Beach areas ready.");
             // Спортплощадки: футбол, баскетбол, теннис, волейбол/бадминтон, гольф, стрельбища, фитнес
-            broadcast(level, "Старт генерации спортплощадок…");
+            broadcast(level, "Starting sports facility generation...");
             SportsFacilitiesGenerator sportsGen = new SportsFacilitiesGenerator(level, coords, store);
             sportsGen.generate();
-            broadcast(level, "Спортплощадки готовы.");
+            broadcast(level, "Sports facilities ready.");
             // Мусорная инфраструктура: урны, переработка, площадки под мусор
-            broadcast(level, "Старт генерации мусорной инфраструктуры…");
+            broadcast(level, "Starting waste infrastructure generation...");
             WasteGenerator wasteGen = new WasteGenerator(level, coords, store);
             wasteGen.generate();
-            broadcast(level, "мусорная инфраструктура готова.");
+            broadcast(level, "Waste infrastructure ready.");
             // Надземные трубопроводы
-            broadcast(level, "Старт генерации надземных труб…");
+            broadcast(level, "Starting overground pipeline generation...");
             OvergroundPipelinesGenerator pipesGen = new OvergroundPipelinesGenerator(level, coords, store);
             pipesGen.generate();
-            broadcast(level, "Надземные трубы готовы.");
+            broadcast(level, "Overground pipelines ready.");
             // Остановочные павильоны
-            broadcast(level, "Старт генерации остановочных павильонов…");
+            broadcast(level, "Starting stop shelter generation...");
             PublicTransportShelterGenerator shelterGen = new PublicTransportShelterGenerator(level, coords, store);
             shelterGen.generate();
-            broadcast(level, "Павильоны готовы.");
+            broadcast(level, "Shelters ready.");
             // Светофоры
-            broadcast(level, "Старт генерации светофоров…");
+            broadcast(level, "Starting traffic light generation");
             TrafficLightGenerator tlGen = new TrafficLightGenerator(level, coords, store);
             tlGen.generate();
-            broadcast(level, "Светофоры готовы.");
+            broadcast(level, "Traffic lights ready.");
             // Флагштоки
-            broadcast(level, "Старт генерации флагштоков…");
+            broadcast(level, "Starting flagpole generation");
             FlagpoleGenerator fpGen = new FlagpoleGenerator(level, coords, store);
             fpGen.generate();
-            broadcast(level, "Флагштоки готовы.");
+            broadcast(level, "Flagpoles ready.");
             // Адресные точки - простые дома 
-            broadcast(level, "Старт генерации адресных домов…");
+            broadcast(level, "Starting address house generation...");
             AddressPointBuildingsGenerator addrGen = new AddressPointBuildingsGenerator(level, coords, store);
             addrGen.generate();
-            broadcast(level, "Адресные дома построены.");
+            broadcast(level, "Address houses built.");
             // Ограждения, заборы, отбойники
-            broadcast(level, "Старт генерации ограждений/заборов/отбойников…");
+            broadcast(level, "Starting fences/barriers/guardrails generation...");
             FenceAndBarrierGenerator fenceGen = new FenceAndBarrierGenerator(level, coords, store);
             fenceGen.generate();
-            broadcast(level, "Ограждения/заборы/отбойники готовы.");
+            broadcast(level, "Fences/barriers/guardrails ready.");
             // Кладбища (надгробия)
-            broadcast(level, "Старт генерации кладбищ…");
+            broadcast(level, "Starting cemetery generation.");
             CemeteryGravesGenerator cemGen = new CemeteryGravesGenerator(level, coords, store);
             cemGen.generate();
-            broadcast(level, "Кладбища готовы.");
+            broadcast(level, "Cemeteries ready.");
             // Источники воды (колонки/колодцы/питьевые точки)
-            broadcast(level, "Старт генерации источников воды…");
+            broadcast(level, "Starting water source generation...");
             WaterSourcesGenerator waterGen = new WaterSourcesGenerator(level, coords, store);
             waterGen.generate();
-            broadcast(level, "Источники воды готовы.");
+            broadcast(level, "Water sources ready.");
             // Успокоители трафика (traffic calming)
-            broadcast(level, "Старт генерации успокоителей трафика…");
+            broadcast(level, "Starting traffic calming generation...");
             TrafficCalmingGenerator tcGen = new TrafficCalmingGenerator(level, coords, store);
             tcGen.generate();
-            broadcast(level, "Успокоители трафика готовы.");
+            broadcast(level, "Traffic calming ready.");
             // Пожарные гидранты
-            broadcast(level, "Старт генерации пожарных гидрантов…");
+            broadcast(level, "Starting fire hydrant generation...");
             FireHydrantGenerator hydrGen = new FireHydrantGenerator(level, coords, store);
             hydrGen.generate();
-            broadcast(level, "Пожарные гидранты готовы.");
+            broadcast(level, "Fire hydrants ready.");
             // Паркоматы и автоматы оплаты парковки
-            broadcast(level, "Старт генерации паркоматов…");
+            broadcast(level, "Starting parking meter generation...");
             ParkingMetersGenerator pmGen = new ParkingMetersGenerator(level, coords, store);
             pmGen.generate();
-            broadcast(level, "Паркоматы готовы.");
+            broadcast(level, "Parking meters ready.");
             // Велопарковки
-            broadcast(level, "Старт генерации велопарковок…");
+            broadcast(level, "Starting bicycle parking generation...");
             BicycleParkingGenerator bpGen = new BicycleParkingGenerator(level, coords, store);
             bpGen.generate();
-            broadcast(level, "Велопарковки готовы.");
+            broadcast(level, "Bicycle parking ready.");
             // Почтовые ящики
-            broadcast(level, "Старт генерации почтовых ящиков…");
+            broadcast(level, "Starting postbox generation");
             PostBoxGenerator postGen = new PostBoxGenerator(level, coords, store);
             postGen.generate();
-            broadcast(level, "Почтовые ящики готовы.");
+            broadcast(level, "Postboxes ready.");
             // Камеры (скорости и видеонаблюдение)
-            broadcast(level, "Старт генерации камер…");
+            broadcast(level, "Starting camera generation...");
             CameraGenerator camGen = new CameraGenerator(level, coords, store);
             camGen.generate();
-            broadcast(level, "Камеры готовы.");
+            broadcast(level, "Cameras ready.");
             // Информационные стенды / табло / указатели 
-            broadcast(level, "Старт генерации инфостендов…");
+            broadcast(level, "Starting information board generation...");
             InfoBoardsGenerator infoGen = new InfoBoardsGenerator(level, coords, store);
             infoGen.generate();
-            broadcast(level, "Инфостенды готовы.");
+            broadcast(level, "Information boards ready.");
             // Ульи и пасеки
-            broadcast(level, "Старт генерации ульев…");
+            broadcast(level, "Starting beehive generation...");
             ApiaryBeehivesGenerator bees = new ApiaryBeehivesGenerator(level, coords, store);
             bees.generate();
-            broadcast(level, "Ульи готовы.");
+            broadcast(level, "Beehives ready.");
             // Карьеры, шахты
-            broadcast(level, "Старт генерации ископаемых…");
+            broadcast(level, "Starting mineral generation...");
             MiningOresScatterGenerator miningGen = new MiningOresScatterGenerator(level, coords, store);
             miningGen.generate();
-            broadcast(level, "Ископаемые готовы.");
+            broadcast(level, "Minerals ready.");
             // Аэродромные флажки (windsock)
-            broadcast(level, "Старт генерации флажков");
+            broadcast(level, "Starting windsock generation");
             WindsockFlagsGenerator windsockGen = new WindsockFlagsGenerator(level, coords, store);
             windsockGen.generate();
-            broadcast(level, "Флажки готовы.");
+            broadcast(level, "Windsocks ready.");
             // Стройплощадки (landuse=construction)
-            broadcast(level, "Старт благоустройства стройплощадок…");
+            broadcast(level, "Starting construction site landscaping...");
             ConstructionSiteDecorator cons = new ConstructionSiteDecorator(level, coords, store);
             cons.generate();
-            broadcast(level, "Стройплощадки оформлены.");
+            broadcast(level, "Construction sites decorated.");
             // Краны 
-            broadcast(level, "Старт генерации кранов ...");
+            broadcast(level, "Starting crane generation ...");
             CraneGenerator craneGen = new CraneGenerator(level, coords, store);
             craneGen.generate();
-            broadcast(level, "Краны готовы.");
+            broadcast(level, "Cranes ready.");
             // Реклама
-            broadcast(level, "Старт генерации рекламы…");
+            broadcast(level, "Starting advertising generation...");
             AdvertisingGenerator adGen = new AdvertisingGenerator(level, coords, store);
             adGen.generate();
-            broadcast(level, "Реклама готова.");
+            broadcast(level, "Advertising ready.");
             // Фонтаны
-            broadcast(level, "Старт генерации фонтанов…");
+            broadcast(level, "Starting fountain generation...");
             FountainGenerator fGen = new FountainGenerator(level, coords, store);
             fGen.generate();
-            broadcast(level, "Фонтаны готовы.");
+            broadcast(level, "Fountains ready.");
             // Памятники, арт-объекты, монументы
-            broadcast(level, "Старт генерации памятников…");
+            broadcast(level, "Starting monument generation...");
             MonumentGenerator monGen = new MonumentGenerator(level, coords, store);
             monGen.generate();
-            broadcast(level, "Памятники готовы.");
+            broadcast(level, "Monuments ready.");
             // Подъёмники
-            broadcast(level, "Старт генерации подъёмников");
+            broadcast(level, "Starting lift generation...");
             AerialwayGenerator awGen = new AerialwayGenerator(level, coords, store);
             awGen.generate();
-            broadcast(level, "Подъёмники готовы.");
+            broadcast(level, "Lifts ready.");
             // Входы в пещеры
-            broadcast(level, "Старт генерации входов в пещеры");
+            broadcast(level, "Starting cave entrance generation...");
             CaveEntranceGenerator caveGen = new CaveEntranceGenerator(level, coords, store);
             caveGen.generate();
-            broadcast(level, "Входы в пещеры готовы.");
+            broadcast(level, "Cave entrances ready.");
 // ==========================================================================================
             // ===== РАСТИТЕЛЬНОСТЬ ======
             // Растительность
-            broadcast(level, "Старт генерации растительности…");
+            broadcast(level, "Starting vegetation generation...");
             VegetationScatterGenerator vegGen = new VegetationScatterGenerator(level, coords, store);
             vegGen.generate();
-            broadcast(level, "Растительность готова.");
+            broadcast(level, "Vegetation ready.");
 
 
 
-// изменить внешний вид кнопок в майне. добавить еще кнопок, объяснений на букву М
-// перевод на англ системных сообщений
 
 
-// ====
 
+
+
+
+
+            
 
 //оптимизация Читаю DEM…, Читаю OpenLandMap landcover…
+
+
+
+
+
+
+
 
 
 
@@ -384,13 +393,13 @@ public class CartopiaPipeline {
             // ===== ПОГОДА И ВРЕМЯ =====
             try {
                 com.cartopia.weather.WeatherTimeController.start(level, coords);
-                broadcast(level, "Контроллер времени/погоды запущен (1 запрос/час, прошлый час).");
+                broadcast(level, "Time/weather controller started (1 request/hour, previous hour).");
             } catch (Exception e) {
-                broadcast(level, "Не удалось запустить контроллер погоды/времени: " + e.getMessage());
+                broadcast(level, "НFailed to start weather/time controller " + e.getMessage());
             }
 // ==========================================================================================
             // ===== СОХРАНЕНИЕ =====
-            broadcast(level, "Сохраняю мир…");
+            broadcast(level, "Saving world...");
             level.save(null, true, false);
             broadcast(level, "Generation finished.");
             // Через ~3 секунды после завершения генерации — очистка выпавших предметов
@@ -403,7 +412,7 @@ public class CartopiaPipeline {
             Throwable cause = e.getCause();
             String causeStr = (cause == null ? "" : " | cause: " + cause.getClass().getSimpleName() +
                     (cause.getMessage() == null ? "" : (" - " + cause.getMessage())));
-            broadcast(level, "Ошибка генерации: " + cls + (msg == null ? "" : (": " + msg)) + causeStr);
+            broadcast(level, "Generation error: " + cls + (msg == null ? "" : (": " + msg)) + causeStr);
             System.err.println("[Cartopia] --- STACKTRACE START ---");
             e.printStackTrace();
             System.err.println("[Cartopia] --- STACKTRACE END ---");

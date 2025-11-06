@@ -107,12 +107,12 @@ public class SubstationGenerator {
 
     // ---- Запуск ----
     public void generate() {
-        if (coords == null) { broadcast(level, "SubstationAreaGenerator: coords == null — пропускаю."); return; }
+        if (coords == null) { broadcast(level, "SubstationAreaGenerator: coords == null — skipping."); return; }
 
         JsonObject center = coords.getAsJsonObject("center");
         JsonObject bbox   = coords.getAsJsonObject("bbox");
         if (center == null || bbox == null) {
-            broadcast(level, "SubstationAreaGenerator: нет center/bbox — пропускаю."); return;
+            broadcast(level, "SubstationAreaGenerator: no center/bbox — skipping."); return;
         }
 
         final double centerLat = center.get("lat").getAsDouble();
@@ -148,11 +148,11 @@ public class SubstationGenerator {
                 }
             } else {
                 if (!coords.has("features")) {
-                    broadcast(level, "SubstationAreaGenerator: нет coords.features — пропускаю."); return;
+                    broadcast(level, "SubstationAreaGenerator: no coords.features — skipping."); return;
                 }
                 JsonArray elements = coords.getAsJsonObject("features").getAsJsonArray("elements");
                 if (elements == null || elements.size() == 0) {
-                    broadcast(level, "SubstationAreaGenerator: features.elements пуст — пропускаю."); return;
+                    broadcast(level, "SubstationAreaGenerator: features.elements is empty — skipping."); return;
                 }
                 for (JsonElement el : elements) {
                     collectArea(el.getAsJsonObject(), areas,
@@ -161,11 +161,11 @@ public class SubstationGenerator {
                 }
             }
         } catch (Exception ex) {
-            broadcast(level, "SubstationAreaGenerator: ошибка чтения features: " + ex.getMessage());
+            broadcast(level, "SubstationAreaGenerator: error reading features: " + ex.getMessage());
         }
 
         if (areas.isEmpty()) {
-            broadcast(level, "SubstationAreaGenerator: подходящих зон подстанций не найдено — готово."); return;
+            broadcast(level, "SubstationAreaGenerator: no suitable substation areas found — done."); return;
         }
 
         int idx = 0;
@@ -283,7 +283,7 @@ public class SubstationGenerator {
         }
 
         if (bestCount <= 0) {
-            broadcast(level, String.format(Locale.ROOT, "Подстанции %d/%d: зона слишком узкая для модулей.", idx, total));
+            broadcast(level, String.format(Locale.ROOT, "Substations %d/%d: area too narrow for modules.", idx, total));
             return;
         }
 
@@ -295,11 +295,11 @@ public class SubstationGenerator {
                 done++;
                 if (done % Math.max(1, totalToPlace/5) == 0) {
                     int pct = (int)Math.round(100.0 * done / Math.max(1, totalToPlace));
-                    broadcast(level, String.format(Locale.ROOT, "Подстанции %d/%d: ~%d%%", idx, total, pct));
+                    broadcast(level, String.format(Locale.ROOT, "Substations %d/%d: ~%d%%", idx, total, pct));
                 }
             }
         }
-        broadcast(level, String.format(Locale.ROOT, "Подстанции %d/%d: 100%% (поставлено %d модулей)", idx, total, done));
+        broadcast(level, String.format(Locale.ROOT, "Substations %d/%d: 100%% (placed %d modules)", idx, total, done));
     }
 
     private int simulateCount(Area area, int wMinX, int wMaxX, int wMinZ, int wMaxZ,

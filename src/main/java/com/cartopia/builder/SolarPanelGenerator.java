@@ -94,14 +94,14 @@ public class SolarPanelGenerator {
     // ===== Публичный запуск =====
     public void generate() {
         if (coords == null) {
-            broadcast(level, "SolarPanelAreaGenerator: coords == null — пропускаю.");
+            broadcast(level, "SolarPanelAreaGenerator: coords == null — skipping.");
             return;
         }
 
         JsonObject center = coords.getAsJsonObject("center");
         JsonObject bbox   = coords.getAsJsonObject("bbox");
         if (center == null || bbox == null) {
-            broadcast(level, "SolarPanelAreaGenerator: нет center/bbox — пропускаю.");
+            broadcast(level, "SolarPanelAreaGenerator: no center/bbox — skipping.");
             return;
         }
 
@@ -137,12 +137,12 @@ public class SolarPanelGenerator {
                 }
             } else {
                 if (!coords.has("features")) {
-                    broadcast(level, "SolarPanelAreaGenerator: нет coords.features — пропускаю.");
+                    broadcast(level, "SolarPanelAreaGenerator: no coords.features — skipping.");
                     return;
                 }
                 JsonArray elements = coords.getAsJsonObject("features").getAsJsonArray("elements");
                 if (elements == null || elements.size() == 0) {
-                    broadcast(level, "SolarPanelAreaGenerator: features.elements пуст — пропускаю.");
+                    broadcast(level, "SolarPanelAreaGenerator: features.elements are empty — skipping.");
                     return;
                 }
                 for (JsonElement el : elements) {
@@ -151,11 +151,11 @@ public class SolarPanelGenerator {
                 }
             }
         } catch (Exception ex) {
-            broadcast(level, "SolarPanelAreaGenerator: ошибка чтения features: " + ex.getMessage());
+            broadcast(level, "SolarPanelAreaGenerator: error reading features: " + ex.getMessage());
         }
 
         if (areas.isEmpty()) {
-            broadcast(level, "SolarPanelAreaGenerator: подходящих зон панелей не найдено — готово.");
+            broadcast(level, "SolarPanelAreaGenerator: no suitable panel areas found — done.");
             return;
         }
 
@@ -170,7 +170,7 @@ public class SolarPanelGenerator {
                         Math.min(worldMaxZ, area.maxZ),
                         areaIdx, areas.size());
             } catch (Exception ex) {
-                broadcast(level, "SolarPanelAreaGenerator: ошибка в зоне #" + areaIdx + ": " + ex.getMessage());
+                broadcast(level, "SolarPanelAreaGenerator: error in area #" + areaIdx + ": " + ex.getMessage());
             }
         }
     }
@@ -320,12 +320,12 @@ public class SolarPanelGenerator {
                 if (done % nextReport == 0) report(idx, total, done, totalCells);
             }
         }
-        broadcast(level, String.format(Locale.ROOT, "Солнечная зона %d/%d: 100%%", idx, total));
+        broadcast(level, String.format(Locale.ROOT, "Solar area %d/%d: 100%%", idx, total));
     }
 
     private void report(int idx, int total, long done, long totalCells) {
         int pct = (int)Math.round(100.0 * done / Math.max(1, totalCells));
-        broadcast(level, String.format(Locale.ROOT, "Солнечная зона %d/%d: ~%d%%", idx, total, pct));
+        broadcast(level, String.format(Locale.ROOT, "Solar area %d/%d: ~%d%%", idx, total, pct));
     }
 
     // ===== Низкоуровневые сеттеры и рельеф =====

@@ -115,7 +115,7 @@ public class MapScreen extends Screen {
         int tmpY2 = tmpY1 + 30;
 
         this.openMapBtn = this.addRenderableWidget(
-                Button.builder(Component.literal("Открыть карту"), b -> {
+                Button.builder(Component.literal("Open Map"), b -> {
                     try {
                         Player player = Minecraft.getInstance().player;
                         if (player == null) return;
@@ -142,12 +142,12 @@ public class MapScreen extends Screen {
         );
 
         this.realtimeToggle = this.addRenderableWidget(
-                CycleButton.<Boolean>builder(val -> val ? Component.literal("ВКЛ") : Component.literal("ВЫКЛ"))
+                CycleButton.<Boolean>builder(val -> val ? Component.literal("ON") : Component.literal("OFF"))
                         .withValues(Boolean.TRUE, Boolean.FALSE)
                         .withInitialValue(realtimeEnabled)
                         .create(
                                 btnX, tmpY2, btnW, btnH,
-                                Component.literal("Реальное время/погода"),
+                                Component.literal("Real-world time/weather"),
                                 (btn, value) -> {
                                     this.realtimeEnabled = value;
                                     try {
@@ -265,28 +265,28 @@ public class MapScreen extends Screen {
 
             int y = leftViewportTop - leftScrollY;
 
-            y = drawWrapped(gfx, "Руководство:", leftViewportX, y, availW, 0xFFEEDDAA, false);
+            y = drawWrapped(gfx, "Guide:", leftViewportX, y, availW, 0xFFEEDDAA, false);
             y += 4;
 
             y = drawList(gfx, new String[]{
-                    "1. Нажмите «Открыть карту».",
-                    "2. Найдите зону через поиск.",
-                    "3. Нажмите «Выбрать зону».",
-                    "4. Подгоните пунктирную область (закрашенный квадратик в центре — примерная точка появления и привязка времени/погоды).",
-                    "5. Нажмите «Подтвердить».",
-                    "6. Подождите, пока в браузере появится окно об успешном скачивании данных.",
-                    "7. Дождитесь завершения генерации в игре.",
-                    "8. Приятного исследования!"
+                    "1. Click “Open Map”.",
+                    "2. Find an area using search.",
+                    "3. Click “Select Area”.",
+                    "4. Adjust the dashed area (the filled square in the center marks the approximate spawn point and the time/weather anchor).",
+                    "5. Click “Confirm”.",
+                    "6. Wait until your browser shows a window confirming the data download.",
+                    "7. Wait for generation to finish in the game, and do not leave the world until it’s done.",
+                    "8. Enjoy exploring!"
             }, leftViewportX, y, availW, 0xFFFFFFFF);
 
             y += 6;
             y = drawWrapped(gfx,
-                    "Подсказка: переключатель «Реальное время/погода» включает/выключает синхронизацию с реальными условиями. При выключении всё возвращается к состоянию, которое было на момент включения.",
+                    "Tip: the “Real-world time/weather” toggle turns synchronization with real conditions on or off. When disabled, everything reverts to the state it had at the moment it was enabled.",
                     leftViewportX, y, availW, 0xFFBBDDEE, false);
             
             y += 6;
             y = drawWrapped(gfx,
-                    "Внимание: рекомендуется не генерировать слишком большие площади — это может занять много времени, ресурсы системы и создать повышенную нагрузку на ресурсы, которые поставляют данные.",
+                    "Warning: it’s recommended not to generate areas that are too large—this can take a long time, use a lot of system resources, and place heavy load on the data providers.",
                     leftViewportX, y, availW, 0xFFFF5555, false);
 
             gfx.disableScissor();
@@ -304,7 +304,7 @@ public class MapScreen extends Screen {
             }
 
             // --- Правая колонка: заголовок и динамическая позиция кнопок ----------
-            gfx.drawString(this.font, "Действия", splitX + rightPad, lineTop, 0xFFFFFFFF, true);
+            gfx.drawString(this.font, "Actions", splitX + rightPad, lineTop, 0xFFFFFFFF, true);
 
             int rightTop = lineTop + 18;
             int rightBottom = leftViewportBottom;
@@ -375,26 +375,26 @@ public class MapScreen extends Screen {
             gfx.enableScissor(leftViewportX, leftViewportTop, leftViewportX + leftViewportW, leftViewportBottom);
 
             int y = leftViewportTop - leftScrollY;
-            y = drawWrapped(gfx, "Руководство:", leftViewportX, y, availW, 0xFFEEDDAA, false);
+            y = drawWrapped(gfx, "Guide:", leftViewportX, y, availW, 0xFFEEDDAA, false);
             y += 4;
             y = drawList(gfx, new String[]{
-                    "1. Нажмите «Открыть карту».",
-                    "2. Найдите зону через поиск.",
-                    "3. Нажмите «Выбрать зону».",
-                    "4. Подгоните пунктирную область (закрашенный квадратик в центре — примерная точка появления и привязка времени/погоды).",
-                    "5. Нажмите «Подтвердить».",
-                    "6. Подождите, пока в браузере появится окно об успешном скачивании данных.",
-                    "7. Дождитесь завершения генерации в игре.",
-                    "8. Приятного исследования!"
+                    "1. Click “Open Map”.",
+                    "2. Find an area using search.",
+                    "3. Click “Select Area”.",
+                    "4. Adjust the dashed area (the filled square in the center marks the approximate spawn point and the time/weather anchor).",
+                    "5. Click “Confirm”.",
+                    "6. Wait until your browser shows a window confirming the data download.",
+                    "7. Wait for generation to finish in the game, and do not leave the world until it’s done.",
+                    "8. Enjoy exploring!"
             }, leftViewportX, y, availW, 0xFFFFFFFF);
             y += 6;
             y = drawWrapped(gfx,
-                    "Подсказка: переключатель «Реальное время/погода» включает/выключает синхронизацию с реальными условиями. При выключении всё возвращается к состоянию, которое было на момент включения.",
+                    "Tip: the “Real-world time/weather” toggle turns synchronization with real conditions on or off. When disabled, everything reverts to the state it had at the moment it was enabled.",
                     leftViewportX, y, availW, 0xFFBBDDEE, false);
 
             y += 6;
             y = drawWrapped(gfx,
-                    "Внимание: рекомендуется не генерировать слишком большие площади — это может занять много времени, ресурсы системы и создать повышенную нагрузку на ресурсы, которые поставляют данные.",
+                    "Warning: it’s recommended not to generate areas that are too large—this can take a long time, use a lot of system resources, and place heavy load on the data providers.",
                     leftViewportX, y, availW, 0xFFFF5555, false);
 
 
@@ -411,7 +411,7 @@ public class MapScreen extends Screen {
                 gfx.fill(trackX1, knobY, trackX2, knobY + knobH, 0x66FFFFFF);
             }
 
-            gfx.drawString(this.font, "Действия", splitX + rightPad, lineTop, 0xFFFFFFFF, true);
+            gfx.drawString(this.font, "Actions", splitX + rightPad, lineTop, 0xFFFFFFFF, true);
 
             int rightTop = lineTop + 18;
             int rightBottom = leftViewportBottom;
@@ -436,13 +436,13 @@ public class MapScreen extends Screen {
 
     private List<Token> footerTokens() {
         List<Token> t = new ArrayList<>();
-        t.add(new Token("Автор: Andrey Zakharov  •  Сайт: ", null));
+        t.add(new Token("Author: Andrey Zakharov  •  Website: ", null));
         t.add(new Token("https://theandreyzakharov.github.io/", "https://theandreyzakharov.github.io/"));
         t.add(new Token("  •  GitHub: ", null));
         t.add(new Token("https://github.com/TheAndreyZakharov", "https://github.com/TheAndreyZakharov"));
-        t.add(new Token("  •  Проект: ", null));
+        t.add(new Token("  •  Project: ", null));
         t.add(new Token("https://github.com/TheAndreyZakharov/Cartopia", "https://github.com/TheAndreyZakharov/Cartopia"));
-        t.add(new Token("  •  Благодарности: OpenStreetMap, OpenLandMap, Open-Meteo, OpenTopography, GMRT", null));
+        t.add(new Token("  •  Credits: OpenStreetMap, OpenLandMap, Open-Meteo, OpenTopography, GMRT", null));
         return t;
     }
 
@@ -521,30 +521,30 @@ public class MapScreen extends Screen {
 
     private int measureLeftContentHeight(int maxW) {
         int h = 0;
-        h += measureWrappedHeight("Руководство:", maxW) + 4;
+        h += measureWrappedHeight("Guide:", maxW) + 4;
 
         String[] lines = new String[]{
-                "1. Нажмите «Открыть карту».",
-                "2. Найдите зону через поиск.",
-                "3. Нажмите «Выбрать зону».",
-                "4. Подгоните пунктирную область (закрашенный квадратик в центре — примерная точка появления и привязка времени/погоды).",
-                "5. Нажмите «Подтвердить».",
-                "6. Подождите, пока в браузере появится окно об успешном скачивании данных.",
-                "7. Дождитесь завершения генерации в игре.",
-                "8. Приятного исследования!"
+                "1. Click “Open Map”.",
+                "2. Find an area using search.",
+                "3. Click “Select Area”.",
+                "4. Adjust the dashed area (the filled square in the center marks the approximate spawn point and the time/weather anchor).",
+                "5. Click “Confirm”.",
+                "6. Wait until your browser shows a window confirming the data download.",
+                "7. Wait for generation to finish in the game, and do not leave the world until it’s done.",
+                "8. Enjoy exploring!"
         };
         for (String s : lines) {
             h += measureWrappedHeight(s, maxW) + 2;
         }
         h += 6;
         h += measureWrappedHeight(
-                "Подсказка: переключатель «Реальное время/погода» включает/выключает синхронизацию с реальными условиями. При выключении всё возвращается к состоянию, которое было на момент включения.",
+                "Tip: the “Real-world time/weather” toggle turns synchronization with real conditions on or off. When disabled, everything reverts to the state it had at the moment it was enabled.",
                 maxW
         );
 
         h += 6;
         h += measureWrappedHeight(
-                "Внимание: рекомендуется не генерировать слишком большие площади — это может занять много времени, ресурсы системы и создать повышенную нагрузку на ресурсы, которые поставляют данные.",
+                "Warning: it’s recommended not to generate areas that are too large—this can take a long time, use a lot of system resources, and place heavy load on the data providers.",
                 maxW
         );
 

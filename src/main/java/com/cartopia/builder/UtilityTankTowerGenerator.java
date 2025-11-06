@@ -71,14 +71,14 @@ public class UtilityTankTowerGenerator {
     // ===== Публичный запуск =====
     public void generate() {
         if (coords == null) {
-            broadcast(level, "UtilityTankTowerGenerator: coords == null — пропускаю.");
+            broadcast(level, "UtilityTankTowerGenerator: coords == null — skipping.");
             return;
         }
 
         JsonObject center = coords.getAsJsonObject("center");
         JsonObject bbox   = coords.getAsJsonObject("bbox");
         if (center == null || bbox == null) {
-            broadcast(level, "UtilityTankTowerGenerator: нет center/bbox — пропускаю.");
+            broadcast(level, "UtilityTankTowerGenerator: no center/bbox — skipping.");
             return;
         }
 
@@ -114,12 +114,12 @@ public class UtilityTankTowerGenerator {
                 }
             } else {
                 if (!coords.has("features")) {
-                    broadcast(level, "UtilityTankTowerGenerator: нет coords.features — пропускаю.");
+                    broadcast(level, "UtilityTankTowerGenerator: no coords.features — skipping.");
                     return;
                 }
                 JsonArray elements = coords.getAsJsonObject("features").getAsJsonArray("elements");
                 if (elements == null || elements.size() == 0) {
-                    broadcast(level, "UtilityTankTowerGenerator: features.elements пуст — пропускаю.");
+                    broadcast(level, "UtilityTankTowerGenerator: features.elements are empty — skipping.");
                     return;
                 }
                 for (JsonElement el : elements) {
@@ -128,11 +128,11 @@ public class UtilityTankTowerGenerator {
                 }
             }
         } catch (Exception ex) {
-            broadcast(level, "UtilityTankTowerGenerator: ошибка чтения features: " + ex.getMessage());
+            broadcast(level, "UtilityTankTowerGenerator: error reading features: " + ex.getMessage());
         }
 
         if (towers.isEmpty()) {
-            broadcast(level, "UtilityTankTowerGenerator: подходящих объектов не найдено — готово.");
+            broadcast(level, "UtilityTankTowerGenerator: no suitable objects found — done.");
             return;
         }
 
@@ -142,12 +142,12 @@ public class UtilityTankTowerGenerator {
                 if (t.x<minX||t.x>maxX||t.z<minZ||t.z>maxZ) continue;
                 renderTower(t);
             } catch (Exception ex) {
-                broadcast(level, "UtilityTankTowerGenerator: ошибка на ("+t.x+","+t.z+"): " + ex.getMessage());
+                broadcast(level, "UtilityTankTowerGenerator: error at ("+t.x+","+t.z+"): " + ex.getMessage());
             }
             done++;
             if (done % Math.max(1, towers.size()/5) == 0) {
                 int pct = (int)Math.round(100.0 * done / Math.max(1, towers.size()));
-                broadcast(level, "Башни-резервуары: ~" + pct + "%");
+                broadcast(level, "Tank towers: ~" + pct + "%");
             }
         }
     }

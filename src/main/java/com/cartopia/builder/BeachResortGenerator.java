@@ -110,12 +110,12 @@ public class BeachResortGenerator {
 
     // ---- Запуск ----
     public void generate() {
-        if (coords == null) { broadcast(level, "BeachResortGenerator: coords == null — пропускаю."); return; }
+        if (coords == null) { broadcast(level, "BeachResortGenerator: coords == null — skipping."); return; }
 
         JsonObject center = coords.getAsJsonObject("center");
         JsonObject bbox   = coords.getAsJsonObject("bbox");
         if (center == null || bbox == null) {
-            broadcast(level, "BeachResortGenerator: нет center/bbox — пропускаю."); return;
+            broadcast(level, "BeachResortGenerator: no center/bbox — skipping."); return;
         }
 
         final double centerLat = center.get("lat").getAsDouble();
@@ -151,11 +151,11 @@ public class BeachResortGenerator {
                 }
             } else {
                 if (!coords.has("features")) {
-                    broadcast(level, "BeachResortGenerator: нет coords.features — пропускаю."); return;
+                    broadcast(level, "BeachResortGenerator: no coords.features — skipping."); return;
                 }
                 JsonArray elements = coords.getAsJsonObject("features").getAsJsonArray("elements");
                 if (elements == null || elements.size() == 0) {
-                    broadcast(level, "BeachResortGenerator: features.elements пуст — пропускаю."); return;
+                    broadcast(level, "BeachResortGenerator: features.elements is empty — skipping."); return;
                 }
                 for (JsonElement el : elements) {
                     collectArea(el.getAsJsonObject(), areas,
@@ -164,11 +164,11 @@ public class BeachResortGenerator {
                 }
             }
         } catch (Exception ex) {
-            broadcast(level, "BeachResortGenerator: ошибка чтения features: " + ex.getMessage());
+            broadcast(level, "BeachResortGenerator: error reading features: " + ex.getMessage());
         }
 
         if (areas.isEmpty()) {
-            broadcast(level, "BeachResortGenerator: подходящих пляжных зон не найдено — готово."); return;
+            broadcast(level, "BeachResortGenerator: no suitable beach areas found — done."); return;
         }
 
         int idx = 0;
@@ -279,7 +279,7 @@ public class BeachResortGenerator {
         }
 
         if (bestCount <= 0) {
-            broadcast(level, String.format(Locale.ROOT, "Пляжи %d/%d: зона слишком узкая для модулей.", idx, total));
+            broadcast(level, String.format(Locale.ROOT, "Beaches %d/%d: area too narrow for modules.", idx, total));
             return;
         }
 
@@ -291,11 +291,11 @@ public class BeachResortGenerator {
                 done++;
                 if (done % Math.max(1, totalToPlace/5) == 0) {
                     int pct = (int)Math.round(100.0 * done / Math.max(1, totalToPlace));
-                    broadcast(level, String.format(Locale.ROOT, "Пляжи %d/%d: ~%d%%", idx, total, pct));
+                    broadcast(level, String.format(Locale.ROOT, "Beaches %d/%d: ~%d%%", idx, total, pct));
                 }
             }
         }
-        broadcast(level, String.format(Locale.ROOT, "Пляжи %d/%d: 100%% (поставлено %d лежаков)", idx, total, done));
+        broadcast(level, String.format(Locale.ROOT, "Beaches %d/%d: 100%% (placed %d loungers)", idx, total, done));
     }
 
     private int simulateCount(Area area, int wMinX, int wMaxX, int wMinZ, int wMaxZ,

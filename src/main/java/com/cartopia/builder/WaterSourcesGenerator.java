@@ -51,11 +51,11 @@ public class WaterSourcesGenerator {
 
     // --- запуск ---
     public void generate() {
-        if (coords == null) { broadcast(level, "WaterSourcesGenerator: coords == null — пропуск."); return; }
+        if (coords == null) { broadcast(level, "WaterSourcesGenerator: coords == null — skipping."); return; }
 
         JsonObject center = coords.getAsJsonObject("center");
         JsonObject bbox   = coords.getAsJsonObject("bbox");
-        if (center == null || bbox == null) { broadcast(level, "WaterSourcesGenerator: нет center/bbox — пропуск."); return; }
+        if (center == null || bbox == null) { broadcast(level, "WaterSourcesGenerator: no center/bbox — skipping."); return; }
 
         final double centerLat  = center.get("lat").getAsDouble();
         final double centerLng  = center.get("lng").getAsDouble();
@@ -92,20 +92,20 @@ public class WaterSourcesGenerator {
                     }
                 }
             } else {
-                if (!coords.has("features")) { broadcast(level, "WaterSourcesGenerator: нет coords.features — пропуск."); return; }
+                if (!coords.has("features")) { broadcast(level, "WaterSourcesGenerator: no coords.features — skipping."); return; }
                 JsonArray elements = coords.getAsJsonObject("features").getAsJsonArray("elements");
-                if (elements == null || elements.size() == 0) { broadcast(level, "WaterSourcesGenerator: features.elements пуст — пропуск."); return; }
+                if (elements == null || elements.size() == 0) { broadcast(level, "WaterSourcesGenerator: features.elements are empty — skipping."); return; }
                 for (JsonElement el : elements) {
                     collectWaterPoint(el.getAsJsonObject(), points, seenNodeIds, seenWayRelIds, usedXZ,
                             centerLat, centerLng, east, west, north, south, sizeMeters, centerX, centerZ);
                 }
             }
         } catch (Exception ex) {
-            broadcast(level, "WaterSourcesGenerator: ошибка чтения features: " + ex.getMessage());
+            broadcast(level, "WaterSourcesGenerator: error reading features: " + ex.getMessage());
         }
 
         if (points.isEmpty()) {
-            broadcast(level, "WaterSourcesGenerator: подходящих источников воды не найдено — готово.");
+            broadcast(level, "WaterSourcesGenerator: no suitable water sources found — done.");
             return;
         }
 
@@ -115,15 +115,15 @@ public class WaterSourcesGenerator {
                 if (p.x < minX || p.x > maxX || p.z < minZ || p.z > maxZ) continue;
                 placeWaterBlock(p.x, p.z);
             } catch (Exception ex) {
-                broadcast(level, "WaterSourcesGenerator: ошибка на ("+p.x+","+p.z+"): " + ex.getMessage());
+                broadcast(level, "WaterSourcesGenerator: error at ("+p.x+","+p.z+"): " + ex.getMessage());
             }
             done++;
             if (done % Math.max(1, points.size()/5) == 0) {
                 int pct = (int)Math.round(100.0 * done / Math.max(1, points.size()));
-                broadcast(level, "Источники воды: ~" + pct + "%");
+                broadcast(level, "Water sources: ~" + pct + "%");
             }
         }
-        broadcast(level, "Источники воды: готово, поставлено " + done + " шт.");
+        broadcast(level, "Water sources: done, placed " + done + " шт.");
     }
 
     // --- сбор признаков воды ---

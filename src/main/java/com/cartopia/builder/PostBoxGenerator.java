@@ -54,11 +54,11 @@ public class PostBoxGenerator {
 
     // --- запуск ---
     public void generate() {
-        if (coords == null) { broadcast(level, "PostBoxGenerator: coords == null — пропуск."); return; }
+        if (coords == null) { broadcast(level, "PostBoxGenerator: coords == null — skipping."); return; }
 
         JsonObject center = coords.getAsJsonObject("center");
         JsonObject bbox   = coords.getAsJsonObject("bbox");
-        if (center == null || bbox == null) { broadcast(level, "PostBoxGenerator: нет center/bbox — пропуск."); return; }
+        if (center == null || bbox == null) { broadcast(level, "PostBoxGenerator: no center/bbox — skipping."); return; }
 
         final double centerLat  = center.get("lat").getAsDouble();
         final double centerLng  = center.get("lng").getAsDouble();
@@ -95,20 +95,20 @@ public class PostBoxGenerator {
                     }
                 }
             } else {
-                if (!coords.has("features")) { broadcast(level, "PostBoxGenerator: нет coords.features — пропуск."); return; }
+                if (!coords.has("features")) { broadcast(level, "PostBoxGenerator: no coords.features — skipping."); return; }
                 JsonArray elements = coords.getAsJsonObject("features").getAsJsonArray("elements");
-                if (elements == null || elements.size() == 0) { broadcast(level, "PostBoxGenerator: features.elements пуст — пропуск."); return; }
+                if (elements == null || elements.size() == 0) { broadcast(level, "PostBoxGenerator: features.elements is empty — skipping."); return; }
                 for (JsonElement el : elements) {
                     collectMailPoint(el.getAsJsonObject(), points, seenNodeIds, seenWayRelIds, usedXZ,
                             centerLat, centerLng, east, west, north, south, sizeMeters, centerX, centerZ);
                 }
             }
         } catch (Exception ex) {
-            broadcast(level, "PostBoxGenerator: ошибка чтения features: " + ex.getMessage());
+            broadcast(level, "PostBoxGenerator: error reading features: " + ex.getMessage());
         }
 
         if (points.isEmpty()) {
-            broadcast(level, "PostBoxGenerator: почтовых ящиков не найдено — готово.");
+            broadcast(level, "PostBoxGenerator: no post boxes found — done.");
             return;
         }
 
@@ -118,15 +118,15 @@ public class PostBoxGenerator {
                 if (p.x < minX || p.x > maxX || p.z < minZ || p.z > maxZ) continue;
                 placeMailbox(p.x, p.z);
             } catch (Exception ex) {
-                broadcast(level, "PostBoxGenerator: ошибка на ("+p.x+","+p.z+"): " + ex.getMessage());
+                broadcast(level, "PostBoxGenerator: error at ("+p.x+","+p.z+"): " + ex.getMessage());
             }
             done++;
             if (done % Math.max(1, points.size()/5) == 0) {
                 int pct = (int)Math.round(100.0 * done / Math.max(1, points.size()));
-                broadcast(level, "Почтовые ящики: ~" + pct + "%");
+                broadcast(level, "Post boxes: ~" + pct + "%");
             }
         }
-        broadcast(level, "Почтовые ящики: готово, поставлено " + done + " шт.");
+        broadcast(level, "Post boxes: done, placed " + done + " pcs.");
     }
 
     // --- сбор почтовых ящиков ---

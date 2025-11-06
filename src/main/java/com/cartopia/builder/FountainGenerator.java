@@ -57,10 +57,10 @@ public class FountainGenerator {
 
     // ===== Публичный запуск =====
     public void generate() {
-        if (coords == null) { broadcast(level, "FountainGenerator: coords == null — пропускаю."); return; }
+        if (coords == null) { broadcast(level, "FountainGenerator: coords == null — skipping."); return; }
         JsonObject center = coords.getAsJsonObject("center");
         JsonObject bbox   = coords.getAsJsonObject("bbox");
-        if (center == null || bbox == null) { broadcast(level, "FountainGenerator: нет center/bbox — пропускаю."); return; }
+        if (center == null || bbox == null) { broadcast(level, "FountainGenerator: no center/bbox — skipping."); return; }
 
         final double centerLat  = center.get("lat").getAsDouble();
         final double centerLng  = center.get("lng").getAsDouble();
@@ -93,18 +93,18 @@ public class FountainGenerator {
                     }
                 }
             } else {
-                if (!coords.has("features")) { broadcast(level, "FountainGenerator: нет coords.features — пропускаю."); return; }
+                if (!coords.has("features")) { broadcast(level, "FountainGenerator: no coords.features — skipping."); return; }
                 JsonArray elements = coords.getAsJsonObject("features").getAsJsonArray("elements");
-                if (elements == null || elements.size() == 0) { broadcast(level, "FountainGenerator: features.elements пуст — пропускаю."); return; }
+                if (elements == null || elements.size() == 0) { broadcast(level, "FountainGenerator: features.elements is empty — skipping."); return; }
                 for (JsonElement el : elements) {
                     collectFountain(el.getAsJsonObject(), list, centerLat, centerLng, east, west, north, south, sizeMeters, centerX, centerZ);
                 }
             }
         } catch (Exception ex) {
-            broadcast(level, "FountainGenerator: ошибка чтения features: " + ex.getMessage());
+            broadcast(level, "FountainGenerator: error reading features: " + ex.getMessage());
         }
 
-        if (list.isEmpty()) { broadcast(level, "FountainGenerator: подходящих фонтанов не найдено — готово."); return; }
+        if (list.isEmpty()) { broadcast(level, "FountainGenerator: no suitable fountains found — done."); return; }
 
         // ===== Построение =====
         int done = 0, total = list.size();
@@ -113,12 +113,12 @@ public class FountainGenerator {
             try {
                 buildFountainAdaptingTerrain(f.x, f.z, f.pillarHeight);
             } catch (Throwable t) {
-                broadcast(level, "FountainGenerator: ошибка на ("+f.x+","+f.z+"): " + t.getMessage());
+                broadcast(level, "FountainGenerator: error at ("+f.x+","+f.z+"): " + t.getMessage());
             }
             done++;
             if (done % Math.max(1, total/5) == 0) {
                 int pct = (int)Math.round(100.0 * done / Math.max(1, total));
-                broadcast(level, "Фонтаны: ~" + pct + "%");
+                broadcast(level, "Fountains: ~" + pct + "%");
             }
         }
     }

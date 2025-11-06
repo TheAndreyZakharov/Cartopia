@@ -96,14 +96,14 @@ public class CarWashGenerator {
     // ===== публичный запуск =====
     public void generate() {
         if (coords == null) {
-            broadcast(level, "CarWashGenerator: coords == null — пропускаю.");
+            broadcast(level, "CarWashGenerator: coords == null — skipping.");
             return;
         }
 
         JsonObject center = coords.getAsJsonObject("center");
         JsonObject bbox   = coords.getAsJsonObject("bbox");
         if (center == null || bbox == null) {
-            broadcast(level, "CarWashGenerator: нет center/bbox — пропускаю.");
+            broadcast(level, "CarWashGenerator: no center/bbox — skipping.");
             return;
         }
 
@@ -142,12 +142,12 @@ public class CarWashGenerator {
                 }
             } else {
                 if (!coords.has("features")) {
-                    broadcast(level, "CarWashGenerator: нет coords.features — пропускаю.");
+                    broadcast(level, "CarWashGenerator: no coords.features — skipping.");
                     return;
                 }
                 JsonArray elements = coords.getAsJsonObject("features").getAsJsonArray("elements");
                 if (elements == null || elements.size() == 0) {
-                    broadcast(level, "CarWashGenerator: features.elements пуст — пропускаю.");
+                    broadcast(level, "CarWashGenerator: features.elements is empty — skipping.");
                     return;
                 }
                 for (JsonElement el : elements) {
@@ -156,11 +156,11 @@ public class CarWashGenerator {
                 }
             }
         } catch (Exception ex) {
-            broadcast(level, "CarWashGenerator: ошибка чтения features: " + ex.getMessage());
+            broadcast(level, "CarWashGenerator: error reading features: " + ex.getMessage());
         }
 
         if (stations.isEmpty()) {
-            broadcast(level, "CarWashGenerator: автомоек нет в области — готово.");
+            broadcast(level, "CarWashGenerator: no car washes in the area — done.");
             return;
         }
 
@@ -195,15 +195,15 @@ public class CarWashGenerator {
             try {
                 renderStation(st, minX, maxX, minZ, maxZ);
             } catch (Exception ex) {
-                broadcast(level, "CarWashGenerator: ошибка на станции ("+st.x+","+st.z+"): " + ex.getMessage());
+                broadcast(level, "CarWashGenerator: error at station ("+st.x+","+st.z+"): " + ex.getMessage());
             }
             done++;
             if (done % Math.max(1, stations.size()/5) == 0) {
                 int pct = (int)Math.round(100.0 * done / Math.max(1, stations.size()));
-                broadcast(level, "Автомойки: ~" + pct + "%");
+                broadcast(level, "Car washes: ~" + pct + "%");
             }
         }
-        broadcast(level, "Автомойки готовы.");
+        broadcast(level, "Car washes ready.");
     }
 
     // ===== сбор признаков =====

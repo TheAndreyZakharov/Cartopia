@@ -1129,10 +1129,10 @@ public class BuildingGenerator {
 
     // ======== ПУБЛИЧНЫЙ ЗАПУСК ========
     public void generate() {
-        broadcast(level, "🏗️ Генерация зданий…");
+        broadcast(level, "Generating buildings...");
 
         if (coords == null) {
-            broadcast(level, "coords == null — пропускаю BuildingGenerator.");
+            broadcast(level, "coords == null — skipping BuildingGenerator.");
             return;
         }
 
@@ -1175,14 +1175,14 @@ public class BuildingGenerator {
                 east, west, north, south,
                 sizeMeters, centerX, centerZ
             );
-            broadcast(level, "Здания готовы.");
+            broadcast(level, "Buildings are ready.");
             return;
         }
 
         // === Fallback на старый JSON-массив ===
         JsonArray elements = coords.getAsJsonObject("features").getAsJsonArray("elements");
         if (elements == null || elements.size() == 0) {
-            broadcast(level, "OSM elements пуст — пропускаю здания.");
+            broadcast(level, "OSM elements are empty — skipping buildings.");
             return;
         }
         // >>> END STREAM ENTRY
@@ -1281,7 +1281,7 @@ public class BuildingGenerator {
                 int p = processed.incrementAndGet();
                 if (totalParts > 0 && p % Math.max(1, totalParts/10) == 0) {
                     int pct = (int)Math.round(100.0 * p / Math.max(1,totalParts));
-                    broadcast(level, "Здания (части): ~" + pct + "%");
+                    broadcast(level, "Buildings (parts): ~" + pct + "%");
                 }
             })
             .forEach(partTasks::add);
@@ -1338,7 +1338,7 @@ public class BuildingGenerator {
                 }
             }
         } catch (Exception ex) {
-            broadcast(level, "Ошибка чтения NDJSON (hints): " + ex.getMessage());
+            broadcast(level, "Error reading NDJSON (hints): " + ex.getMessage());
         }
 
 
@@ -1462,12 +1462,12 @@ public class BuildingGenerator {
                 int p = processedB.incrementAndGet();
                 if (totalBuildings > 0 && p % Math.max(1, totalBuildings/10) == 0) {
                     int pct = (int)Math.round(100.0 * p / Math.max(1,totalBuildings));
-                    broadcast(level, "Здания (контуры): ~" + pct + "%");
+                    broadcast(level, "Buildings (outlines): ~" + pct + "%");
                 }
             });
 
 
-        broadcast(level, "Здания готовы.");
+        broadcast(level, "Buildings are ready.");
     }
 
     // >>> runStreaming 
@@ -1502,7 +1502,7 @@ public class BuildingGenerator {
                 }
             }
         } catch (Exception ex) {
-            broadcast(level, "Ошибка чтения NDJSON (Pass A): " + ex.getMessage());
+            broadcast(level, "Error reading NDJSON (Pass A): " + ex.getMessage());
             return;
         }
 
@@ -1520,7 +1520,7 @@ public class BuildingGenerator {
                     }
                 }
             } catch (Exception ex) {
-                broadcast(level, "Ошибка чтения NDJSON (Pass B): " + ex.getMessage());
+                broadcast(level, "Error reading NDJSON (Pass B): " + ex.getMessage());
             }
         }
 
@@ -1548,7 +1548,7 @@ public class BuildingGenerator {
                 }
             }
         } catch (Exception ex) {
-            broadcast(level, "Ошибка чтения NDJSON (hints): " + ex.getMessage());
+            broadcast(level, "Error reading NDJSON (hints): " + ex.getMessage());
         }
 
         // ---------- Entrances / Passages ----------
@@ -1556,14 +1556,14 @@ public class BuildingGenerator {
         try (FeatureStream fs = store.featureStream()) {
             entrances = collectEntrancesExtended(fs, centerLat, centerLng, east, west, north, south, sizeMeters, centerX, centerZ);
         } catch (Exception ex) {
-            broadcast(level, "Ошибка чтения NDJSON (entrances): " + ex.getMessage());
+            broadcast(level, "Error reading NDJSON (entrances): " + ex.getMessage());
             return;
         }
         final List<List<int[]>> passages;
         try (FeatureStream fs = store.featureStream()) {
             passages = collectPassages(fs, centerLat, centerLng, east, west, north, south, sizeMeters, centerX, centerZ);
         } catch (Exception ex) {
-            broadcast(level, "Ошибка чтения NDJSON (passages): " + ex.getMessage());
+            broadcast(level, "Error reading NDJSON (passages): " + ex.getMessage());
             return;
         }
 
@@ -1590,7 +1590,7 @@ public class BuildingGenerator {
                 partTasks.add(new PartTask(fill, mp.outers, effTags, mo));
             }
         } catch (Exception ex) {
-            broadcast(level, "Ошибка чтения NDJSON (Pass C, relation parts): " + ex.getMessage());
+            broadcast(level, "Error reading NDJSON (Pass C, relation parts): " + ex.getMessage());
         }
 
         // ---------- Pass D: building:part (ways, не использованы в relations) ----------
@@ -1618,7 +1618,7 @@ public class BuildingGenerator {
                 partTasks.add(new PartTask(fill, Collections.singletonList(ring), effPartTags, mo));
             }
         } catch (Exception ex) {
-            broadcast(level, "Ошибка чтения NDJSON (Pass D, way parts): " + ex.getMessage());
+            broadcast(level, "Error reading NDJSON (Pass D, way parts): " + ex.getMessage());
         }
 
         // ---------- Построить части снизу вверх ----------
@@ -1697,7 +1697,7 @@ public class BuildingGenerator {
                 }
             }
         } catch (Exception ex) {
-            broadcast(level, "Ошибка чтения NDJSON (Pass E, relation buildings): " + ex.getMessage());
+            broadcast(level, "Error reading NDJSON (Pass E, relation buildings): " + ex.getMessage());
         }
 
         // ---------- Pass F: ways с building=* (не части), не в relations ----------
@@ -1754,7 +1754,7 @@ public class BuildingGenerator {
                 }
             }
         } catch (Exception ex) {
-            broadcast(level, "Ошибка чтения NDJSON (Pass F, way buildings): " + ex.getMessage());
+            broadcast(level, "Error reading NDJSON (Pass F, way buildings): " + ex.getMessage());
         }
     }
 
@@ -1792,7 +1792,7 @@ public class BuildingGenerator {
                 parentShells.add(sh);
             }
         } catch (Exception ex) {
-            broadcast(level, "Ошибка NDJSON при сборе parentShells (relations): " + ex.getMessage());
+            broadcast(level, "NDJSON error while collecting parentShells (relations): " + ex.getMessage());
         }
 
         // Ways с building=* (НЕ части)
@@ -1819,7 +1819,7 @@ public class BuildingGenerator {
                 parentShells.add(sh);
             }
         } catch (Exception ex) {
-            broadcast(level, "Ошибка NDJSON при сборе parentShells (ways): " + ex.getMessage());
+            broadcast(level, "NDJSON error while collecting parentShells (ways): " + ex.getMessage());
         }
     }
 
@@ -4445,11 +4445,11 @@ public class BuildingGenerator {
                         groundSnapshot.put(BlockPos.asLong(x, 0, z), gy);
                     }
                 }
-                broadcast(level, "terrainGrid (store) → snapshotGround: использую высоты из грида.");
+                broadcast(level, "terrainGrid (store) → snapshotGround: using heights from the grid.");
                 return;
             }
         } catch (Throwable t) {
-            broadcast(level, "store.grid недоступен — пробую coords.terrainGrid → heightmap.");
+            broadcast(level, "store.grid unavailable — trying coords.terrainGrid → heightmap.");
         }
 
         // 1) coords.terrainGrid
@@ -4475,11 +4475,11 @@ public class BuildingGenerator {
                         groundSnapshot.put(BlockPos.asLong(x, 0, z), y);
                     }
                 }
-                broadcast(level, "coords.terrainGrid → snapshotGround: использую высоты из грида.");
+                broadcast(level, "coords.terrainGrid → snapshotGround: using heights from the grid.");
                 return;
             }
         } catch (Throwable t) {
-            broadcast(level, "coords.terrainGrid недоступен/бит — откат к heightmap.");
+            broadcast(level, "coords.terrainGrid unavailable/corrupted — falling back to heightmap.");
         }
 
         // 2) чистый heightmap

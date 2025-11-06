@@ -36,10 +36,10 @@ public class HelipadGenerator {
 
     // ===== Запуск =====
     public void generate() {
-        broadcast(level, "🚁 Генерация вертолётных площадок (stream)…");
+        broadcast(level, "Generating helipads (stream)...");
 
         if (coords == null || !coords.has("center") || !coords.has("bbox") || store == null) {
-            broadcast(level, "❌ Нет coords или store — пропуск HelipadGenerator.");
+            broadcast(level, "No coords or store — skipping HelipadGenerator.");
             return;
         }
 
@@ -101,12 +101,12 @@ public class HelipadGenerator {
                 }
             }
         } catch (Exception ex) {
-            broadcast(level, "Ошибка PASS1 (helipads): " + ex.getMessage());
+            broadcast(level, "PASS1 error (helipads): " + ex.getMessage());
             return;
         }
 
         if (pads.isEmpty()) {
-            broadcast(level, "ℹ️ Вертолётных площадок не найдено.");
+            broadcast(level, "No helipads found.");
             return;
         }
 
@@ -159,7 +159,7 @@ public class HelipadGenerator {
                 }
             }
         } catch (Exception ex) {
-            broadcast(level, "Ошибка PASS2 (roads): " + ex.getMessage());
+            broadcast(level, "PASS2 error (roads): " + ex.getMessage());
         }
 
         // ===== DRAW =====
@@ -170,7 +170,7 @@ public class HelipadGenerator {
             drawn++;
         }
 
-        broadcast(level, "✅ Вертолётных площадок построено: " + drawn);
+        broadcast(level, "Helipads built: " + drawn);
     }
 
     // ========= Геометрия и отрисовка площадки =========

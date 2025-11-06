@@ -60,13 +60,13 @@ public class MonumentGenerator {
     // ===== Публичный запуск =====
     public void generate() {
         if (coords == null) {
-            broadcast(level, "MonumentGenerator: coords == null — пропускаю.");
+            broadcast(level, "MonumentGenerator: coords == null — skipping.");
             return;
         }
         JsonObject center = coords.getAsJsonObject("center");
         JsonObject bbox   = coords.getAsJsonObject("bbox");
         if (center == null || bbox == null) {
-            broadcast(level, "MonumentGenerator: нет center/bbox — пропускаю.");
+            broadcast(level, "MonumentGenerator: no center/bbox — skipping.");
             return;
         }
 
@@ -102,12 +102,12 @@ public class MonumentGenerator {
                 }
             } else {
                 if (!coords.has("features")) {
-                    broadcast(level, "MonumentGenerator: нет coords.features — пропускаю.");
+                    broadcast(level, "MonumentGenerator: no coords.features — skipping.");
                     return;
                 }
                 JsonArray elements = coords.getAsJsonObject("features").getAsJsonArray("elements");
                 if (elements == null || elements.size() == 0) {
-                    broadcast(level, "MonumentGenerator: features.elements пуст — пропускаю.");
+                    broadcast(level, "MonumentGenerator: features.elements is empty — skipping.");
                     return;
                 }
                 for (JsonElement el : elements) {
@@ -115,32 +115,32 @@ public class MonumentGenerator {
                 }
             }
         } catch (Exception ex) {
-            broadcast(level, "MonumentGenerator: ошибка чтения features: " + ex.getMessage());
+            broadcast(level, "MonumentGenerator: error reading features: " + ex.getMessage());
         }
 
         if (list.isEmpty()) {
-            broadcast(level, "MonumentGenerator: подходящих объектов нет — готово.");
+            broadcast(level, "MonumentGenerator: no suitable objects — done.");
             return;
         }
 
         // ===== Построение =====
         int done = 0, total = list.size();
-        broadcast(level, "Памятники: построение…");
+        broadcast(level, "Monuments: building...");
         for (Obj o : list) {
             if (o.x < minX || o.x > maxX || o.z < minZ || o.z > maxZ) continue;
             try {
                 // ЕДИНЫЙ стиль для всех
                 placeArmorStandSculpture(o.x, o.z);
             } catch (Throwable t) {
-                broadcast(level, "MonumentGenerator: ошибка на ("+o.x+","+o.z+"): " + t.getMessage());
+                broadcast(level, "MonumentGenerator: error at ("+o.x+","+o.z+"): " + t.getMessage());
             }
             done++;
             if (done % Math.max(1, total/5) == 0) {
                 int pct = (int)Math.round(100.0 * done / Math.max(1, total));
-                broadcast(level, "Памятники: ~" + pct + "%");
+                broadcast(level, "Monuments: ~" + pct + "%");
             }
         }
-        broadcast(level, "Памятники: готово.");
+        broadcast(level, "Monuments: done.");
     }
 
     // ===== Разбор признаков =====
