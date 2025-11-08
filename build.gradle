@@ -9,7 +9,8 @@ group = mod_group_id
 version = mod_version
 base { archivesName = mod_id }
 
-java { toolchain { languageVersion = JavaLanguageVersion.of(17) } }
+def javaVer = (findProperty("java_ver") ?: "17") as int
+java { toolchain { languageVersion = JavaLanguageVersion.of(javaVer) } }
 
 minecraft {
     mappings channel: mapping_channel, version: mapping_version
@@ -47,6 +48,7 @@ sourceSets.main.resources { srcDir 'src/generated/resources' }
 
 /* Репозитории */
 repositories {
+    maven { url = "https://libraries.minecraft.net" }
     mavenCentral()
     maven { url = "https://maven.minecraftforge.net" }
     mavenLocal()
@@ -109,6 +111,9 @@ tasks.named('jar', Jar).configure {
             'Implementation-Timestamp': new Date().format("yyyy-MM-dd'T'HH:mm:ssZ"),
         ])
     }
+
+    archiveFileName.set("${mod_id}_${mod_version}_mc${minecraft_version}_forge${forge_version.split('\\.')[0]}.jar")
+
     finalizedBy 'reobfJar'
 }
 

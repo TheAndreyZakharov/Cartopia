@@ -2,6 +2,7 @@
 .gradle/
 build/
 run/
+dist/
 
 # Node.js
 node_modules/

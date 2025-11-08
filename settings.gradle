@@ -9,6 +9,7 @@ pluginManagement {
 dependencyResolutionManagement {
     repositoriesMode.set(RepositoriesMode.PREFER_PROJECT)
     repositories {
+        maven { url = 'https://libraries.minecraft.net' }
         maven { url = 'https://repo.osgeo.org/repository/release/' }
         maven { url = 'https://repo.osgeo.org/repository/geotools-releases/' }
         maven { url = 'https://maven.minecraftforge.net' }

@@ -12,12 +12,14 @@ import net.minecraftforge.fml.event.lifecycle.FMLClientSetupEvent;
 import net.minecraftforge.fml.event.lifecycle.FMLCommonSetupEvent;
 import net.minecraftforge.fml.javafmlmod.FMLJavaModLoadingContext;
 
+
 @Mod(CartopiaMod.MODID)
 public class CartopiaMod {
     public static final String MODID = "cartopia";
-
-    public CartopiaMod(FMLJavaModLoadingContext context) {
-        IEventBus modBus = context.getModEventBus();
+    
+    @SuppressWarnings("removal")
+    public CartopiaMod() {
+        IEventBus modBus = FMLJavaModLoadingContext.get().getModEventBus();
         modBus.addListener(this::onCommonSetup);
         modBus.addListener(this::onClientSetup);
 

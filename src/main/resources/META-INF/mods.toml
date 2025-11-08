@@ -1,10 +1,12 @@
 modLoader="javafml"
-loaderVersion="[47,)"
+loaderVersion="${loader_version_range}"
+
 license="Apache-2.0"
 
 [[mods]]
 modId="cartopia"
-version="1.0"
+version="${mod_version}"
+
 displayName="Cartopia"
 logoFile="public/logos/Cartopia_logo.png"
 
@@ -23,3 +25,21 @@ Issue tracker: https://github.com/TheAndreyZakharov/Cartopia/issues
 Author GitHub: https://github.com/TheAndreyZakharov
 Author website: https://theandreyzakharov.github.io
 '''
+
+# ==== ДОБАВЛЕНО: ЯВНЫЕ зависимости с диапазонами версий ====
+
+# Завязка на Forge
+[[dependencies.cartopia]]
+modId="forge"
+mandatory=true
+versionRange="${forge_version_range}"
+ordering="NONE"
+side="BOTH"
+
+# Завязка на версию Minecraft
+[[dependencies.cartopia]]
+modId="minecraft"
+mandatory=true
+versionRange="${minecraft_version_range}"
+ordering="NONE"
+side="BOTH"
