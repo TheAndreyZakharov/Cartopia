@@ -777,7 +777,7 @@ confirmBtn.onclick = async () => {
 
   try {
     
-    const r = await fetch('http://localhost:4567/save-coords', {
+    const r = await fetch('/save-coords', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload)
