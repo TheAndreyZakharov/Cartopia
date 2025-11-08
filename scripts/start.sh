@@ -1,6 +1,9 @@
-#!/bin/bash
+#!/usr/bin/env bash
 set -euo pipefail
-cd "$(dirname "$0")"
+
+# перейти в корень репо (а не оставаться в scripts/)
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")"/.. && pwd)"
+cd "$ROOT"
 
 # На всякий случай освобождаем :4567 от старого Node/чего угодно
 if command -v lsof >/dev/null 2>&1; then
@@ -14,5 +17,13 @@ if command -v lsof >/dev/null 2>&1; then
 fi
 rm -f .server.pid server.log 2>/dev/null || true
 
+JAVA_PROP=""
+if command -v /usr/libexec/java_home >/dev/null 2>&1; then
+  J17="$(/usr/libexec/java_home -v 17 2>/dev/null || true)"
+  [[ -n "${J17}" ]] && JAVA_PROP="-Dorg.gradle.java.home=${J17}"
+elif [[ -n "${JAVA_17_HOME:-}" ]]; then
+  JAVA_PROP="-Dorg.gradle.java.home=${JAVA_17_HOME}"
+fi
+
 echo "▶️  Запускаю Minecraft dev client (Forge)…"
-./gradlew runClient
+./gradlew ${JAVA_PROP} runClient

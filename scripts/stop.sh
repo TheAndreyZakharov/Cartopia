@@ -1,6 +1,9 @@
-#!/bin/bash
+#!/usr/bin/env bash
 set -euo pipefail
-cd "$(dirname "$0")"
+
+# перейти в корень репо
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")"/.. && pwd)"
+cd "$ROOT"
 
 # Убираем старые служебные файлы (если были от Node-версии)
 rm -f .server.pid server.log 2>/dev/null || true
