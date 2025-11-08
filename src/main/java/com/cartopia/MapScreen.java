@@ -115,30 +115,8 @@ public class MapScreen extends Screen {
         int tmpY2 = tmpY1 + 30;
 
         this.openMapBtn = this.addRenderableWidget(
-                Button.builder(Component.literal("Open Map"), b -> {
-                    try {
-                        Player player = Minecraft.getInstance().player;
-                        if (player == null) return;
-                        double px = player.getX();
-                        double pz = player.getZ();
-
-                        // macOS: открыть браузер
-                        Runtime.getRuntime().exec(new String[]{"open", "http://localhost:4567"});
-
-                        // Отправим координаты
-                        String json = String.format(Locale.ROOT, "{\"x\": %.2f, \"z\": %.2f}", px, pz);
-                        HttpURLConnection conn = (HttpURLConnection) new URL("http://127.0.0.1:4567/player").openConnection();
-                        conn.setDoOutput(true);
-                        conn.setRequestMethod("POST");
-                        conn.setRequestProperty("Content-Type", "application/json");
-                        try (OutputStream os = conn.getOutputStream()) {
-                            os.write(json.getBytes(StandardCharsets.UTF_8));
-                        }
-                        conn.getResponseCode();
-                    } catch (Exception e) {
-                        e.printStackTrace();
-                    }
-                }).pos(btnX, tmpY1).size(btnW, btnH).build()
+                Button.builder(Component.literal("Open Map"), btn -> openMapWithConfirm())
+                    .pos(btnX, tmpY1).size(btnW, btnH).build()
         );
 
         this.realtimeToggle = this.addRenderableWidget(
@@ -589,6 +567,46 @@ public class MapScreen extends Screen {
             if (confirmed) Util.getPlatform().openUri(url);
             mc.setScreen(this);
         }, url, true));
+    }
+
+    private void openMapWithConfirm() {
+        Minecraft mc = Minecraft.getInstance();
+        final String url = "http://127.0.0.1:4567"; // используем 127.0.0.1 единообразно
+
+        mc.setScreen(new ConfirmLinkScreen(confirmed -> {
+            if (confirmed) {
+                try {
+                    // Кроссплатформенно открыть браузер
+                    Util.getPlatform().openUri(url);
+                } catch (Exception ignored) {}
+
+                // После открытия — отправим координаты игрока
+                sendPlayerCoords();
+            }
+            mc.setScreen(this);
+        }, url, true));
+    }
+
+    private void sendPlayerCoords() {
+        try {
+            Player player = Minecraft.getInstance().player;
+            if (player == null) return;
+
+            double px = player.getX();
+            double pz = player.getZ();
+
+            String json = String.format(Locale.ROOT, "{\"x\": %.2f, \"z\": %.2f}", px, pz);
+            HttpURLConnection conn = (HttpURLConnection) new URL("http://127.0.0.1:4567/player").openConnection();
+            conn.setDoOutput(true);
+            conn.setRequestMethod("POST");
+            conn.setRequestProperty("Content-Type", "application/json");
+            try (OutputStream os = conn.getOutputStream()) {
+                os.write(json.getBytes(StandardCharsets.UTF_8));
+            }
+            conn.getResponseCode(); // просто триггерим запрос
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
     }
 
     // --- API -----------------------------------------------------------------
