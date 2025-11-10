@@ -267,6 +267,11 @@ public class MapScreen extends Screen {
                     "Warning: it’s recommended not to generate areas that are too large—this can take a long time, use a lot of system resources, and place heavy load on the data providers.",
                     leftViewportX, y, availW, 0xFFFF5555, false);
 
+            y += 6;
+            y = drawWrapped(gfx,
+                    "Help: if you have questions or run into issues, please visit the project repository and read the README — it contains a lot of information and troubleshooting tips.",
+                    leftViewportX, y, availW, 0xFFBBDDEE, false);
+
             gfx.disableScissor();
 
             // Скроллбар (справа от вьюпорта)
@@ -374,6 +379,11 @@ public class MapScreen extends Screen {
             y = drawWrapped(gfx,
                     "Warning: it’s recommended not to generate areas that are too large—this can take a long time, use a lot of system resources, and place heavy load on the data providers.",
                     leftViewportX, y, availW, 0xFFFF5555, false);
+
+            y += 6;
+            y = drawWrapped(gfx,
+                    "Help: if you have questions or run into issues, please visit the project repository and read the README — it contains a lot of information and troubleshooting tips.",
+                    leftViewportX, y, availW, 0xFFBBDDEE, false);
 
 
             gfx.disableScissor();
@@ -523,6 +533,12 @@ public class MapScreen extends Screen {
         h += 6;
         h += measureWrappedHeight(
                 "Warning: it’s recommended not to generate areas that are too large—this can take a long time, use a lot of system resources, and place heavy load on the data providers.",
+                maxW
+        );
+
+        h += 6;
+        h += measureWrappedHeight(
+                "Help: if you have questions or run into issues, please visit the project repository and read the README — it contains a lot of information and troubleshooting tips.",
                 maxW
         );
 
