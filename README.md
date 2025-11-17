@@ -1,13 +1,10 @@
-# 🌍 Cartopia
-
-## 🎯 Цель
-
-Создание точной 3D-реконструкции любого участка реального мира в Minecraft с масштабом **1:1**.
-
----
-
-> ⚠️ **Проект в активной разработке**  
-> Инструкции и примеры будут обновляться и дополняться по мере появления стабильных (релизных) версий.
-
----
+<p align="center">
+  <img src="src/main/resources/public/logos/Cartopia_logo.png" alt="Cartopia Logo" width="300"/><br><br>
+  <a href="README_RU.md">
+    <img src="https://img.shields.io/badge/README_Language-Русский-blue" alt="Русская версия">
+  </a>
+  <a href="README.md">
+    <img src="https://img.shields.io/badge/README_Language-English-brightgreen" alt="English version">
+  </a>
+</p>
 
